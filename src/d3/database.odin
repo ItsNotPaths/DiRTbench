@@ -505,6 +505,82 @@ row_int :: proc(t: ^Table, row: Row, name: string) -> i32 {
 	return is_int ? v : 0
 }
 
+row_bool :: proc(t: ^Table, row: Row, name: string) -> bool {
+	i, found := table_field(t, name)
+	if !found {
+		return false
+	}
+	v, is_bool := row[i].(bool)
+	return is_bool ? v : false
+}
+
+// Mutation helpers used by registration. Strings in a Database are owned, so
+// cloning and replacement must clone/free them just like the reader does.
+row_clone :: proc(t: ^Table, row: Row, allocator := context.allocator) -> Row {
+	out := make(Row, len(row), allocator)
+	for value, i in row {
+		if text, is_string := value.(string); is_string {
+			out[i] = strings.clone(text, allocator)
+		} else {
+			out[i] = value
+		}
+	}
+	return out
+}
+
+row_set_int :: proc(t: ^Table, row: Row, name: string, value: i32) -> bool {
+	i, found := table_field(t, name)
+	if !found {
+		return false
+	}
+	row[i] = value
+	return true
+}
+
+row_set_bool :: proc(t: ^Table, row: Row, name: string, value: bool) -> bool {
+	i, found := table_field(t, name)
+	if !found {
+		return false
+	}
+	row[i] = value
+	return true
+}
+
+row_set_str :: proc(
+	t: ^Table,
+	row: Row,
+	name, value: string,
+	allocator := context.allocator,
+) -> bool {
+	i, found := table_field(t, name)
+	if !found {
+		return false
+	}
+	old, is_string := row[i].(string)
+	if !is_string {
+		return false
+	}
+	delete(old, allocator)
+	row[i] = strings.clone(value, allocator)
+	return true
+}
+
+table_next_id :: proc(t: ^Table) -> i32 {
+	result: i32 = -1
+	for row in t.rows {
+		result = max(result, row_int(t, row, "id"))
+	}
+	return result + 1
+}
+
+table_max_int :: proc(t: ^Table, name: string) -> i32 {
+	result: i32 = -1
+	for row in t.rows {
+		result = max(result, row_int(t, row, name))
+	}
+	return result
+}
+
 // --- lifetime ----------------------------------------------------------------
 //
 // Both allocate every string they hand back, so both have to be released

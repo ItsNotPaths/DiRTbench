@@ -56,4 +56,8 @@ Ramp_On_Stock :: dirt3_ramp_on_stock_headless
 Bridge_Bump :: dirt3_bridge_bump_headless
 Rewrite :: dirt3_rewrite_headless
 Export :: export_dirt3
+Atomic_Write :: atomic_write_file
+Prepare_Registration :: prepare_registration
+Registration_Output_Delete :: registration_output_delete
+Database_Bytes_Have_Venue :: database_bytes_have_venue
 Routesplit :: dirt3_routesplit_headless

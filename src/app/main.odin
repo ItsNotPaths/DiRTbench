@@ -512,6 +512,20 @@ run_cli :: proc() -> (handled: bool) {
 		}
 		os.exit(venue_new_headless(id, base, display) ? 0 : 1)
 	}
+	if len(args) >= 2 && args[0] == "--venue-deploy" {
+		apply := len(args) == 3 && args[2] == "--apply"
+		if len(args) > 3 || (len(args) == 3 && !apply) {
+			fmt.println("usage: dirtbench --venue-deploy <id> [--apply]")
+			os.exit(1)
+		}
+		if apply {
+			os.exit(venue_deploy_headless(args[1]) ? 0 : 1)
+		}
+		os.exit(venue_deploy_preflight_headless(args[1]) ? 0 : 1)
+	}
+	if len(args) == 2 && args[0] == "--venue-revert" {
+		os.exit(venue_revert_headless(args[1])?0:1)
+	}
 	// `--dirt3-dump <track.jpk|x.vcqtc> [-o out.obj]`: read a stock Dirt 3
 	// collision file and write an OBJ. Reads the game, writes nothing into it.
 	if len(args) >= 2 && args[0] == "--dirt3-dump" {

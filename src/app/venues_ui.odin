@@ -35,6 +35,7 @@ Venues_Screen :: struct {
 	base_venue:   int, // index into install.venues, -1 for none picked
 	base_route:   int,
 	error:        string, // why the last create was refused
+	deploy_ready: string, // venue whose read-only preflight was just shown
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
@@ -45,6 +46,7 @@ venues_screen_init :: proc(ps: ^Venues_Screen) {
 venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	venues_free(ps.venues)
 	delete(ps.error)
+	delete(ps.deploy_ready)
 	ps^ = {}
 }
 
@@ -150,6 +152,40 @@ draw_no_install :: proc(vs: ^Install_Scan) {
 }
 
 @(private = "file")
+draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
+	ps := &ed.screen
+	if deployed {
+		if ui.im_button(fmt.ctprintf("Revert deployment###revert_%s", p.id)) {
+			msg, ok := venue_revert(&ed.install, p^)
+			set_status(ed, msg, ok)
+			if ok {
+				install_scan_rescan(&ed.install)
+			}
+		}
+		return
+	}
+	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
+		msg, ok := venue_deploy_preflight(&ed.install, p^)
+		set_status(ed, msg, ok)
+		delete(ps.deploy_ready)
+		ps.deploy_ready = ok ? strings.clone(p.id) : ""
+	}
+	if ps.deploy_ready != p.id {
+		return
+	}
+	ui.im_same_line()
+	if ui.im_button(fmt.ctprintf("Apply deploy###apply_%s", p.id)) {
+		msg, ok := venue_deploy(&ed.install, p^)
+		set_status(ed, msg, ok)
+		delete(ps.deploy_ready)
+		ps.deploy_ready = ""
+		if ok {
+			install_scan_rescan(&ed.install)
+		}
+	}
+}
+
+@(private = "file")
 draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 	ps := &ed.screen
 	label := fmt.ctprintf("%s  (%d stages)###venue_%s", p.id, len(p.stages), p.id)
@@ -157,6 +193,14 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 		return
 	}
 	ui.im_text_colored(MINE_COL, fmt.ctprintf("art from %s/%s", p.base, p.base_route))
+	deployed := false
+	if venue, found := d3.install_venue(&ed.install.install, p.location, p.id); found {
+		deployed = d3.venue_playable(venue^)
+	}
+	ui.im_text_colored(
+		deployed ? MINE_COL : DIM_COL,
+		deployed ? "deployed" : "not deployed",
+	)
 
 	for route, i in p.stages {
 		name := i < len(p.names.stages) ? p.names.stages[i] : route
@@ -176,6 +220,8 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 			set_status(ed, done, true)
 		}
 	}
+	ui.im_same_line()
+	draw_venue_deployment(ed, p, deployed)
 	ui.igSpacing()
 }
 

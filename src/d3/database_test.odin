@@ -1,6 +1,7 @@
 package d3
 
 import "core:mem"
+import "core:strings"
 import "core:testing"
 
 // A schema small enough to reason about, carrying one field of every kind. The
@@ -155,7 +156,7 @@ database_refuses_an_overlong_string :: proc(t: ^testing.T) {
 	// declared size is only 3. The loaded value owns its storage, so hand it
 	// back before overwriting the slot.
 	delete(first.rows[0][i].(string))
-	first.rows[0][i] = "abcdefgh"
+	first.rows[0][i] = strings.clone("abcdefgh")
 	_, msg, encoded := database_encode(db)
 	testing.expect(t, !encoded, "a string that fills its buffer must not encode")
 	testing.expectf(t, len(msg) > 0, "a refusal must say why")

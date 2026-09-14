@@ -313,6 +313,17 @@ export_stage :: proc(ed: ^Editor, name: string, target: ^Export_Target) -> (msg:
 		return dmsg, false
 	}
 	job.out, job.installing = dest, installing
+	had_orig := false
+	if installing {
+		if infos, err := os.read_all_directory_by_path(dest, context.temp_allocator); err == nil {
+			for info in infos {
+				if strings.has_suffix(info.name, ".orig") {
+					had_orig = true
+					break
+				}
+			}
+		}
+	}
 	if err := os.make_directory_all(dest); err != nil && err != os.General_Error.Exist {
 		return fmt.tprintf("could not create %s: %v", dest, err), false
 	}
@@ -320,6 +331,13 @@ export_stage :: proc(ed: ^Editor, name: string, target: ^Export_Target) -> (msg:
 	run_msg, run_ok := target.run(&job)
 	if !run_ok {
 		return run_msg, false
+	}
+	if had_orig {
+		return fmt.tprintf(
+			"warning: route already had .orig backups and is not stock; %s -> %s",
+			run_msg,
+			dest,
+		), true
 	}
 	return fmt.tprintf("%s -> %s", run_msg, dest), true
 }
