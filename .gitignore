@@ -1,0 +1,28 @@
+vendor/
+build/
+
+# Byte-level format notes, the plan and the handoff roadmaps. Derived from
+# reading the user's own game files; not ours to redistribute.
+docs/
+
+# The Python and shell side of the Dirt 3 work: probes, one-off surgery on an
+# installed game, and the Ghidra scripts behind the binary notes. Scratch, and
+# several of them write into a real game directory.
+tools/
+
+# Recorded co-driver lines. Committed separately, with their credit.
+assets/pacenotes/*
+!assets/pacenotes/.gitkeep
+
+# Machine-local settings: where the game is installed, and anything else that
+# differs per machine. Often a path inside a Proton prefix. Grammar and keys are
+# in src/app/config.odin.
+dirtbench.conf
+
+# ImGui writes its window layout next to the running binary. Per-machine state,
+# not project config; a committed copy pins everyone's panels to whoever ran the
+# editor last.
+imgui.ini
+
+# Rendered previews of parsed game data, regenerated from a real install.
+imgs/

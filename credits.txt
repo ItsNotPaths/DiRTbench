@@ -1,0 +1,22 @@
+Deuterium, the Sentient Mattress — pace note VA
+https://www.youtube.com/@DeuteriumtheSentientMattress/videos
+
+Third-party code, fetched by download-deps.sh:
+  Dear ImGui + cimgui                 MIT
+  ImGuizmo + cimguizmo                MIT
+  rlImGui                             zlib
+  delaunator-cpp                      MIT
+
+raylib comes from the Odin distribution's own vendor/raylib.
+
+Third-party data, checked in:
+  assets/d3/schemaDirt3.xml           Ego-Engine-Modding
+    The DiRT 3 database layout. src/d3/database.odin reads database.bin
+    through it. Taken as-is from
+    github.com/EgoEngineModding/Ego-Engine-Modding,
+    src/EgoDatabaseEditor/schema/schemaDirt3.xml
+
+assets/d3/moosylvania-materials.pssg is a shader/texture-name template read out
+of a DiRT 3 installation. It carries no texture or model payload, only the
+metadata a generated PSSG needs to reference the game's own art. It is
+Codemasters' data, not ours.
