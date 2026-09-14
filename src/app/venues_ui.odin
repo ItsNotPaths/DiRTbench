@@ -16,6 +16,7 @@ package main
 // separate, explicit step that does not exist yet; see docs/venue-projects.md.
 
 import "core:fmt"
+import "core:os"
 import "core:strings"
 import d3 "../d3"
 import "../ui"
@@ -36,6 +37,7 @@ Venues_Screen :: struct {
 	base_route:   int,
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
+	delete_ready: string, // second click confirms project deletion
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
@@ -47,6 +49,7 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	venues_free(ps.venues)
 	delete(ps.error)
 	delete(ps.deploy_ready)
+	delete(ps.delete_ready)
 	ps^ = {}
 }
 
@@ -164,6 +167,12 @@ draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
 		}
 		return
 	}
+	if p.version >= 2 {
+		ui.igBeginDisabled(true)
+		_ = ui.im_button(fmt.ctprintf("Deploy (compile stages first)###deploy_%s", p.id))
+		ui.igEndDisabled()
+		return
+	}
 	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
 		msg, ok := venue_deploy_preflight(&ed.install, p^)
 		set_status(ed, msg, ok)
@@ -188,7 +197,7 @@ draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
 @(private = "file")
 draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 	ps := &ed.screen
-	label := fmt.ctprintf("%s  (%d stages)###venue_%s", p.id, len(p.stages), p.id)
+	label := fmt.ctprintf("%s###venue_%s", p.id, p.id)
 	if !ui.igCollapsingHeader_TreeNodeFlags(label, ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
@@ -202,26 +211,25 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 		deployed ? "deployed" : "not deployed",
 	)
 
-	for route, i in p.stages {
-		name := i < len(p.names.stages) ? p.names.stages[i] : route
-		if ui.im_button(fmt.ctprintf("Open %s — %s###open_%s_%s", route, name, p.id, route)) {
-			open_venue_stage(ed, p, route)
-		}
-	}
-	if ui.im_button(fmt.ctprintf("Add route###addroute_%s", p.id)) {
-		route, msg, ok := venue_add_stage(p, "")
-		if !ok {
-			set_status(ed, msg, false)
-		} else {
-			// The reload frees the list `p` points into, so build the message
-			// before it, not after.
-			done := fmt.tprintf("%s: added %s", p.id, route)
-			venues_screen_reload(ps)
-			set_status(ed, done, true)
-		}
+	if ui.im_button(fmt.ctprintf("Edit road network###open_%s", p.id)) {
+		open_venue(ed, p)
 	}
 	ui.im_same_line()
 	draw_venue_deployment(ed, p, deployed)
+	ui.im_same_line()
+	confirming := ps.delete_ready == p.id
+	if ui.im_button(fmt.ctprintf("%s###delete_%s", confirming ? "Confirm delete" : "Delete...", p.id)) {
+		if !confirming {
+			delete(ps.delete_ready)
+			ps.delete_ready = strings.clone(p.id)
+		} else {
+			msg, ok := venue_delete(&ed.install, p^)
+			set_status(ed, msg, ok)
+			delete(ps.delete_ready)
+			ps.delete_ready = ""
+			if ok { venues_screen_reload(ps) }
+		}
+	}
 	ui.igSpacing()
 }
 
@@ -307,18 +315,11 @@ draw_new_venue :: proc(ed: ^Editor) {
 		if !ok {
 			ps.error = strings.clone(msg)
 		} else {
-			// A venue with no route cannot be opened, so seed one. A failure
-			// here leaves the venue on disk with no stages, which the screen
-			// shows and Add route fixes.
-			_, add_msg, added := venue_add_stage(&p, "")
 			venue_free(p)
-			if !added {
-				ps.error = strings.clone(add_msg)
-			}
 			ps.adding = false
 			ps.name_buf, ps.display_buf = {}, {}
 			venues_screen_reload(ps)
-			set_status(ed, fmt.tprintf("created %s from %s", id, spec), added)
+			set_status(ed, fmt.tprintf("created %s from %s", id, spec), true)
 		}
 	}
 	ui.igEndDisabled()
@@ -348,20 +349,38 @@ buf_text :: proc(buf: []u8) -> string {
 
 // --- opening -----------------------------------------------------------------
 
-open_venue_stage :: proc(ed: ^Editor, p: ^Venue, route: string) {
-	path := venue_stage_path(p.id, route)
+open_venue :: proc(ed: ^Editor, p: ^Venue) {
+	path := venue_road_path(p.id)
+	migrating := false
+	// One-time compatibility bridge for projects made before venues owned a
+	// road.json: their first route was the road document.
+	if !os.exists(path) && len(p.stages) > 0 {
+		path = venue_stage_path(p.id, p.stages[0])
+		migrating = true
+	}
 	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing); !ok {
 		set_status(ed, msg, false)
 		return
 	}
+	if migrating {
+		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing); !ok {
+			set_status(ed, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
+			return
+		}
+		p.version = VENUE_VERSION
+		if msg, ok := venue_save(p^); !ok {
+			set_status(ed, fmt.tprintf("migrated road but could not update venue: %s", msg), false)
+			return
+		}
+	}
 	delete(ed.open_venue)
 	delete(ed.open_stage)
 	ed.open_venue = strings.clone(p.id)
-	ed.open_stage = strings.clone(route)
-	set_stage_name(ed, route)
+	ed.open_stage = ""
+	set_stage_name(ed, p.id)
 	ed.mode = .Editor
 	mark_dirty(ed)
-	set_status(ed, fmt.tprintf("%s / %s", p.id, route), true)
+	set_status(ed, fmt.tprintf("editing %s road network", p.id), true)
 }
 
 // One frame of the venue screen. Deliberately not the editor's frame with

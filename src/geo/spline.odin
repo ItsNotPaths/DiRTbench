@@ -27,6 +27,10 @@ DEFAULT_CLIFF_TAPER :: 16.0 // metres of that span spent rising and falling
 DEFAULT_CLIFF_ANGLE :: 6.0  // degrees off vertical, leaning away from the road
 
 Point :: struct {
+	// Parent in the venue road graph. -1 is a root. Nodes are topologically
+	// ordered, so every non-root parent is lower than its child. A second child
+	// is a branch; no separate edge or junction object is needed.
+	parent:      int,
 	xform:       rl.Transform, // translation = centre, rotation = road frame
 	width:       f32,          // road width, metres
 
@@ -65,10 +69,29 @@ Spline :: struct {
 	points: [dynamic]Point,
 }
 
+first_child :: proc(sp: Spline, idx: int) -> int {
+	for p, i in sp.points { if p.parent == idx { return i } }
+	return -1
+}
+
+is_branch :: proc(sp: Spline, idx: int) -> bool {
+	if idx < 0 || idx >= len(sp.points) { return false }
+	parent := sp.points[idx].parent
+	return parent >= 0 && first_child(sp, parent) != idx
+}
+
+is_linear :: proc(sp: Spline) -> bool {
+	for p, i in sp.points { if p.parent != i - 1 { return false } }
+	return true
+}
+
 // A sampled slice across the road: everything needed to lay a ribbon rung and
 // to pick against it. `seg` is the index of the control point the sample grew
 // from (the parent of the segment it lies on).
 Cross_Section :: struct {
+	// True when this starts another graph edge rather than continuing from the
+	// previous sampled section. Consumers must not bridge across this boundary.
+	break_before: bool,
 	pos:     rl.Vector3,
 	right:   rl.Vector3, // across the road, unit
 	up:      rl.Vector3, // surface normal, unit
@@ -140,8 +163,10 @@ make_point :: proc(
 	cliff_taper: f32 = DEFAULT_CLIFF_TAPER,
 	cliff_angle: f32 = DEFAULT_CLIFF_ANGLE,
 	roughness:   f32 = 0,
+	parent:      int = -1,
 ) -> Point {
 	return Point {
+		parent      = parent,
 		xform       = {translation = pos, rotation = rot, scale = {1, 1, 1}},
 		width       = width,
 		cliff_l     = cliff_l,
@@ -214,6 +239,28 @@ sample_at :: proc(sp: Spline, seg: int, t: f32) -> Cross_Section {
 	}
 }
 
+sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
+	p0, p1 := sp.points[parent], sp.points[child]
+	pos := hermite_pos(p0, p1, t)
+	tangent := hermite_tangent(p0, p1, t)
+	fwd := rl.Vector3Normalize(tangent)
+	if rl.Vector3Length(tangent) < 1e-5 { fwd = point_forward(p0) }
+	q := rl.QuaternionSlerp(p0.xform.rotation, p1.xform.rotation, t)
+	up_ref := rl.Vector3Normalize(rl.Vector3RotateByQuaternion({0, 1, 0}, q))
+	right := rl.Vector3Normalize(rl.Vector3CrossProduct(up_ref, fwd))
+	up := rl.Vector3Normalize(rl.Vector3CrossProduct(fwd, right))
+	return Cross_Section {
+		pos = pos, right = right, up = up, fwd = fwd,
+		width = p0.width + (p1.width-p0.width)*t,
+		// `seg` identifies the child for graph-aware insertion.
+		seg = child,
+		cliff_l = p0.cliff_l+(p1.cliff_l-p0.cliff_l)*t,
+		cliff_r = p0.cliff_r+(p1.cliff_r-p0.cliff_r)*t,
+		cliff_angle = p0.cliff_angle+(p1.cliff_angle-p0.cliff_angle)*t,
+		roughness = p0.roughness+(p1.roughness-p0.roughness)*t,
+	}
+}
+
 // Sample the whole spline into a contiguous ribbon of cross-sections.
 // `samples_per_seg` is the global topo resolution. Returns a freshly-allocated
 // slice (caller deletes) or nil when there is nothing to draw.
@@ -228,6 +275,18 @@ build_ribbon :: proc(
 	}
 	spp := max(samples_per_seg, 1)
 	out := make([dynamic]Cross_Section, allocator)
+	if !is_linear(sp) {
+		for child in 0 ..< len(sp.points) {
+			parent := sp.points[child].parent
+			if parent < 0 { continue }
+			for s in 0 ..= spp {
+				cs := sample_edge(sp, parent, child, f32(s)/f32(spp))
+				cs.break_before = s == 0
+				append(&out, cs)
+			}
+		}
+		return out[:]
+	}
 	for seg in 0 ..< nseg {
 		// each segment contributes t in [0, 1); the final endpoint is added once
 		for s in 0 ..< spp {
@@ -368,6 +427,23 @@ handle_radius :: proc(width: f32) -> f32 {
 // insert a control point on segment (seg, seg+1) at world point `at`, framed by
 // the interpolated road frame there. Returns the new point's index.
 insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section) -> int {
+	if !is_linear(sp^) {
+		child := seg
+		if child <= 0 || child >= len(sp.points) { return -1 }
+		parent := sp.points[child].parent
+		src := sp.points[parent]
+		np := make_point(
+			at, quat_from_frame(frame.fwd, frame.up), frame.width,
+			frame.cliff_l, frame.cliff_r, src.span_l, src.span_r,
+			src.cliff_taper, frame.cliff_angle, frame.roughness, parent,
+		)
+		inject_at(&sp.points, child, np)
+		for &p, i in sp.points {
+			if i != child && p.parent >= child { p.parent += 1 }
+		}
+		sp.points[child + 1].parent = child
+		return child
+	}
 	rot := quat_from_frame(frame.fwd, frame.up)
 	// Adopt the cliff height already resolved at this slice, so inserting a
 	// point into a cliffed stretch does not punch a notch out of the cliff.
@@ -379,8 +455,18 @@ insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section
 		// Inserting into a rough stretch keeps its roughness; the frame already
 		// carries the lerped value at this slice.
 		frame.roughness,
+		seg,
 	)
 	inject_at(&sp.points, seg + 1, np)
+	// The old child now follows the inserted node. Shift every index affected
+	// by the insertion before repairing that one edge.
+	for &p, i in sp.points {
+		if i == seg + 1 { continue }
+		if p.parent > seg { p.parent += 1 }
+	}
+	if seg + 2 < len(sp.points) && sp.points[seg + 2].parent == seg {
+		sp.points[seg + 2].parent = seg + 1
+	}
 	return seg + 1
 }
 
@@ -390,12 +476,44 @@ insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section
 //   - head (idx 0)  -> copy becomes the new head, extending backwards
 //   - otherwise     -> copy becomes idx's child, so extruding the tail appends
 extrude_point :: proc(sp: ^Spline, idx: int) -> int {
+	// Like Writ's graph editor, appending another child to a node that already
+	// has one creates a branch. Append it to preserve topological order.
+	for p in sp.points {
+		if p.parent == idx {
+			copy := sp.points[idx]
+			copy.parent = idx
+			append(&sp.points, copy)
+			return len(sp.points) - 1
+		}
+	}
 	if idx == 0 && len(sp.points) > 1 {
 		inject_at(&sp.points, 0, sp.points[0])
+		sp.points[0].parent = -1
+		sp.points[1].parent = 0
+		for &p, i in sp.points { if i > 1 && p.parent >= 0 { p.parent += 1 } }
 		return 0
 	}
 	inject_at(&sp.points, idx + 1, sp.points[idx])
+	sp.points[idx + 1].parent = idx
+	for &p, i in sp.points {
+		if i != idx + 1 && p.parent > idx { p.parent += 1 }
+	}
+	if idx + 2 < len(sp.points) && sp.points[idx + 2].parent == idx {
+		sp.points[idx + 2].parent = idx + 1
+	}
 	return idx + 1
+}
+
+// Remove a node while keeping its children connected to its parent, then fix
+// indices after compaction. This is the graph equivalent of ordered_remove.
+remove_point :: proc(sp: ^Spline, idx: int) {
+	if idx < 0 || idx >= len(sp.points) || len(sp.points) <= 1 { return }
+	parent := sp.points[idx].parent
+	for &p in sp.points { if p.parent == idx { p.parent = parent } }
+	ordered_remove(&sp.points, idx)
+	for &p in sp.points {
+		if p.parent > idx { p.parent -= 1 }
+	}
 }
 
 // Reverse the driving direction: the last control point becomes the first. The
@@ -409,7 +527,10 @@ reverse_spline :: proc(sp: ^Spline) {
 	for i in 0 ..< n / 2 {
 		sp.points[i], sp.points[n - 1 - i] = sp.points[n - 1 - i], sp.points[i]
 	}
-	for &p in sp.points {
+	for &p, i in sp.points {
+		// reverse_spline is only defined for a chain. Array order is its new
+		// travel order, so rebuild the graph edges to match that order.
+		p.parent = i - 1
 		f := point_forward(p)
 		u := point_up(p)
 		// Flip the frame to face the new travel direction, normal unchanged.
@@ -440,6 +561,7 @@ append_point :: proc(sp: ^Spline, at: rl.Vector3) -> int {
 		angle = last.cliff_angle
 		rough = last.roughness
 	}
-	append(&sp.points, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough))
+	parent := len(sp.points) - 1
+	append(&sp.points, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough, parent))
 	return len(sp.points) - 1
 }

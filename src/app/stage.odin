@@ -28,13 +28,14 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // v2 added per-point cliffs; v3 added the per-point roughness offset; v4 added the
 // stage-global vegetation block; v5 added timing markers. Older files still load: a missing field unmarshals
 // to zero, which is the correct default (no cliff / no roughness offset / veg off).
-STAGE_VERSION :: 5
+STAGE_VERSION :: 6
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
 // quaternion is four floats because core:encoding/json cannot marshal Odin's
 // quaternion type.
 Stage_Point :: struct {
+	parent:      int,
 	pos:         [3]f32,
 	rot:         [4]f32, // x, y, z, w
 	width:       f32,
@@ -167,6 +168,7 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 	pts := make([]Stage_Point, len(sp.points), context.temp_allocator)
 	for p, i in sp.points {
 		pts[i] = Stage_Point {
+			parent      = p.parent,
 			pos         = {p.xform.translation.x, p.xform.translation.y, p.xform.translation.z},
 			rot         = quat_to_array(p.xform.rotation),
 			width       = p.width,
@@ -236,6 +238,13 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 	if len(stage.points) < 2 {
 		return fmt.tprintf("stage has %d points, needs at least 2", len(stage.points)), false
 	}
+	if stage.version >= 6 {
+		for p, i in stage.points {
+			if p.parent < -1 || p.parent >= i {
+				return fmt.tprintf("road point %d has invalid parent %d", i, p.parent), false
+			}
+		}
+	}
 
 	// A v1 file carries no cliff fields, so they unmarshal to zero. Zero height
 	// is what we want (no cliffs), but a zero span/taper would leave the point's
@@ -245,7 +254,7 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 	legacy := stage.version < 2
 
 	clear(&sp.points)
-	for p in stage.points {
+	for p, i in stage.points {
 		width := p.width if p.width > 0 else f32(geo.DEFAULT_WIDTH)
 		span_l := f32(geo.DEFAULT_CLIFF_SPAN) if legacy else p.span_l
 		span_r := f32(geo.DEFAULT_CLIFF_SPAN) if legacy else p.span_r
@@ -266,6 +275,7 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 				// v1/v2 files have no roughness field, so p.roughness is 0 there —
 				// exactly the "no per-node offset" default we want.
 				p.roughness,
+				p.parent if stage.version >= 6 else i - 1,
 			),
 		)
 	}

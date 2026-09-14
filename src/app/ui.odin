@@ -28,10 +28,10 @@ do_save :: proc(ed: ^Editor) {
 	// A stage opened from one of our venues belongs to it. Saving it into
 	// maps/ under whatever the name field says would quietly fork the document.
 	if ed.open_venue != "" {
-		path := venue_stage_path(ed.open_venue, ed.open_stage)
+		path := venue_road_path(ed.open_venue)
 		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing)
 		if ok {
-			msg = fmt.tprintf("saved %s / %s", ed.open_venue, ed.open_stage)
+			msg = fmt.tprintf("saved %s road network", ed.open_venue)
 		}
 		set_status(ed, msg, ok)
 		return
@@ -100,13 +100,18 @@ draw_menubar :: proc(ed: ^Editor) {
 	defer ui.igEndMainMenuBar()
 
 	if ui.igBeginMenu("File", true) {
-		if ui.igMenuItem_Bool("New", nil, false, true) {
+		if ed.open_venue != "" && ui.igMenuItem_Bool("Back to project manager", nil, false, true) {
+			ed.mode = .Venues
+			venues_screen_reload(&ed.screen)
+		}
+		if ed.open_venue != "" { ui.igSeparator() }
+		if ed.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
 			do_new(ed)
 		}
 		if ui.igMenuItem_Bool("Save", "Ctrl+S", false, len(ed.spline.points) >= 2) {
 			do_save(ed)
 		}
-		if ui.igBeginMenu("Load", true) {
+		if ed.open_venue == "" && ui.igBeginMenu("Load", true) {
 			stages := list_stages()
 			if len(stages) == 0 {
 				ui.igBeginDisabled(true)
@@ -122,7 +127,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			ui.igEndMenu()
 		}
 		ui.igSeparator()
-		if ui.igBeginMenu("Export to", len(ed.spline.points) >= 2) {
+		if ed.open_venue == "" && ui.igBeginMenu("Export to", len(ed.spline.points) >= 2) {
 			for &t in EXPORT_TARGETS {
 				label := fmt.ctprint(t.label)
 				if ui.igMenuItem_Bool(label, nil, false, true) {
@@ -131,7 +136,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			}
 			ui.igEndMenu()
 		}
-		if ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()
@@ -141,7 +146,7 @@ draw_menubar :: proc(ed: ^Editor) {
 		ui.igEndMenu()
 	}
 	if ui.igBeginMenu("Dirt 3", true) {
-		if ui.igMenuItem_Bool("Install_Scan", nil, false, true) {
+		if ui.igMenuItem_Bool("Project manager", nil, false, true) {
 			ed.mode = .Venues
 			venues_screen_reload(&ed.screen)
 		}
@@ -251,15 +256,19 @@ draw_inspector :: proc(ed: ^Editor) {
 	}
 	defer ui.igEnd()
 
-	ui.igSeparatorText("Stage")
-	ui.igInputText("name", raw_data(ed.stage_name[:]), len(ed.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
+	ui.igSeparatorText(ed.open_venue != "" ? "Venue road network" : "Stage")
+	if ed.open_venue != "" {
+		ui.im_text(fmt.ctprint(ed.open_venue))
+	} else {
+		ui.igInputText("name", raw_data(ed.stage_name[:]), len(ed.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
+	}
 	ui.igBeginDisabled(len(ed.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)
 	}
 	ui.igEndDisabled()
 	ui.im_same_line()
-	ui.igBeginDisabled(len(ed.spline.points) < 2)
+	ui.igBeginDisabled(len(ed.spline.points) < 2 || !geo.is_linear(ed.spline))
 	if ui.im_button("Reverse") {
 		geo.reverse_spline(&ed.spline)
 		ed.sel = {}
@@ -441,7 +450,7 @@ draw_point_section :: proc(ed: ^Editor) {
 
 	ui.igSpacing()
 	if ui.im_button("Delete point") {
-		ordered_remove(&ed.spline.points, sel)
+		geo.remove_point(&ed.spline, sel)
 		ed.sel = {}
 		mark_dirty(ed)
 	}

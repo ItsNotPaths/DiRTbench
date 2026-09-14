@@ -33,8 +33,11 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
-VENUE_VERSION :: 1
+// v2 owns one venue-wide road.json. Its stages are compiled products, not
+// independently edited spline documents.
+VENUE_VERSION :: 2
 VENUE_FILE :: "venue.json"
+VENUE_ROAD_FILE :: "road.json"
 VENUE_STAGES_DIR :: "stages"
 
 // Display names, one per menu level. The `db_` prefix the game adds to a
@@ -73,6 +76,13 @@ venue_stage_path :: proc(id, route: string, allocator := context.temp_allocator)
 		{venue_dir(id, context.temp_allocator), VENUE_STAGES_DIR, file},
 		allocator,
 	)
+	return joined
+}
+
+// The editable document belongs to the venue. Stages are later compiled as
+// start/finish paths through this graph; they are not separate road documents.
+venue_road_path :: proc(id: string, allocator := context.temp_allocator) -> string {
+	joined, _ := filepath.join({venue_dir(id, context.temp_allocator), VENUE_ROAD_FILE}, allocator)
 	return joined
 }
 
@@ -196,6 +206,13 @@ venue_load :: proc(
 			VENUE_VERSION,
 		), false
 	}
+	// The manifest is inside venues/<id>; its embedded identity must never be
+	// allowed to redirect reads or recursive deletion somewhere else.
+	if p.id != id || sanitise_venue_id(p.id) != p.id {
+		bad_id := strings.clone(p.id, context.temp_allocator)
+		venue_free(p, allocator)
+		return Venue{}, fmt.tprintf("project id %q does not match directory %q", bad_id, id), false
+	}
 	return p, "", true
 }
 
@@ -289,53 +306,31 @@ venue_create :: proc(
 		venue_free(p, allocator)
 		return Venue{}, msg, false
 	}
-	return p, "", true
-}
-
-// Add a route to a project and seed its road document, so the editor has
-// something to open. Route ids are dense: the new one is always `route_<n>`
-// where n is the count, matching how the game numbers them.
-venue_add_stage :: proc(
-	p: ^Venue,
-	display: string,
-	allocator := context.allocator,
-) -> (
-	route: string,
-	msg: string,
-	ok: bool,
-) {
-	route = fmt.aprintf("route_%d", len(p.stages), allocator = allocator)
-
 	sp: geo.Spline
 	defer delete(sp.points)
 	seed_spline(&sp)
-	if msg, ok = save_stage_to(sp, venue_stage_path(p.id, route)); !ok {
-		delete(route, allocator)
-		return "", msg, false
+	if msg, ok = save_stage_to(sp, venue_road_path(p.id)); !ok {
+		venue_free(p, allocator)
+		_ = os.remove_all(venue_dir(id))
+		return Venue{}, msg, false
 	}
-
-	shown := strings.trim_space(display)
-	if shown == "" {
-		shown = route
-	}
-	p.stages = append_owned(p.stages, route, allocator)
-	p.names.stages = append_owned(p.names.stages, strings.to_upper(shown, context.temp_allocator), allocator)
-
-	if msg, ok = venue_save(p^); !ok {
-		return "", msg, false
-	}
-	return route, "", true
+	return p, "", true
 }
 
-// Grow a plain slice by one owned string. The project is small and saved on
-// every change, so a `[dynamic]` in the serialised struct would buy nothing.
-@(private = "file")
-append_owned :: proc(list: []string, value: string, allocator := context.allocator) -> []string {
-	out := make([]string, len(list) + 1, allocator)
-	copy(out, list)
-	out[len(list)] = strings.clone(value, allocator)
-	delete(list, allocator)
-	return out
+// Delete only dirtbench's project directory. A deployed venue must first be
+// reverted because deleting its source document would strand an installed copy.
+venue_delete :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	if venue_already_deployed(vs, p) {
+		return fmt.tprintf("revert %s before deleting it", p.id), false
+	}
+	if p.id == "" || sanitise_venue_id(p.id) != p.id {
+		return fmt.tprintf("refusing unsafe venue id %q", p.id), false
+	}
+	dir := venue_dir(p.id)
+	if err := os.remove_all(dir); err != nil {
+		return fmt.tprintf("could not delete %s: %v", dir, err), false
+	}
+	return fmt.tprintf("deleted venue %s", p.id), true
 }
 
 // --- headless ----------------------------------------------------------------
@@ -350,6 +345,10 @@ venues_headless :: proc() -> bool {
 	}
 	for p in list {
 		fmt.printfln("%s  (location %s, art from %s/%s)", p.id, p.location, p.base, p.base_route)
+		if p.version >= 2 {
+			fmt.printfln("    road network   %s", venue_road_path(p.id))
+			continue
+		}
 		for stage, i in p.stages {
 			name := i < len(p.names.stages) ? p.names.stages[i] : ""
 			fmt.printfln("    %-10s %-20s %s", stage, name, venue_stage_path(p.id, stage))
@@ -359,7 +358,7 @@ venues_headless :: proc() -> bool {
 }
 
 // `--project-new <id> --base <venue> [--name <shown>]`: the New venue button,
-// for a machine with no display. Creates the project and seeds `route_0`.
+// for a machine with no display. Creates the project and seeds its road graph.
 // Writes nothing into the game.
 venue_new_headless :: proc(raw_id, base_id, display: string) -> bool {
 	vs: Install_Scan
@@ -388,12 +387,7 @@ venue_new_headless :: proc(raw_id, base_id, display: string) -> bool {
 	}
 	defer venue_free(p)
 
-	route, add_msg, added := venue_add_stage(&p, "")
-	if !added {
-		fmt.println(add_msg)
-		return false
-	}
-	fmt.printfln("created %s from %s, with %s", id, spec, route)
+	fmt.printfln("created %s from %s, with %s", id, spec, venue_road_path(id))
 	return true
 }
 
@@ -676,6 +670,9 @@ prepare_venue_deployment :: proc(
 	msg: string,
 	ok: bool,
 ) {
+	if p.version >= 2 {
+		return deployment, "stages must be compiled from venue start/finish markers before deployment", false
+	}
 	if !vs.found {
 		return deployment, install_scan_status_text(vs), false
 	}

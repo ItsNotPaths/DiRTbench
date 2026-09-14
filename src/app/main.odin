@@ -237,10 +237,23 @@ rebuild_geometry :: proc(ed: ^Editor) {
 		ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), context.allocator)
 		ed.ribbon_gen += 1
 		geo.road_mesh_rebuild(&ed.road, ed.ribbon, ed.topo, ed.roughness)
-		geo.pace_generate(ed.ribbon, ed.pace, &ed.notes)
+		if geo.is_linear(ed.spline) {
+			geo.pace_generate(ed.ribbon, ed.pace, &ed.notes)
+		} else {
+			clear(&ed.notes)
+		}
 		ed.dirty_road = false
 	}
 	if ed.dirty_terrain && !(ed.gizmo_active && ed.sel.kind == .Point) {
+		// Terrain, vegetation and pace notes become stage products once a path
+		// through the venue graph is chosen. Do not join independent branches
+		// into an accidental mega-ribbon in the meantime.
+		if !geo.is_linear(ed.spline) {
+			geo.gpu_mesh_unload(&ed.terrain_mesh)
+			delete(ed.veg_cache)
+			ed.dirty_terrain = false
+			return
+		}
 		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
 		geo.terrain_mesh_rebuild(
 			&ed.terrain_mesh, &ed.terrain_field, &ed.terrain,
@@ -255,6 +268,12 @@ rebuild_geometry :: proc(ed: ^Editor) {
 // so it is safe to call every frame. Generating rebuilds the terrain field, which
 // is why the result is cached rather than produced live.
 veg_refresh :: proc(ed: ^Editor) {
+	if !geo.is_linear(ed.spline) {
+		delete(ed.veg_cache)
+		ed.veg_gen = ed.ribbon_gen
+		ed.veg_dirty = false
+		return
+	}
 	if !ed.veg_dirty && ed.veg_gen == ed.ribbon_gen {
 		return
 	}
@@ -401,6 +420,7 @@ pick_ribbon :: proc(
 ) {
 	best_dist := max(f32)
 	for i in 0 ..< len(ribbon) - 1 {
+		if ribbon[i + 1].break_before { continue }
 		la, ra := geo.xsec_ends(ribbon[i])
 		lb, rb := geo.xsec_ends(ribbon[i + 1])
 		c := rl.GetRayCollisionQuad(ray, la, ra, rb, lb)
@@ -419,6 +439,7 @@ pick_ribbon :: proc(
 
 draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 	for i in 0 ..< len(ribbon) - 1 {
+		if ribbon[i + 1].break_before { continue }
 		rl.DrawLine3D(ribbon[i].pos, ribbon[i + 1].pos, {235, 200, 60, 255})
 	}
 }
@@ -448,7 +469,7 @@ seed_spline :: proc(sp: ^geo.Spline) {
 		if i > 0 {
 			rot = geo.heading_quat(seeds[i - 1], pos)
 		}
-		append(&sp.points, geo.make_point(pos, rot, geo.DEFAULT_WIDTH))
+		append(&sp.points, geo.make_point(pos, rot, geo.DEFAULT_WIDTH, parent = i - 1))
 	}
 	if len(sp.points) > 1 {
 		sp.points[0].xform.rotation = sp.points[1].xform.rotation
@@ -965,7 +986,7 @@ main :: proc() {
 			// Only a control point can be deleted. A lattice node is a slot, not an
 			// object: removing one would mean resizing the grid.
 			if pi := selected_point(&ed); rl.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
-				ordered_remove(&ed.spline.points, pi)
+				geo.remove_point(&ed.spline, pi)
 				ed.sel = {}
 				mark_dirty(&ed)
 			}

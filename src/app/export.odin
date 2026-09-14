@@ -410,6 +410,11 @@ export_headless :: proc(
 
 	load :: proc(ed: ^Editor, stage: string) -> (msg: string, ok: bool) {
 		if ed.open_venue != "" {
+			p, pmsg, pok := venue_load(ed.open_venue, context.temp_allocator)
+			if !pok { return pmsg, false }
+			if p.version >= 2 {
+				return "venue stages have not been compiled from start/finish markers yet", false
+			}
 			return load_stage_from(
 				&ed.spline,
 				venue_stage_path(ed.open_venue, ed.open_stage),

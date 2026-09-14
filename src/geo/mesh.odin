@@ -404,6 +404,7 @@ road_vertex :: proc(
 // UV_TILE_M, so the texture spans the road exactly once at any width.
 build_road_surface :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, roughness: f32) {
 	for i in 0 ..< len(ribbon) - 1 {
+		if ribbon[i + 1].break_before { continue }
 		// `xsec_ends` returns the +right end first, so that end takes v = 0.
 		ua := arc[i] / UV_TILE_M
 		ub := arc[i + 1] / UV_TILE_M
@@ -429,7 +430,7 @@ sample_spacing :: proc(ribbon: []Cross_Section) -> []f32 {
 	n := len(ribbon)
 	ds := make([]f32, n, context.temp_allocator)
 	for i in 0 ..< n - 1 {
-		ds[i] = rl.Vector3Distance(ribbon[i].pos, ribbon[i + 1].pos)
+		ds[i] = ribbon[i + 1].break_before ? 0 : rl.Vector3Distance(ribbon[i].pos, ribbon[i + 1].pos)
 	}
 	ds[n - 1] = ds[n - 2]
 	return ds
@@ -446,6 +447,7 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, rows: in
 	ds := sample_spacing(ribbon)
 	for side in 0 ..< 2 {
 		for i in 0 ..< len(ribbon) - 1 {
+			if ribbon[i + 1].break_before { continue }
 			p0 := verge_profile(ribbon[i], side)
 			p1 := verge_profile(ribbon[i + 1], side)
 			if p0.n < 2 && p1.n < 2 {
