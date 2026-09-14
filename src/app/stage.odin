@@ -28,7 +28,9 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // v2 added per-point cliffs; v3 added the per-point roughness offset; v4 added the
 // stage-global vegetation block; v5 added timing markers. Older files still load: a missing field unmarshals
 // to zero, which is the correct default (no cliff / no roughness offset / veg off).
-STAGE_VERSION :: 6
+// v6 added the parent index and v7 the weld. Both are read behind a version
+// check, because zero is a valid point index and would silently mean "point 0".
+STAGE_VERSION :: 7
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
@@ -36,6 +38,8 @@ STAGE_EXT :: ".json"
 // quaternion type.
 Stage_Point :: struct {
 	parent:      int,
+	// Second edge out of this point, closing a loop (v7). -1 for none.
+	weld:        int,
 	pos:         [3]f32,
 	rot:         [4]f32, // x, y, z, w
 	width:       f32,
@@ -169,6 +173,7 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 	for p, i in sp.points {
 		pts[i] = Stage_Point {
 			parent      = p.parent,
+			weld        = p.weld,
 			pos         = {p.xform.translation.x, p.xform.translation.y, p.xform.translation.z},
 			rot         = quat_to_array(p.xform.rotation),
 			width       = p.width,
@@ -245,6 +250,15 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 			}
 		}
 	}
+	if stage.version >= 7 {
+		// A weld may point forward, unlike a parent. It may not point at itself,
+		// which would sample an edge of zero length.
+		for p, i in stage.points {
+			if p.weld < -1 || p.weld >= len(stage.points) || p.weld == i {
+				return fmt.tprintf("road point %d has invalid weld %d", i, p.weld), false
+			}
+		}
+	}
 
 	// A v1 file carries no cliff fields, so they unmarshal to zero. Zero height
 	// is what we want (no cliffs), but a zero span/taper would leave the point's
@@ -278,6 +292,7 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 				p.parent if stage.version >= 6 else i - 1,
 			),
 		)
+		sp.points[len(sp.points)-1].weld = p.weld if stage.version >= 7 else -1
 	}
 
 	if veg != nil {

@@ -444,8 +444,40 @@ draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 	}
 }
 
+// Grow the road at `g`. With a point selected the new node is its child, which
+// is a branch when that point already had one. With no selection it appends to
+// the tail, the old behaviour.
+grow_road :: proc(sp: ^geo.Spline, from: int, g: rl.Vector3) -> int {
+	if from < 0 || from >= len(sp.points) {
+		return geo.append_point(sp, g)
+	}
+	idx := geo.extrude_point(sp, from)
+	if idx < 0 || idx >= len(sp.points) {
+		return idx
+	}
+	p := &sp.points[idx]
+	p.xform.translation = g
+	// Extruding the head grows backwards, so that node is aimed at its child
+	// instead of away from a parent it does not have.
+	if p.parent >= 0 {
+		p.xform.rotation = geo.heading_quat(sp.points[p.parent].xform.translation, g)
+	} else if child := geo.first_child(sp^, idx); child >= 0 {
+		p.xform.rotation = geo.heading_quat(g, sp.points[child].xform.translation)
+	}
+	return idx
+}
+
 draw_handles :: proc(sp: geo.Spline, selected: int) {
 	for p, i in sp.points {
+		// A weld is an edge with no ribbon handle of its own, so draw the join
+		// itself or there is no way to see that a loop is closed.
+		if p.weld >= 0 && p.weld < len(sp.points) {
+			rl.DrawLine3D(
+				p.xform.translation,
+				sp.points[p.weld].xform.translation,
+				{255, 200, 90, 255},
+			)
+		}
 		l, r := geo.point_ends(p)
 		rl.DrawLine3D(l, r, {200, 210, 225, 255}) // rung
 		hcol := i == selected ? rl.Color{255, 120, 60, 255} : rl.Color{120, 200, 255, 255}
@@ -978,13 +1010,31 @@ main :: proc() {
 		// holds a raw pointer into that array while dragging, so never mutate
 		// the array mid-drag.
 		if !gizmo_used && !ui_mouse {
+			// Right-click, in priority order: another control point welds the
+			// selection into it and closes a loop, the ribbon inserts, and bare
+			// ground grows the road from the selected point rather than from
+			// whatever happens to sit last in the array.
 			if rl.IsMouseButtonPressed(.RIGHT) && !nav {
-				if seg, at, frame, ok := pick_ribbon(ed.ribbon, ray); ok {
-					ed.sel = {kind = .Point, idx = geo.insert_point(&ed.spline, seg, at, frame)}
+				sel := selected_point(&ed)
+				target, _ := pick_point(ed.spline, ray)
+				switch {
+				case target >= 0 && sel >= 0 && target != sel:
+					if ed.spline.points[sel].weld == target {
+						geo.unweld_point(&ed.spline, sel)
+					} else {
+						_ = geo.weld_points(&ed.spline, sel, target)
+					}
 					mark_dirty(&ed)
-				} else if g, gok := ray_ground(ray); gok {
-					ed.sel = {kind = .Point, idx = geo.append_point(&ed.spline, g)}
-					mark_dirty(&ed)
+				case target >= 0:
+					ed.sel = {kind = .Point, idx = target}
+				case:
+					if seg, at, frame, ok := pick_ribbon(ed.ribbon, ray); ok {
+						ed.sel = {kind = .Point, idx = geo.insert_point(&ed.spline, seg, at, frame)}
+						mark_dirty(&ed)
+					} else if g, gok := ray_ground(ray); gok {
+						ed.sel = {kind = .Point, idx = grow_road(&ed.spline, sel, g)}
+						mark_dirty(&ed)
+					}
 				}
 			}
 			// Only a control point can be deleted. A lattice node is a slot, not an

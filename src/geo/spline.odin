@@ -31,6 +31,14 @@ Point :: struct {
 	// ordered, so every non-root parent is lower than its child. A second child
 	// is a branch; no separate edge or junction object is needed.
 	parent:      int,
+	// A second edge out of this point, closing a loop. -1 for none.
+	//
+	// The parent tree above stays a tree: acyclic, every parent lower than its
+	// child. A weld is emitted by build_ribbon and **never traversed onward**,
+	// so nothing ever walks from one weld to another. That is what lets the
+	// road close a loop while every walk over the graph still terminates, with
+	// no cycle detection anywhere. Unlike a parent, a weld may point forward.
+	weld:        int,
 	xform:       rl.Transform, // translation = centre, rotation = road frame
 	width:       f32,          // road width, metres
 
@@ -81,8 +89,39 @@ is_branch :: proc(sp: Spline, idx: int) -> bool {
 }
 
 is_linear :: proc(sp: Spline) -> bool {
-	for p, i in sp.points { if p.parent != i - 1 { return false } }
+	// A weld is an edge the linear sampler cannot express, so any weld makes the
+	// graph sampler the only correct one.
+	for p, i in sp.points { if p.parent != i - 1 || p.weld >= 0 { return false } }
 	return true
+}
+
+has_weld :: proc(sp: Spline, idx: int) -> bool {
+	return idx >= 0 && idx < len(sp.points) && sp.points[idx].weld >= 0
+}
+
+// Close a loop: a second edge out of `from` into `to`. Refused when the two are
+// already joined, so a weld never duplicates a parent edge.
+weld_points :: proc(sp: ^Spline, from, to: int) -> bool {
+	n := len(sp.points)
+	if from < 0 || from >= n || to < 0 || to >= n || from == to { return false }
+	if sp.points[from].parent == to || sp.points[to].parent == from { return false }
+	if sp.points[to].weld == from { return false }
+	sp.points[from].weld = to
+	return true
+}
+
+unweld_point :: proc(sp: ^Spline, idx: int) {
+	if idx >= 0 && idx < len(sp.points) { sp.points[idx].weld = -1 }
+}
+
+// Every index the graph stores moves when the array does. One place, so an edit
+// cannot shift parents and quietly forget welds.
+shift_links :: proc(sp: ^Spline, at, skip: int) {
+	for &p, i in sp.points {
+		if i == skip { continue }
+		if p.parent >= at { p.parent += 1 }
+		if p.weld >= at { p.weld += 1 }
+	}
 }
 
 // A sampled slice across the road: everything needed to lay a ribbon rung and
@@ -167,6 +206,7 @@ make_point :: proc(
 ) -> Point {
 	return Point {
 		parent      = parent,
+		weld        = -1,
 		xform       = {translation = pos, rotation = rot, scale = {1, 1, 1}},
 		width       = width,
 		cliff_l     = cliff_l,
@@ -285,6 +325,22 @@ build_ribbon :: proc(
 				append(&out, cs)
 			}
 		}
+		// Weld edges last, sampled exactly like a parent edge. They are emitted
+		// here and nowhere else; no traversal follows one, so a closed loop
+		// costs no cycle detection.
+		for p, i in sp.points {
+			if p.weld < 0 || p.weld >= len(sp.points) || p.weld == i { continue }
+			for s in 0 ..= spp {
+				cs := sample_edge(sp, i, p.weld, f32(s)/f32(spp))
+				cs.break_before = s == 0
+				append(&out, cs)
+			}
+		}
+		// NOTE: no resolve_cliffs here. The graph sampler lerps cliff heights
+		// between the two endpoints, where the linear one leaves them at zero
+		// and resolve_cliffs fills the tapered envelope. Two cliff models, and
+		// resolve_cliffs maps control point i to sample i*spp, which the graph
+		// layout does not satisfy. Unifying them is its own job.
 		return out[:]
 	}
 	for seg in 0 ..< nseg {
@@ -438,9 +494,7 @@ insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section
 			src.cliff_taper, frame.cliff_angle, frame.roughness, parent,
 		)
 		inject_at(&sp.points, child, np)
-		for &p, i in sp.points {
-			if i != child && p.parent >= child { p.parent += 1 }
-		}
+		shift_links(sp, child, child)
 		sp.points[child + 1].parent = child
 		return child
 	}
@@ -460,10 +514,7 @@ insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section
 	inject_at(&sp.points, seg + 1, np)
 	// The old child now follows the inserted node. Shift every index affected
 	// by the insertion before repairing that one edge.
-	for &p, i in sp.points {
-		if i == seg + 1 { continue }
-		if p.parent > seg { p.parent += 1 }
-	}
+	shift_links(sp, seg + 1, seg + 1)
 	if seg + 2 < len(sp.points) && sp.points[seg + 2].parent == seg {
 		sp.points[seg + 2].parent = seg + 1
 	}
@@ -482,22 +533,30 @@ extrude_point :: proc(sp: ^Spline, idx: int) -> int {
 		if p.parent == idx {
 			copy := sp.points[idx]
 			copy.parent = idx
+			// A fresh node does not inherit someone else's loop closure.
+			copy.weld = -1
 			append(&sp.points, copy)
 			return len(sp.points) - 1
 		}
 	}
 	if idx == 0 && len(sp.points) > 1 {
 		inject_at(&sp.points, 0, sp.points[0])
+		for &p, i in sp.points {
+			if i > 1 {
+				if p.parent >= 0 { p.parent += 1 }
+				if p.weld >= 0 { p.weld += 1 }
+			}
+		}
 		sp.points[0].parent = -1
+		sp.points[0].weld = -1
 		sp.points[1].parent = 0
-		for &p, i in sp.points { if i > 1 && p.parent >= 0 { p.parent += 1 } }
+		if sp.points[1].weld >= 0 { sp.points[1].weld += 1 }
 		return 0
 	}
 	inject_at(&sp.points, idx + 1, sp.points[idx])
+	shift_links(sp, idx + 1, idx + 1)
 	sp.points[idx + 1].parent = idx
-	for &p, i in sp.points {
-		if i != idx + 1 && p.parent > idx { p.parent += 1 }
-	}
+	sp.points[idx + 1].weld = -1
 	if idx + 2 < len(sp.points) && sp.points[idx + 2].parent == idx {
 		sp.points[idx + 2].parent = idx + 1
 	}
@@ -509,10 +568,16 @@ extrude_point :: proc(sp: ^Spline, idx: int) -> int {
 remove_point :: proc(sp: ^Spline, idx: int) {
 	if idx < 0 || idx >= len(sp.points) || len(sp.points) <= 1 { return }
 	parent := sp.points[idx].parent
-	for &p in sp.points { if p.parent == idx { p.parent = parent } }
+	for &p in sp.points {
+		if p.parent == idx { p.parent = parent }
+		// A weld into the removed node has no parent to fall back on: the loop
+		// it closed is gone, so drop the edge rather than aim it somewhere else.
+		if p.weld == idx { p.weld = -1 }
+	}
 	ordered_remove(&sp.points, idx)
 	for &p in sp.points {
 		if p.parent > idx { p.parent -= 1 }
+		if p.weld > idx { p.weld -= 1 }
 	}
 }
 
@@ -531,6 +596,7 @@ reverse_spline :: proc(sp: ^Spline) {
 		// reverse_spline is only defined for a chain. Array order is its new
 		// travel order, so rebuild the graph edges to match that order.
 		p.parent = i - 1
+		p.weld = -1
 		f := point_forward(p)
 		u := point_up(p)
 		// Flip the frame to face the new travel direction, normal unchanged.
