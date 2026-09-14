@@ -496,6 +496,10 @@ run_cli :: proc() -> (handled: bool) {
 		os.exit(install_headless() ? 0 : 1)
 	}
 	// `--venues`: what is under venues/, and the stage documents each holds.
+	// `--dirt3-pack [<venue>]`: what shaders a venue would give a venue of ours.
+	if len(args) >= 1 && args[0] == "--dirt3-pack" {
+		os.exit(pack_headless(len(args) > 1 ? args[1] : "") ? 0 : 1)
+	}
 	if len(args) >= 1 && args[0] == "--venues" {
 		os.exit(venues_headless() ? 0 : 1)
 	}

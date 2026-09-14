@@ -61,6 +61,7 @@ atomic_write_file :: proc(path: string, data: []u8) -> (msg: string, ok: bool) {
 
 d3_collision_build :: proc(
 	collision: []Collision_Triangle,
+	profile: ^D3_Venue_Profile,
 	allocator := context.allocator,
 ) -> (
 	data: []u8,
@@ -69,10 +70,6 @@ d3_collision_build :: proc(
 ) {
 	if len(collision) == 0 {
 		return nil, "Dirt 3 export needs collision triangles", false
-	}
-	profile, profile_msg, profile_ok := d3_profile_builtin()
-	if !profile_ok {
-		return nil, profile_msg, false
 	}
 	input := make([]D3_Write_Tri, len(collision), context.temp_allocator)
 	for triangle, i in collision {
@@ -135,8 +132,8 @@ d3_write_out :: proc(
 	return atomic_write_file(path, data)
 }
 
-d3_write_collision :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
-	data, detail, built := d3_collision_build(job.Collision)
+d3_write_collision :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg: string, ok: bool) {
+	data, detail, built := d3_collision_build(job.Collision, profile)
 	if !built {
 		return detail, false
 	}
@@ -147,24 +144,31 @@ d3_write_collision :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	return detail, true
 }
 
+// Every file that names a shader needs the venue's own profile. Without one
+// there is no honest answer to "whose art is this", so the export refuses
+// rather than reaching for a fixture the player does not have.
 export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	if job.Profile == nil {
+		return "this export needs a venue, so it knows whose shaders the stage draws with", false
+	}
+	profile := job.Profile
 	track_msg, track_ok := d3_write_track_data(job)
 	if !track_ok {
 		return track_msg, false
 	}
-	collision_msg, collision_ok := d3_write_collision(job)
+	collision_msg, collision_ok := d3_write_collision(job, profile)
 	if !collision_ok {
 		return collision_msg, false
 	}
-	visual_msg, visual_ok := d3_write_routesplit(job)
+	visual_msg, visual_ok := d3_write_routesplit(job, profile)
 	if !visual_ok {
 		return visual_msg, false
 	}
-	vis_msg, vis_ok := d3_write_track_vis(job)
+	vis_msg, vis_ok := d3_write_track_vis(job, profile)
 	if !vis_ok {
 		return vis_msg, false
 	}
-	grid_msg, grid_ok := d3_write_grids(job)
+	grid_msg, grid_ok := d3_write_grids(job, profile)
 	if !grid_ok {
 		return grid_msg, false
 	}

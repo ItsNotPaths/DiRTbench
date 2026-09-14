@@ -22,6 +22,16 @@ d3_test_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
 	return out
 }
 
+// Every builder takes a profile. Tests use the venue-less fixture.
+d3_test_profile :: proc() -> ^D3_Venue_Profile {
+	@(static) profile: D3_Venue_Profile
+	if profile.template == nil {
+		built, _, ok := d3_profile_fixture()
+		if ok { profile = built }
+	}
+	return &profile
+}
+
 d3_test_walk :: proc(node: ^Pssg_Node, out: ^[dynamic]^Pssg_Node) {
 	append(out, node)
 	for child in node.children { d3_test_walk(child, out) }
@@ -35,7 +45,7 @@ d3_test_named :: proc(nodes: []^Pssg_Node, name: string, out: ^[dynamic]^Pssg_No
 @(test)
 routesplit_builds_the_stock_tile_scene :: proc(t: ^testing.T) {
 	tris := d3_test_mesh(context.temp_allocator)
-	raw, msg, built := d3_routesplit_build(tris, context.allocator)
+	raw, msg, built := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	file, parse_msg, parsed := pssg_read(raw, context.allocator)
@@ -65,14 +75,12 @@ routesplit_builds_the_stock_tile_scene :: proc(t: ^testing.T) {
 
 @(test)
 routesplit_attribute_ids_match_the_material_pack :: proc(t: ^testing.T) {
-	profile, profile_msg, profile_ok := d3_profile_builtin()
-	testing.expect(t, profile_ok, profile_msg); if !profile_ok { return }
-	pack, pack_msg, pack_ok := pssg_read(profile.template, context.temp_allocator)
+	pack, pack_msg, pack_ok := pssg_read(d3_test_profile().template, context.temp_allocator)
 	testing.expect(t, pack_ok, pack_msg); if !pack_ok { return }
 	want := pssg_types(&pack, context.temp_allocator)
 
 	tris := d3_test_mesh(context.temp_allocator)
-	raw, msg, built := d3_routesplit_build(tris, context.allocator)
+	raw, msg, built := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	file, parse_msg, parsed := pssg_read(raw, context.allocator)
@@ -100,7 +108,7 @@ routesplit_attribute_ids_match_the_material_pack :: proc(t: ^testing.T) {
 @(test)
 routesplit_references_and_counts_agree :: proc(t: ^testing.T) {
 	tris := d3_test_mesh(context.temp_allocator)
-	raw, msg, built := d3_routesplit_build(tris, context.allocator)
+	raw, msg, built := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	file, parse_msg, parsed := pssg_read(raw, context.allocator)
@@ -169,7 +177,7 @@ routesplit_references_and_counts_agree :: proc(t: ^testing.T) {
 
 @(test)
 routesplit_splits_a_group_it_cannot_index :: proc(t: ^testing.T) {
-	_, _, any := d3_routesplit_build(nil, context.allocator)
+	_, _, any := d3_routesplit_build(nil, d3_test_profile(), context.allocator)
 	testing.expect(t, !any, "no triangles must be an error, not an empty scene")
 
 	// All in one cell, no two corners at the same position, so welding cannot
@@ -179,7 +187,7 @@ routesplit_splits_a_group_it_cannot_index :: proc(t: ^testing.T) {
 		y := f32(i)*3
 		tri = {Points={{0,y,0},{1,y+1,0},{0,y+2,1}}, Material=.Road}
 	}
-	raw, msg, built := d3_routesplit_build(crowded, context.allocator)
+	raw, msg, built := d3_routesplit_build(crowded, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	file, parse_msg, parsed := pssg_read(raw, context.allocator)

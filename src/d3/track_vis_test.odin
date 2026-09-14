@@ -9,7 +9,7 @@ d3_vis_f32 :: proc(data: []u8, at: int) -> f32 { return transmute(f32)d3_vis_u32
 @(test)
 track_vis_is_self_contained_and_indexes_every_route_tile :: proc(t: ^testing.T) {
 	tris := d3_test_mesh(context.temp_allocator)
-	raw, msg, built := d3_track_vis_build(tris, context.allocator)
+	raw, msg, built := d3_track_vis_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 
@@ -40,7 +40,7 @@ track_vis_is_self_contained_and_indexes_every_route_tile :: proc(t: ^testing.T) 
 @(test)
 track_vis_owns_only_nonempty_tiles_without_donor_slots :: proc(t: ^testing.T) {
 	tris := []Collision_Triangle{{Points={{0,0,0},{0,0,1},{1,0,0}}, Material=.Road}}
-	raw, msg, built := d3_track_vis_build(tris)
+	raw, msg, built := d3_track_vis_build(tris, d3_test_profile())
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	testing.expect_value(t, d3_vis_u32(raw, 0x40), u32(1))
@@ -52,10 +52,10 @@ track_vis_owns_only_nonempty_tiles_without_donor_slots :: proc(t: ^testing.T) {
 @(test)
 track_vis_boxes_match_routesplit_tile_order :: proc(t: ^testing.T) {
 	tris := d3_test_mesh(context.temp_allocator)
-	vis, vis_msg, vis_ok := d3_track_vis_build(tris, context.allocator)
+	vis, vis_msg, vis_ok := d3_track_vis_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, vis_ok, vis_msg); if !vis_ok { return }
 	defer delete(vis)
-	pssg, pssg_msg, pssg_ok := d3_routesplit_build(tris, context.allocator)
+	pssg, pssg_msg, pssg_ok := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
 	testing.expect(t, pssg_ok, pssg_msg); if !pssg_ok { return }
 	defer delete(pssg)
 	file, read_msg, read_ok := pssg_read(pssg, context.allocator)

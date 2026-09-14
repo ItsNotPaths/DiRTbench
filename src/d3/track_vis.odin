@@ -15,10 +15,8 @@ d3_vis_bounds :: proc(boxes: []D3_Tile_Box) -> (lo, hi: [3]f32) {
 	return
 }
 
-d3_track_vis_build :: proc(collision: []Collision_Triangle, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
-	profile, profile_msg, profile_ok := d3_profile_builtin()
-	if !profile_ok { return nil, profile_msg, false }
-	boxes, box_msg, boxes_ok := d3_tile_boxes(collision, &profile, context.temp_allocator)
+d3_track_vis_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+	boxes, box_msg, boxes_ok := d3_tile_boxes(collision, profile, context.temp_allocator)
 	if !boxes_ok { return nil, box_msg, false }
 	if len(boxes) > 65535 { return nil, "Dirt 3 VIS has too many route tiles", false }
 
@@ -97,8 +95,8 @@ d3_track_vis_build :: proc(collision: []Collision_Triangle, allocator := context
 	return out, fmt.tprintf("1 view cell, %d owned route tiles, no donor objects", len(boxes)), true
 }
 
-d3_write_track_vis :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
-	data, detail, built := d3_track_vis_build(job.Collision)
+d3_write_track_vis :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg: string, ok: bool) {
+	data, detail, built := d3_track_vis_build(job.Collision, profile)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "track.vis", data); !written { return write_msg, false }

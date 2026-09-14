@@ -42,6 +42,10 @@ Export_Job :: struct {
 	Route:     []Route_Sample,
 	Markers:   []Progress_Marker,
 	Collision: []Collision_Triangle,
+	// The open venue's shader template, read from its `base/` directory. An
+	// export without one is refused: every file that names a shader would
+	// otherwise name art from a venue the player may not own.
+	Profile:   ^D3_Venue_Profile,
 }
 
 // Public entry points used by the editor's headless CLI. The implementation
@@ -61,3 +65,8 @@ Prepare_Registration :: prepare_registration
 Registration_Output_Delete :: registration_output_delete
 Database_Bytes_Have_Venue :: database_bytes_have_venue
 Routesplit :: dirt3_routesplit_headless
+Venue_Profile :: D3_Venue_Profile
+Profile_Load :: d3_profile_load
+Profile_Dir :: D3_PROFILE_DIR
+Pack_Install :: d3_pack_install
+Pack_Profile :: d3_pack_profile

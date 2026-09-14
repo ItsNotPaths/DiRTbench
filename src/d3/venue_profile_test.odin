@@ -3,10 +3,10 @@ package d3
 import "core:testing"
 
 @(test)
-builtin_dirt3_profile_is_self_contained :: proc(t: ^testing.T) {
-	profile, msg, ok := d3_profile_builtin()
+fixture_dirt3_profile_is_self_contained :: proc(t: ^testing.T) {
+	profile, msg, ok := d3_profile_fixture()
 	testing.expect(t, ok, msg); if !ok { return }
-	testing.expect_value(t, profile.id, "moosylvania")
+	testing.expect_value(t, profile.id, D3_FIXTURE_ID)
 	file, parse_msg, parsed := pssg_read(profile.template, context.allocator)
 	testing.expect(t, parsed, parse_msg); if !parsed { return }
 	defer pssg_delete(&file)

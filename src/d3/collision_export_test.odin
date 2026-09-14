@@ -10,7 +10,7 @@ stage_collision_builds_an_archive_readable_by_our_decoder :: proc(t:^testing.T) 
 		{Points={{40,0,0},{50,0,0},{40,0,10}},Material=.Terrain},
 		{Points={{60,0,0},{70,0,0},{60,0,10}},Material=.Road_Sand},
 	}
-	raw,_,written:=d3_collision_build(collision,context.allocator)
+	raw,_,written:=d3_collision_build(collision,d3_test_profile(),context.allocator)
 	defer delete(raw)
 	testing.expect(t,written)
 	entries,opened:=jpak_read(raw,context.allocator)

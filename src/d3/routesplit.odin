@@ -430,10 +430,8 @@ d3_tile_boxes :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profil
 
 // Stock files list tiles by descending z index, then descending x, and tile z
 // index 0 is the high-z end.
-d3_routesplit_build :: proc(collision: []Collision_Triangle, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
 	if len(collision) == 0 { return nil, "Dirt 3 graphics need triangles", false }
-	profile, profile_msg, profile_ok := d3_profile_builtin()
-	if !profile_ok { return nil, profile_msg, false }
 
 	// One arena for the whole scene, so a rejected mesh frees everything it
 	// built. Only the encoded output is handed back on the caller's allocator.
@@ -450,7 +448,7 @@ d3_routesplit_build :: proc(collision: []Collision_Triangle, allocator := contex
 	ids := pssg_ids(&file, scratch)
 
 	b := D3_Build{
-		file = &file, types = &types, ids = &ids, profile = &profile, tris = collision,
+		file = &file, types = &types, ids = &ids, profile = profile, tris = collision,
 		blocks = make([dynamic]^Pssg_Node, scratch),
 		segments = make([dynamic]^Pssg_Node, scratch),
 		allocator = scratch, ok = true,
@@ -510,8 +508,8 @@ d3_routesplit_build :: proc(collision: []Collision_Triangle, allocator := contex
 	return out, fmt.tprintf("%d triangles, %d tiles, %d draw calls", len(collision), len(tiles), b.draws), true
 }
 
-d3_write_routesplit :: proc(job: ^Export_Job) -> (string, bool) {
-	data, msg, ok := d3_routesplit_build(job.Collision)
+d3_write_routesplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (string, bool) {
+	data, msg, ok := d3_routesplit_build(job.Collision, profile)
 	if !ok { return msg, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "routesplit.pssg", data); !written { return write_msg, false }
@@ -527,8 +525,10 @@ d3_material_of :: proc(profile: ^D3_Venue_Profile, code: string) -> Collision_Ma
 	return .Terrain
 }
 
+// A debug converter: a stock track.jpk in, a routesplit out. It runs with no
+// venue open, so it draws with the fixture shaders rather than a venue's own.
 dirt3_routesplit_headless :: proc(path, out_path: string) -> (msg: string, ok: bool) {
-	profile, profile_msg, profile_ok := d3_profile_builtin()
+	profile, profile_msg, profile_ok := d3_profile_fixture()
 	if !profile_ok { return profile_msg, false }
 	collision, read_msg, read_ok := d3_collision_read(path, context.allocator)
 	if !read_ok { return read_msg, false }
@@ -550,7 +550,7 @@ dirt3_routesplit_headless :: proc(path, out_path: string) -> (msg: string, ok: b
 		}
 	}
 
-	data, build_msg, built := d3_routesplit_build(tris, context.allocator)
+	data, build_msg, built := d3_routesplit_build(tris, &profile, context.allocator)
 	if !built { return build_msg, false }
 	defer delete(data)
 	if err := os.write_entire_file(out_path, data); err != nil {

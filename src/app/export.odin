@@ -27,6 +27,9 @@ import d3 "../d3"
 import "../geo"
 
 export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	if job.profile == nil {
+		return job.profile_msg, false
+	}
 	route := make([]d3.Route_Sample, len(job.ribbon), context.temp_allocator)
 	for section, i in job.ribbon {
 		half := section.width/2
@@ -64,7 +67,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 		collision[i].Material = material
 	}
-	return d3.Export(&d3.Export_Job{Name=job.name,Out=job.out,Backup=job.installing,Route=route,Markers=markers,Collision=collision})
+	return d3.Export(&d3.Export_Job{Name=job.name,Out=job.out,Backup=job.installing,Route=route,Markers=markers,Collision=collision,Profile=job.profile})
 }
 
 // --- the job -----------------------------------------------------------------
@@ -83,6 +86,11 @@ Export_Job :: struct {
 	counts: [geo.Mat_Id]int,     // population of each material group
 	props:  []geo.Veg_Instance,  // scattered vegetation; empty when disabled
 	ribbon: []geo.Cross_Section, // for targets that place things along the road
+	// Which shaders the stage draws with, resolved from the open venue or from
+	// the venue the selected route lives in. Only the Dirt 3 target needs it,
+	// so a failure to resolve one is carried rather than raised.
+	profile:     ^d3.Venue_Profile,
+	profile_msg: string,
 	notes:  []geo.Pace_Note,     // pace notes at their arc stations
 	pace:   geo.Pace_Params,     // what `notes` was generated from, for a target that
 	                         // writes notes rather than baked audio
@@ -232,6 +240,9 @@ build_export_job :: proc(ed: ^Editor, name: string) -> (job: Export_Job, msg: st
 	}
 	job.ribbon = ed.ribbon
 	job.timing = ed.timing
+	// glTF needs no shaders, so a missing profile is only fatal for the target
+	// that names them.
+	job.profile, job.profile_msg, _ = export_profile(&ed.install, ed.open_venue, context.temp_allocator)
 	job.props = geo.veg_generate(
 		ed.ribbon,
 		&ed.terrain,

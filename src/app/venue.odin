@@ -314,7 +314,82 @@ venue_create :: proc(
 		_ = os.remove_all(venue_dir(id))
 		return Venue{}, msg, false
 	}
+	// The venue takes its shaders from the base now, while the base is known
+	// good, rather than at export time when a failure costs more.
+	if msg, ok = venue_pack_install(vs, p); !ok {
+		venue_free(p, allocator)
+		_ = os.remove_all(venue_dir(id))
+		return Venue{}, msg, false
+	}
 	return p, "", true
+}
+
+// The base venue's directory in the install, or "" when it is not there.
+venue_base_dir :: proc(vs: ^Install_Scan, p: Venue) -> string {
+	slash := strings.index_byte(p.base, '/')
+	if slash < 0 || !vs.found {
+		return ""
+	}
+	source, found := d3.install_venue(&vs.install, p.base[:slash], p.base[slash + 1:])
+	return found ? source.dir : ""
+}
+
+venue_pack_dir :: proc(id: string, allocator := context.temp_allocator) -> string {
+	joined, _ := filepath.join({venue_dir(id, context.temp_allocator), d3.Profile_Dir}, allocator)
+	return joined
+}
+
+venue_pack_install :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	base_dir := venue_base_dir(vs, p)
+	if base_dir == "" {
+		return fmt.tprintf("base venue %s is not installed, so its shaders cannot be read", p.base), false
+	}
+	detail, installed := d3.Pack_Install(base_dir, venue_pack_dir(p.id), p.id)
+	if !installed {
+		return fmt.tprintf("could not read the shaders of %s: %s", p.base, detail), false
+	}
+	return "", true
+}
+
+// The shader template a stage draws with. One of ours takes it from its own
+// `base/` directory, and a venue made before that directory existed gets it
+// built here rather than refusing to export. A stock route target takes the
+// shaders of the venue the route lives in.
+export_profile :: proc(
+	vs: ^Install_Scan,
+	venue: string,
+	allocator := context.temp_allocator,
+) -> (
+	out: ^d3.Venue_Profile,
+	msg: string,
+	ok: bool,
+) {
+	profile: d3.Venue_Profile
+	if venue != "" {
+		dir := venue_pack_dir(venue, allocator)
+		if !os.exists(dir) {
+			p, load_msg, loaded := venue_load(venue, context.temp_allocator)
+			if !loaded {
+				return nil, load_msg, false
+			}
+			if msg, ok = venue_pack_install(vs, p); !ok {
+				return nil, msg, false
+			}
+		}
+		profile, msg, ok = d3.Profile_Load(dir, allocator)
+	} else {
+		if !vs.found || vs.venue < 0 {
+			return nil, "an export needs one of our venues or a selected route", false
+		}
+		source := vs.install.venues[vs.venue]
+		profile, msg, ok = d3.Pack_Profile(source.dir, source.id, allocator)
+	}
+	if !ok {
+		return nil, msg, false
+	}
+	out = new(d3.Venue_Profile, allocator)
+	out^ = profile
+	return out, "", true
 }
 
 // Delete only dirtbench's project directory. A deployed venue must first be
@@ -335,6 +410,49 @@ venue_delete :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 
 // --- headless ----------------------------------------------------------------
 
+// `--dirt3-pack [<venue>]`: read the shaders out of every venue that can be a
+// base, or out of one named venue, and print what its pack would hold. Nothing
+// is written. This is the acceptance check for the extractor.
+pack_headless :: proc(only: string) -> bool {
+	vs: Install_Scan
+	install_scan_init(&vs)
+	defer install_scan_delete(&vs)
+	if !vs.found {
+		fmt.println(install_scan_status_text(&vs))
+		return false
+	}
+	seen, refused := 0, 0
+	for venue in vs.install.venues {
+		if only != "" ? venue.id != only : !venue_is_base(venue) {
+			continue
+		}
+		seen += 1
+		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, context.temp_allocator)
+		if ok {
+			fmt.printfln(
+				"%-18s %6d bytes  road=%-26s terrain=%-26s lod=%-24s batch=%s",
+				venue.id,
+				len(profile.template),
+				profile.visual[.Road],
+				profile.visual[.Terrain],
+				profile.lod,
+				profile.batch,
+			)
+		} else {
+			refused += 1
+			fmt.printfln("%-18s refused: %s", venue.id, msg)
+		}
+		// A tracksplit is up to 80 MB, and it lands in temp.
+		free_all(context.temp_allocator)
+	}
+	if seen == 0 {
+		fmt.println("no venue matched")
+		return false
+	}
+	fmt.printfln("%d venues, %d refused", seen, refused)
+	return refused == 0
+}
+
 // `--venues`: what is under `venues/`, and the stage definitions each holds.
 venues_headless :: proc() -> bool {
 	list := venues_list()
@@ -343,8 +461,22 @@ venues_headless :: proc() -> bool {
 		fmt.printfln("no venues in %s", venues_dir())
 		return true
 	}
+	vs: Install_Scan
+	install_scan_init(&vs)
+	defer install_scan_delete(&vs)
 	for p in list {
 		fmt.printfln("%s  (location %s, art from %s/%s)", p.id, p.location, p.base, p.base_route)
+		// Resolving the profile rebuilds a missing `base/`, so this also
+		// repairs a venue made before the pack existed.
+		if profile, profile_msg, profile_ok := export_profile(&vs, p.id, context.temp_allocator);
+		   profile_ok {
+			fmt.printfln(
+				"    shaders        road %s, terrain %s, lod %s",
+				profile.visual[.Road], profile.visual[.Terrain], profile.lod,
+			)
+		} else {
+			fmt.printfln("    shaders        none: %s", profile_msg)
+		}
 		if p.version >= 2 {
 			fmt.printfln("    road network   %s", venue_road_path(p.id))
 			continue

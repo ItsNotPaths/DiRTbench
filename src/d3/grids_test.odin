@@ -42,7 +42,7 @@ grids_test_transform :: proc(node: ^Pssg_Node) -> (rows: [4][3]f32, ok: bool) {
 grids_place_the_start_on_the_route_facing_travel :: proc(t: ^testing.T) {
 	line := grids_test_line()
 	markers := []Progress_Marker{{.Start,50},{.Checkpoint,140},{.Finish,230}}
-	data, msg, ok := d3_grids_build(line, markers, context.temp_allocator)
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), context.temp_allocator)
 	testing.expect(t, ok, msg)
 
 	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
@@ -66,7 +66,7 @@ grids_place_the_start_on_the_route_facing_travel :: proc(t: ^testing.T) {
 grids_slots_trail_the_start_and_follow_the_bend :: proc(t: ^testing.T) {
 	line := grids_test_line()
 	markers := []Progress_Marker{{.Start,120},{.Checkpoint,170},{.Finish,220}}
-	data, msg, ok := d3_grids_build(line, markers, context.temp_allocator)
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), context.temp_allocator)
 	testing.expect(t, ok, msg)
 	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
 	testing.expect(t, read_ok, read_msg)

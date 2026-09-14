@@ -58,10 +58,8 @@ d3_grid_slot_local :: proc(grid, slot: Route_Station) -> (lateral, tangent, orig
 	return project(sl,gl,gt), project(st,gl,gt), project(d,gl,gt)
 }
 
-d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
+d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
 	if len(line) < 2 { return nil, "Dirt 3 grid needs a route", false }
-	profile, profile_msg, profile_ok := d3_profile_builtin()
-	if !profile_ok { return nil, profile_msg, false }
 
 	arena: virtual.Arena
 	if err := virtual.arena_init_growing(&arena); err != nil {
@@ -148,9 +146,9 @@ d3_grid_node_frame :: proc(types: ^Pssg_Types, lateral, tangent, origin, lo, hi:
 	return {transform, box}, "", true
 }
 
-d3_write_grids :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+d3_write_grids :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg: string, ok: bool) {
 	line := d3_route_stations(job.Route)
-	data, detail, built := d3_grids_build(line, job.Markers)
+	data, detail, built := d3_grids_build(line, job.Markers, profile)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "grids.pssg", data); !written { return write_msg, false }
