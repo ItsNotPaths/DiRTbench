@@ -1,0 +1,162 @@
+package main
+
+// Pace-note playback: loading the recorded clips, and riding the stage with the
+// co-driver calling. Split from geo/pacenote.odin, which generates the notes and
+// knows nothing about the editor, the filesystem or raylib audio.
+
+import "core:c"
+import "core:math"
+import "core:path/filepath"
+import "core:strings"
+import rl "vendor:raylib"
+import "../geo"
+
+// The recorded co-driver clips, baked into the binary. About 1.2 MB of Ogg
+// Vorbis across 84 files, which is cheaper than a directory that can go missing:
+// a release is one file to copy, and a clip cannot be half-installed.
+PACE_CLIPS := #load_directory("../../assets/pacenotes")
+
+// Decode every clip into a map keyed by basename. Keys are cloned (persistent);
+// pace_audio_unload frees them.
+pace_audio_load :: proc() -> map[string]rl.Sound {
+	clips := make(map[string]rl.Sound)
+	for file in PACE_CLIPS {
+		if filepath.ext(file.name) != ".ogg" {
+			continue
+		}
+		// raylib needs the extension to pick a decoder, and the data pointer is
+		// into our own read-only image, which it copies out of.
+		wave := rl.LoadWaveFromMemory(".ogg", raw_data(file.data), c.int(len(file.data)))
+		defer rl.UnloadWave(wave)
+		stem := strings.trim_suffix(file.name, ".ogg")
+		clips[strings.clone(stem)] = rl.LoadSoundFromWave(wave)
+	}
+	return clips
+}
+
+pace_audio_unload :: proc(clips: ^map[string]rl.Sound) {
+	for name, snd in clips {
+		rl.UnloadSound(snd)
+		delete(name)
+	}
+	delete(clips^)
+}
+
+// Position and travel direction on the centreline at arc length `s` (linear
+// between samples). `fwd` is the segment direction the cursor is on — it drives
+// the chase camera's heading.
+@(private = "file")
+pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, fwd: rl.Vector3) {
+	n := len(ribbon)
+	if n == 0 {
+		return
+	}
+	if n == 1 {
+		return ribbon[0].pos, ribbon[0].fwd
+	}
+	if s <= 0 {
+		return ribbon[0].pos, rl.Vector3Normalize(ribbon[1].pos - ribbon[0].pos)
+	}
+	for i in 1 ..< n {
+		if arc[i] >= s {
+			seg := ribbon[i].pos - ribbon[i - 1].pos
+			t := (s - arc[i - 1]) / max(arc[i] - arc[i - 1], 1e-6)
+			return ribbon[i - 1].pos + seg * t, rl.Vector3Normalize(seg)
+		}
+	}
+	return ribbon[n - 1].pos, rl.Vector3Normalize(ribbon[n - 1].pos - ribbon[n - 2].pos)
+}
+
+// Start/stop the ride from the head of the spline.
+preview_toggle :: proc(ed: ^Editor) {
+	ed.previewing = !ed.previewing
+	if ed.play_i < len(ed.play_q) {
+		rl.StopSound(ed.play_q[ed.play_i])
+	}
+	clear(&ed.play_q)
+	ed.play_i = 0
+	ed.play_started = false
+	if ed.previewing {
+		ed.preview_s = 0
+		ed.preview_next = 0
+		ed.preview_last = -1
+		// Snap the camera to the start heading so the ride opens looking down the
+		// stage, rather than easing in from the last orbit angle.
+		if len(ed.ribbon) >= 2 {
+			f := rl.Vector3Normalize(ed.ribbon[1].pos - ed.ribbon[0].pos)
+			if abs(f.x) + abs(f.z) > 1e-5 {
+				ed.cam.yaw = math.atan2(-f.x, -f.z)
+			}
+			ed.cam.target = ed.ribbon[0].pos
+		}
+	}
+}
+
+@(private = "file")
+pace_enqueue :: proc(ed: ^Editor, nt: geo.Pace_Note) {
+	for name in geo.pace_tile(geo.pace_note_tokens(nt), ed.clips) {
+		if snd, ok := ed.clips[name]; ok {
+			append(&ed.play_q, snd)
+		}
+	}
+}
+
+// Play the queued clips one after another: start the head, advance when it ends.
+@(private = "file")
+pace_pump_queue :: proc(ed: ^Editor) {
+	if ed.play_i >= len(ed.play_q) {
+		if len(ed.play_q) > 0 {
+			clear(&ed.play_q)
+			ed.play_i = 0
+			ed.play_started = false
+		}
+		return
+	}
+	cur := ed.play_q[ed.play_i]
+	if !ed.play_started {
+		rl.PlaySound(cur)
+		ed.play_started = true
+	} else if !rl.IsSoundPlaying(cur) {
+		ed.play_i += 1
+		ed.play_started = false
+	}
+}
+
+// Advance the ride and fire notes. Call once per frame; the queue is pumped even
+// when not riding, so a phrase in flight finishes cleanly after Stop.
+preview_update :: proc(ed: ^Editor) {
+	pace_pump_queue(ed)
+	if !ed.previewing {
+		return
+	}
+	if len(ed.ribbon) < 2 {
+		ed.previewing = false
+		return
+	}
+	arc := geo.ribbon_arc(ed.ribbon)
+	total := arc[len(arc) - 1]
+	ed.preview_s += ed.preview_speed * rl.GetFrameTime()
+	for ed.preview_next < len(ed.notes) && ed.notes[ed.preview_next].station <= ed.preview_s {
+		pace_enqueue(ed, ed.notes[ed.preview_next])
+		ed.preview_last = ed.preview_next
+		ed.preview_next += 1
+	}
+	pos, fwd := pace_ride_pos(ed.ribbon, arc, ed.preview_s)
+	ed.preview_pos = pos
+	// Attach the camera to the ride: target rides the car, and the yaw swings to
+	// look down the stage (eye behind the car, facing travel). Pitch and zoom stay
+	// the user's. Yaw is eased toward the heading so corners don't snap. The caller
+	// rebuilds cam3d from this after the update.
+	ed.cam.target = pos
+	fh := rl.Vector3{fwd.x, 0, fwd.z}
+	if rl.Vector3Length(fh) > 1e-5 {
+		target_yaw := math.atan2(-fh.x, -fh.z)
+		d := target_yaw - ed.cam.yaw
+		for d > math.PI {d -= 2 * math.PI}
+		for d < -math.PI {d += 2 * math.PI}
+		ed.cam.yaw += d * min(1, 6 * rl.GetFrameTime())
+	}
+	if ed.preview_s > total + 5 {
+		ed.previewing = false // ran off the end
+	}
+}
