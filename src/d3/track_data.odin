@@ -177,6 +177,12 @@ d3_write_track_data :: proc(job:^Export_Job) -> (msg:string,ok:bool) {
 	if line[len(line)-1].distance<1 { return "Dirt 3 export route is shorter than one metre",false }
 	if validation,valid:=d3_validate_markers(job.Markers,line[len(line)-1].distance); !valid { return validation,false }
 	if _,dir_msg,dir_ok:=d3_out_dir(job); !dir_ok { return dir_msg,false }
+	// A progress track needs at least four gates, so a stage shorter than a few
+	// gate steps cannot make one. Say that, rather than "could not encode".
+	length:=line[len(line)-1].distance
+	if gates:=d3_progress_gate_distances(length,job.Markers); len(gates)<4 {
+		return fmt.tprintf("the stage is %.0f m long and yields %d progress gates; Dirt 3 needs at least 4",length,len(gates)),false
+	}
 	progress,pok:=d3_progress_xml(line,job.Markers); if !pok { return "could not encode progress_track.xml",false }
 	ai,aok:=d3_ai_xml(line); if !aok { delete(progress); return "could not encode ai_track.xml",false }
 	defer delete(progress); defer delete(ai)
