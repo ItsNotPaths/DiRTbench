@@ -122,3 +122,127 @@ stage_file_round_trips_a_welded_loop :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(back.points), len(sp.points))
 	for p, i in back.points { testing.expect_value(t, p.weld, sp.points[i].weld) }
 }
+
+// A marker sits on the edge running into `to`, so the seed chain 0->1->2->3
+// gives edges (0,1), (1,2) and (2,3).
+@(test)
+compile_trims_the_road_to_the_two_markers :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+
+	stage, msg, ok := geo.compile_stage(
+		sp, {0, 1, 0.5}, {2, 3, 0.5}, context.allocator,
+	)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+
+	// The marker on (0,1), then nodes 1 and 2, then the marker on (2,3).
+	testing.expect_value(t, len(stage.points), 4)
+	testing.expect(t, geo.is_linear(stage), "a compiled stage must be a plain chain")
+	testing.expect(t, rl.Vector3Distance(stage.points[1].xform.translation, sp.points[1].xform.translation) < 0.01)
+	testing.expect(t, rl.Vector3Distance(stage.points[2].xform.translation, sp.points[2].xform.translation) < 0.01)
+	// Node 0 and node 3 are outside the markers and must not survive.
+	for p in stage.points {
+		testing.expect(t, rl.Vector3Distance(p.xform.translation, sp.points[0].xform.translation) > 0.01)
+		testing.expect(t, rl.Vector3Distance(p.xform.translation, sp.points[3].xform.translation) > 0.01)
+	}
+}
+
+@(test)
+compile_accepts_two_markers_on_one_edge :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+
+	stage, msg, ok := geo.compile_stage(sp, {1, 2, 0.2}, {1, 2, 0.8}, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	testing.expect_value(t, len(stage.points), 2)
+
+	_, back_msg, back_ok := geo.compile_stage(sp, {1, 2, 0.8}, {1, 2, 0.2}, context.allocator)
+	testing.expect(t, !back_ok, "a finish before the start on one edge must be refused")
+	testing.expect(t, back_msg != "")
+}
+
+@(test)
+compile_runs_a_loop_through_its_weld :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+	tail := len(sp.points) - 1
+	testing.expect(t, geo.weld_points(&sp, tail, 0), "tail should weld back onto the root")
+
+	// Start just after the root, finish on the weld edge coming back to it.
+	stage, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	// Start marker, nodes 1..tail, finish marker on the closing edge.
+	testing.expect_value(t, len(stage.points), 5)
+	testing.expect(t, geo.is_linear(stage))
+	// The loop comes back to where it started.
+	first := stage.points[0].xform.translation
+	last := stage.points[len(stage.points)-1].xform.translation
+	testing.expect(t, rl.Vector3Distance(first, last) < 20, "a closed loop should finish near its start")
+}
+
+@(test)
+compile_refuses_a_finish_that_is_not_downstream :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+
+	// Backwards: start late, finish early.
+	_, msg, ok := geo.compile_stage(sp, {2, 3, 0.5}, {0, 1, 0.5}, context.allocator)
+	testing.expect(t, !ok, "a finish upstream of the start must be refused")
+	testing.expect(t, msg != "")
+
+	// An edge that is neither a parent edge nor a weld.
+	_, bad_msg, bad_ok := geo.compile_stage(sp, {0, 3, 0.5}, {2, 3, 0.5}, context.allocator)
+	testing.expect(t, !bad_ok, "a marker off any edge must be refused")
+	testing.expect(t, bad_msg != "")
+}
+
+@(test)
+compile_keeps_markers_clear_of_the_nodes_they_sit_between :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+
+	// t of exactly 1 would land the marker on node 1 and make a zero-length
+	// first segment, which has no tangent to follow.
+	stage, msg, ok := geo.compile_stage(sp, {0, 1, 1}, {2, 3, 0}, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	for i in 1 ..< len(stage.points) {
+		d := rl.Vector3Distance(stage.points[i-1].xform.translation, stage.points[i].xform.translation)
+		testing.expect(t, d > 0.01, "compiled stage has a zero-length segment")
+	}
+}
+
+@(test)
+old_projects_migrate_their_stage_names_into_routes :: proc(t: ^testing.T) {
+	p := Venue {
+		stages = []string{"route_0", "route_1"},
+		names  = {stages = []string{"FIRST", "SECOND"}},
+	}
+	venue_migrate_routes(&p, context.temp_allocator)
+	testing.expect_value(t, len(p.routes), 2)
+	testing.expect_value(t, p.routes[0].id, "route_0")
+	testing.expect_value(t, p.routes[1].name, "SECOND")
+	// Migrated routes have no markers, so the venue says what it still needs
+	// instead of looking ready to export.
+	for route in p.routes {
+		testing.expect(t, !route_has_markers(route))
+	}
+
+	// A project that already has routes is left alone.
+	kept := Venue {
+		stages = []string{"route_0"},
+		routes = []Venue_Route{{id = "route_9", start = {0, 1, 0.5}, finish = {1, 2, 0.5}}},
+	}
+	venue_migrate_routes(&kept, context.temp_allocator)
+	testing.expect_value(t, len(kept.routes), 1)
+	testing.expect_value(t, kept.routes[0].id, "route_9")
+	testing.expect(t, route_has_markers(kept.routes[0]))
+}

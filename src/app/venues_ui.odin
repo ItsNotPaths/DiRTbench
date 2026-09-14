@@ -167,14 +167,20 @@ draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
 		}
 		return
 	}
-	if p.version >= 2 {
-		ui.igBeginDisabled(true)
-		_ = ui.im_button(fmt.ctprintf("Deploy (compile stages first)###deploy_%s", p.id))
-		ui.igEndDisabled()
-		return
-	}
+	// Exporting a venue compiles its stages out of the road graph first. Until
+	// that succeeds there is nothing to deploy, so the failure is reported here
+	// rather than half way through writing into the game.
 	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
+		stages, compile_msg, compiled := venue_compile(p^, context.temp_allocator)
+		if !compiled {
+			set_status(ed, compile_msg, false)
+			delete(ps.deploy_ready)
+			ps.deploy_ready = ""
+			return
+		}
+		venue_compiled_delete(stages, context.temp_allocator)
 		msg, ok := venue_deploy_preflight(&ed.install, p^)
+		msg = fmt.tprintf("%s; %s", compile_msg, msg)
 		set_status(ed, msg, ok)
 		delete(ps.deploy_ready)
 		ps.deploy_ready = ok ? strings.clone(p.id) : ""
@@ -362,6 +368,8 @@ open_venue :: proc(ed: ^Editor, p: ^Venue) {
 		set_status(ed, msg, false)
 		return
 	}
+	ed.start, ed.finish = venue_markers(p^)
+	ed.stage_mode = false
 	if migrating {
 		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing); !ok {
 			set_status(ed, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)

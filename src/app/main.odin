@@ -101,6 +101,14 @@ Editor :: struct {
 	// maps/. Saving writes back to the venue.
 	open_venue:  string,
 	open_stage:    string,
+	// Start and finish of the venue's first stage, while its road is open. They
+	// belong to venue.json and are written back when the road is saved.
+	start:         geo.Road_Marker,
+	finish:        geo.Road_Marker,
+	// Editing a stage, not the venue. A stage is two markers on the venue road
+	// and nothing else, so the road itself is read-only here: no insert, no
+	// branch, no weld, no delete, and the gizmo does not move a control point.
+	stage_mode:    bool,
 	spline:        geo.Spline,
 	cam:           Orbit_Camera,
 	sel:           Selection,
@@ -465,6 +473,18 @@ grow_road :: proc(sp: ^geo.Spline, from: int, g: rl.Vector3) -> int {
 		p.xform.rotation = geo.heading_quat(g, sp.points[child].xform.translation)
 	}
 	return idx
+}
+
+// A start or finish line, drawn across the road where it sits.
+draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: rl.Color) {
+	if !geo.marker_valid(sp, m) {
+		return
+	}
+	cs := geo.sample_edge(sp, m.from, m.to, clamp(m.t, 0, 1))
+	l, r := geo.xsec_ends(cs)
+	rl.DrawLine3D(l, r, col)
+	rl.DrawLine3D(l, l + cs.up * 4, col)
+	rl.DrawLine3D(r, r + cs.up * 4, col)
 }
 
 draw_handles :: proc(sp: geo.Spline, selected: int) {
@@ -903,7 +923,7 @@ main :: proc() {
 		// probe, which is accurate at the instant of the press.
 		shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
 		if rl.IsMouseButtonPressed(.LEFT) &&
-		   shift && !nav && !ui_mouse && !ed.gizmo_active &&
+		   shift && !nav && !ui_mouse && !ed.gizmo_active && !ed.stage_mode &&
 		   selected_point(&ed) >= 0 &&
 		   ed.gizmo_hovered {
 			ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.spline, ed.sel.idx)}
@@ -942,6 +962,8 @@ main :: proc() {
 		draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
 		geo.draw_terrain_nodes(&ed.terrain, node_pos, sel_node)
 		draw_handles(ed.spline, selected_point(&ed))
+		draw_marker(ed.spline, ed.start, {110, 255, 140, 255})
+		draw_marker(ed.spline, ed.finish, {255, 110, 110, 255})
 		if ed.previewing {
 			rl.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
 		}
@@ -963,7 +985,7 @@ main :: proc() {
 		ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 
 		gizmo_used := false
-		if pi := selected_point(&ed); pi >= 0 {
+		if pi := selected_point(&ed); pi >= 0 && !ed.stage_mode {
 			gizmo_used = gizmo_manipulate(&ed.spline.points[pi], cam3d, ed.gizmo_mode)
 			if gizmo_used {
 				mark_dirty(&ed) // dragging moves a point, so the mesh is stale
@@ -1009,7 +1031,21 @@ main :: proc() {
 		// Edits below resize spline.points, which can reallocate it. The gizmo
 		// holds a raw pointer into that array while dragging, so never mutate
 		// the array mid-drag.
-		if !gizmo_used && !ui_mouse {
+		// S and F drop the start and finish lines wherever the cursor is on the
+		// road. Placing one again just moves it; there is only ever one of each.
+		if !ui_keys && !nav && ed.stage_mode {
+			ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+			line := !ctrl && rl.IsKeyPressed(.S) ? &ed.start : rl.IsKeyPressed(.F) ? &ed.finish : nil
+			if line != nil {
+				if _, _, frame, hit := pick_ribbon(ed.ribbon, ray); hit {
+					line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
+					set_status(&ed, line == &ed.start ? "start line placed" : "finish line placed", true)
+				} else {
+					set_status(&ed, "point at the road to place a line there", false)
+				}
+			}
+		}
+		if !gizmo_used && !ui_mouse && !ed.stage_mode {
 			// Right-click, in priority order: another control point welds the
 			// selection into it and closes a loop, the ribbon inserts, and bare
 			// ground grows the road from the selected point rather than from

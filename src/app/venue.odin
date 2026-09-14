@@ -35,7 +35,9 @@ import "../geo"
 VENUE_FORMAT :: "dirtbench.venue"
 // v2 owns one venue-wide road.json. Its stages are compiled products, not
 // independently edited spline documents.
-VENUE_VERSION :: 2
+// v3 gives a stage a start and a finish marker on the venue road graph, so a
+// stage compiles out of that graph at export rather than being its own document.
+VENUE_VERSION :: 3
 VENUE_FILE :: "venue.json"
 VENUE_ROAD_FILE :: "road.json"
 VENUE_STAGES_DIR :: "stages"
@@ -48,6 +50,32 @@ Venue_Names :: struct {
 	stages:   []string,
 }
 
+// One stage: the road between two markers on the venue graph, plus the name the
+// game will show. It compiles to a chain when the venue is exported; nothing
+// here is a road document of its own.
+Venue_Route :: struct {
+	id:     string, // "route_0", the directory the game reads
+	name:   string, // menu text; the db_ prefix is implied
+	start:  geo.Road_Marker,
+	finish: geo.Road_Marker,
+}
+
+// The route ids and menu names, in order, as the registration and the staging
+// code want them.
+route_ids :: proc(p: Venue, allocator := context.temp_allocator) -> (ids, names: []string) {
+	ids = make([]string, len(p.routes), allocator)
+	names = make([]string, len(p.routes), allocator)
+	for route, i in p.routes {
+		ids[i] = route.id
+		names[i] = route.name
+	}
+	return
+}
+
+route_has_markers :: proc(r: Venue_Route) -> bool {
+	return r.start.from >= 0 && r.start.to >= 0 && r.finish.from >= 0 && r.finish.to >= 0
+}
+
 // The on-disk shape. Flat and dumb: field names are the JSON keys.
 Venue :: struct {
 	format:     string,
@@ -57,7 +85,10 @@ Venue :: struct {
 	base:       string, // "<location>/<venue>" of the vanilla venue it derives from
 	base_route: string, // which of the base's routes the registration clones
 	names:      Venue_Names,
-	stages:     []string, // "route_0", "route_1", …; the id the game will use
+	// v1 and v2 named stages here and in `names.stages`. Both are read on load
+	// and migrated into `routes`; nothing writes them any more.
+	stages:     []string,
+	routes:     []Venue_Route,
 }
 
 venues_dir :: proc(allocator := context.temp_allocator) -> string {
@@ -213,7 +244,27 @@ venue_load :: proc(
 		venue_free(p, allocator)
 		return Venue{}, fmt.tprintf("project id %q does not match directory %q", bad_id, id), false
 	}
+	venue_migrate_routes(&p, allocator)
 	return p, "", true
+}
+
+// A v1 or v2 project lists its stages as bare names. Carry them into `routes`
+// with no markers, so an old project opens and says what it is missing rather
+// than losing its stage names.
+venue_migrate_routes :: proc(p: ^Venue, allocator := context.allocator) {
+	if len(p.routes) > 0 || len(p.stages) == 0 {
+		return
+	}
+	routes := make([]Venue_Route, len(p.stages), allocator)
+	for id, i in p.stages {
+		routes[i] = {
+			id     = strings.clone(id, allocator),
+			name   = strings.clone(i < len(p.names.stages) ? p.names.stages[i] : id, allocator),
+			start  = {from = -1, to = -1},
+			finish = {from = -1, to = -1},
+		}
+	}
+	p.routes = routes
 }
 
 venues_free :: proc(list: []Venue, allocator := context.allocator) {
@@ -239,6 +290,11 @@ venue_free :: proc(p: Venue, allocator := context.allocator) {
 		delete(route, allocator)
 	}
 	delete(p.stages, allocator)
+	for route in p.routes {
+		delete(route.id, allocator)
+		delete(route.name, allocator)
+	}
+	delete(p.routes, allocator)
 }
 
 // --- writing -----------------------------------------------------------------
@@ -301,6 +357,15 @@ venue_create :: proc(
 			stages   = make([]string, 0, allocator),
 		},
 		stages     = make([]string, 0, allocator),
+		routes     = make([]Venue_Route, 1, allocator),
+	}
+	// One stage to begin with. It has no markers yet, so the venue says what it
+	// still needs rather than looking ready to export.
+	p.routes[0] = {
+		id     = strings.clone("route_0", allocator),
+		name   = strings.to_upper(shown, allocator),
+		start  = {from = -1, to = -1},
+		finish = {from = -1, to = -1},
 	}
 	if msg, ok = venue_save(p); !ok {
 		venue_free(p, allocator)
@@ -392,6 +457,97 @@ export_profile :: proc(
 	return out, "", true
 }
 
+// Write the first stage's two markers back into venue.json, leaving everything
+// else in the document alone. The editor holds the markers while a road is
+// open; this is how they get home.
+venue_markers_save :: proc(id: string, start, finish: geo.Road_Marker) -> (msg: string, ok: bool) {
+	p, load_msg, loaded := venue_load(id, context.temp_allocator)
+	if !loaded {
+		return load_msg, false
+	}
+	if len(p.routes) == 0 {
+		routes := make([]Venue_Route, 1, context.temp_allocator)
+		routes[0] = {id = "route_0", name = p.names.venue}
+		p.routes = routes
+	}
+	p.routes[0].start = start
+	p.routes[0].finish = finish
+	return venue_save(p)
+}
+
+// One named stage of a venue, compiled. The export path takes this when a venue
+// stage is the thing being written.
+// `veg` and `timing` come off the road document, because they describe the whole
+// venue rather than one stage. Skipping them once cost every compiled stage its
+// checkpoints.
+venue_compile_route :: proc(
+	p: Venue,
+	route_id: string,
+	veg: ^geo.Veg_Params = nil,
+	timing: ^Timing_Params = nil,
+	allocator := context.allocator,
+) -> (out: geo.Spline, msg: string, ok: bool) {
+	for route in p.routes {
+		if route.id != route_id { continue }
+		if !route_has_markers(route) {
+			return out, fmt.tprintf("%s has no start and finish line yet", route.id), false
+		}
+		road: geo.Spline
+		defer delete(road.points)
+		if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), veg, timing); !loaded {
+			return out, load_msg, false
+		}
+		return geo.compile_stage(road, route.start, route.finish, allocator)
+	}
+	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
+}
+
+// The first stage's markers, or two unset ones when the venue has no stage yet.
+venue_markers :: proc(p: Venue) -> (start, finish: geo.Road_Marker) {
+	if len(p.routes) == 0 {
+		return {from = -1, to = -1}, {from = -1, to = -1}
+	}
+	return p.routes[0].start, p.routes[0].finish
+}
+
+// Compile every stage of a venue out of its one road graph. This is what makes
+// a stage real: until it runs, a stage is two markers and a name.
+//
+// It runs when the venue is exported to the game, not while the road is being
+// edited, so a half-drawn branch never has to compile.
+venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.Spline, msg: string, ok: bool) {
+	if len(p.routes) == 0 {
+		return nil, fmt.tprintf("%s has no stages to compile", p.id), false
+	}
+	road: geo.Spline
+	defer delete(road.points)
+	if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), nil, nil); !loaded {
+		return nil, load_msg, false
+	}
+
+	stages := make([dynamic]geo.Spline, allocator)
+	for route in p.routes {
+		if !route_has_markers(route) {
+			venue_compiled_delete(stages[:], allocator)
+			return nil, fmt.tprintf("%s has no start and finish line yet", route.id), false
+		}
+		stage, stage_msg, stage_ok := geo.compile_stage(road, route.start, route.finish, allocator)
+		if !stage_ok {
+			venue_compiled_delete(stages[:], allocator)
+			return nil, fmt.tprintf("%s: %s", route.id, stage_msg), false
+		}
+		append(&stages, stage)
+	}
+	total := 0
+	for stage in stages { total += len(stage.points) }
+	return stages[:], fmt.tprintf("%d stages, %d control points", len(stages), total), true
+}
+
+venue_compiled_delete :: proc(stages: []geo.Spline, allocator := context.allocator) {
+	for stage in stages { delete(stage.points) }
+	delete(stages, allocator)
+}
+
 // Delete only dirtbench's project directory. A deployed venue must first be
 // reverted because deleting its source document would strand an installed copy.
 venue_delete :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
@@ -479,11 +635,10 @@ venues_headless :: proc() -> bool {
 		}
 		if p.version >= 2 {
 			fmt.printfln("    road network   %s", venue_road_path(p.id))
-			continue
 		}
-		for stage, i in p.stages {
-			name := i < len(p.names.stages) ? p.names.stages[i] : ""
-			fmt.printfln("    %-10s %-20s %s", stage, name, venue_stage_path(p.id, stage))
+		for route in p.routes {
+			marks := route_has_markers(route) ? "" : "   [no start/finish yet]"
+			fmt.printfln("    %-10s %-20s%s", route.id, route.name, marks)
 		}
 	}
 	return true
@@ -802,8 +957,12 @@ prepare_venue_deployment :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	if p.version >= 2 {
-		return deployment, "stages must be compiled from venue start/finish markers before deployment", false
+	// Compiling is what turns two markers into a road, so a venue that cannot
+	// compile is not deployable. Do it before anything is written.
+	if stages, compile_msg, compiled := venue_compile(p, context.temp_allocator); !compiled {
+		return deployment, compile_msg, false
+	} else {
+		venue_compiled_delete(stages, context.temp_allocator)
 	}
 	if !vs.found {
 		return deployment, install_scan_status_text(vs), false
@@ -830,6 +989,7 @@ prepare_venue_deployment :: proc(
 		), false
 	}
 
+	ids, names := route_ids(p)
 	deployment.registration, msg, ok = d3.Prepare_Registration(
 		vs.install.root,
 		source_route.model_id,
@@ -837,8 +997,8 @@ prepare_venue_deployment :: proc(
 		p.id,
 		p.names.location,
 		p.names.venue,
-		p.stages,
-		p.names.stages,
+		ids,
+		names,
 	)
 	if !ok {
 		return
@@ -924,10 +1084,11 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		}
 	}
 
+	route_dirs, _ := route_ids(p)
 	staged, stage_msg, staged_ok := stage_venue_tree(
 		deployment.source,
 		deployment.source_route,
-		p.stages,
+		route_dirs,
 		deployment.target,
 	)
 	if !staged_ok {

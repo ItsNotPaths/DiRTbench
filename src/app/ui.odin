@@ -31,7 +31,12 @@ do_save :: proc(ed: ^Editor) {
 		path := venue_road_path(ed.open_venue)
 		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing)
 		if ok {
-			msg = fmt.tprintf("saved %s road network", ed.open_venue)
+			// The markers are the stage, and they live in venue.json. Saving the
+			// road without them would drop the start and finish lines.
+			msg, ok = venue_markers_save(ed.open_venue, ed.start, ed.finish)
+		}
+		if ok {
+			msg = fmt.tprintf("saved %s road network and stage lines", ed.open_venue)
 		}
 		set_status(ed, msg, ok)
 		return
@@ -104,7 +109,19 @@ draw_menubar :: proc(ed: ^Editor) {
 			ed.mode = .Venues
 			venues_screen_reload(&ed.screen)
 		}
-		if ed.open_venue != "" { ui.igSeparator() }
+		if ed.open_venue != "" {
+			label: cstring = ed.stage_mode ? "Edit venue geometry" : "Edit stage start/finish"
+			if ui.igMenuItem_Bool(label, nil, false, true) {
+				ed.stage_mode = !ed.stage_mode
+				ed.sel = {}
+				set_status(
+					ed,
+					ed.stage_mode ? "stage mode: S sets the start line, F the finish; the road is read-only" : "venue mode: the road is editable again",
+					true,
+				)
+			}
+			ui.igSeparator()
+		}
 		if ed.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
 			do_new(ed)
 		}

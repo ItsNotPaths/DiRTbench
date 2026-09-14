@@ -15,7 +15,9 @@ package geo
 // per-point rotation shapes the curve directly. The curve is sampled into a
 // ribbon of cross-sections for rendering and picking.
 
+import "core:fmt"
 import "core:math"
+import "core:slice"
 import rl "vendor:raylib"
 
 DEFAULT_WIDTH :: 8.0    // metres — plausible rally road width
@@ -137,6 +139,13 @@ Cross_Section :: struct {
 	fwd:     rl.Vector3, // travel direction, unit
 	width:   f32,
 	seg:     int,
+	// The graph edge this sample lies on, and where along it. `seg` alone
+	// cannot say: a weld edge and the parent edge into the same node share a
+	// child index. Filled by build_ribbon, which is the only place that knows
+	// which edge it is walking.
+	e_from:  int,
+	e_to:    int,
+	t:       f32,
 	// Cliff height at this slice, resolved from every nearby control point's
 	// tapered contribution. Filled by build_ribbon, not by sample_at.
 	cliff_l: f32,
@@ -320,8 +329,10 @@ build_ribbon :: proc(
 			parent := sp.points[child].parent
 			if parent < 0 { continue }
 			for s in 0 ..= spp {
-				cs := sample_edge(sp, parent, child, f32(s)/f32(spp))
+				t := f32(s)/f32(spp)
+				cs := sample_edge(sp, parent, child, t)
 				cs.break_before = s == 0
+				cs.e_from, cs.e_to, cs.t = parent, child, t
 				append(&out, cs)
 			}
 		}
@@ -331,8 +342,10 @@ build_ribbon :: proc(
 		for p, i in sp.points {
 			if p.weld < 0 || p.weld >= len(sp.points) || p.weld == i { continue }
 			for s in 0 ..= spp {
-				cs := sample_edge(sp, i, p.weld, f32(s)/f32(spp))
+				t := f32(s)/f32(spp)
+				cs := sample_edge(sp, i, p.weld, t)
 				cs.break_before = s == 0
+				cs.e_from, cs.e_to, cs.t = i, p.weld, t
 				append(&out, cs)
 			}
 		}
@@ -347,10 +360,14 @@ build_ribbon :: proc(
 		// each segment contributes t in [0, 1); the final endpoint is added once
 		for s in 0 ..< spp {
 			t := f32(s) / f32(spp)
-			append(&out, sample_at(sp, seg, t))
+			cs := sample_at(sp, seg, t)
+			cs.e_from, cs.e_to, cs.t = seg, seg + 1, t
+			append(&out, cs)
 		}
 	}
-	append(&out, sample_at(sp, nseg - 1, 1.0))
+	last := sample_at(sp, nseg - 1, 1.0)
+	last.e_from, last.e_to, last.t = nseg - 1, nseg, 1
+	append(&out, last)
 	resolve_cliffs(sp, out[:], spp)
 	return out[:]
 }
@@ -630,4 +647,89 @@ append_point :: proc(sp: ^Spline, at: rl.Vector3) -> int {
 	parent := len(sp.points) - 1
 	append(&sp.points, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough, parent))
 	return len(sp.points) - 1
+}
+
+// --- stages -----------------------------------------------------------------
+
+// Where a start or finish line sits: a point along one graph edge. Naming the
+// edge by both ends rather than by its child is what lets a marker sit on a
+// weld, which is how a loop stage finishes where it began.
+Road_Marker :: struct {
+	from: int,
+	to:   int,
+	t:    f32,
+}
+
+// Keeps a marker clear of the node at either end of its edge. Landing exactly
+// on one would put two control points in the same place, and a zero-length
+// segment has no tangent to follow.
+MARKER_MARGIN :: 0.02
+
+marker_valid :: proc(sp: Spline, m: Road_Marker) -> bool {
+	n := len(sp.points)
+	if m.from < 0 || m.from >= n || m.to < 0 || m.to >= n || m.from == m.to {
+		return false
+	}
+	return sp.points[m.to].parent == m.from || sp.points[m.from].weld == m.to
+}
+
+// The control point a marker stands for, framed by the road it sits on.
+marker_point :: proc(sp: Spline, m: Road_Marker) -> Point {
+	t := clamp(m.t, MARKER_MARGIN, 1 - MARKER_MARGIN)
+	cs := sample_edge(sp, m.from, m.to, t)
+	src := sp.points[m.from]
+	return make_point(
+		cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width,
+		cs.cliff_l, cs.cliff_r, src.span_l, src.span_r,
+		src.cliff_taper, cs.cliff_angle, cs.roughness, -1,
+	)
+}
+
+// The road between two markers, as a plain chain the exporter can take.
+//
+// The nodes in between come from the parent chain, walked upward from the node
+// the finish edge leaves to the node the start edge enters. That walk is over
+// the tree only, so it terminates even when the road loops: a weld can be the
+// finish edge but never a step in the walk.
+compile_stage :: proc(
+	sp: Spline,
+	start, finish: Road_Marker,
+	allocator := context.allocator,
+) -> (
+	out: Spline,
+	msg: string,
+	ok: bool,
+) {
+	if !marker_valid(sp, start) { return out, "the start line is not on a road", false }
+	if !marker_valid(sp, finish) { return out, "the finish line is not on a road", false }
+
+	between := make([dynamic]int, context.temp_allocator)
+	if start.from == finish.from && start.to == finish.to {
+		if start.t >= finish.t {
+			return out, "the finish comes before the start on the same stretch of road", false
+		}
+	} else {
+		node := finish.from
+		for node >= 0 && node != start.to {
+			append(&between, node)
+			node = sp.points[node].parent
+		}
+		if node != start.to {
+			return out, "no road runs from the start line to the finish line", false
+		}
+		append(&between, start.to)
+		slice.reverse(between[:])
+	}
+
+	out.points = make([dynamic]Point, allocator)
+	append(&out.points, marker_point(sp, start))
+	for idx in between { append(&out.points, sp.points[idx]) }
+	append(&out.points, marker_point(sp, finish))
+	// A compiled stage is a chain, never a graph. Nothing downstream of here
+	// branches, and the exporter reads array order as travel order.
+	for &p, i in out.points {
+		p.parent = i - 1
+		p.weld = -1
+	}
+	return out, fmt.tprintf("%d control points", len(out.points)), true
 }

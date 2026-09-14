@@ -423,15 +423,15 @@ export_headless :: proc(
 		if ed.open_venue != "" {
 			p, pmsg, pok := venue_load(ed.open_venue, context.temp_allocator)
 			if !pok { return pmsg, false }
-			if p.version >= 2 {
-				return "venue stages have not been compiled from start/finish markers yet", false
-			}
-			return load_stage_from(
-				&ed.spline,
-				venue_stage_path(ed.open_venue, ed.open_stage),
-				&ed.veg,
-				&ed.timing,
+			// A venue stage is compiled out of the road graph, not read from a
+			// document of its own.
+			stage, cmsg, cok := venue_compile_route(
+				p, ed.open_stage, &ed.veg, &ed.timing, context.allocator,
 			)
+			if !cok { return cmsg, false }
+			delete(ed.spline.points)
+			ed.spline = stage
+			return cmsg, true
 		}
 		return load_stage(&ed.spline, stage, &ed.veg, &ed.timing)
 	}
