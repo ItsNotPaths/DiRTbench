@@ -1,50 +1,6 @@
 # dirtbench
 
-A DiRT 3 modding tool. Reads an installed venue, edits the rally roads inside it,
-and writes the route files the game loads.
-
-Odin, raylib and Dear ImGui. Linux for now.
-
-Extracted from [stagesculpt][] (formerly tm-rallysculpt), which authors a single
-spline in empty space and exports it to Trackmania. DiRT 3's unit of work is a
-*venue* and a *route inside it*, so the Trackmania half stayed behind.
-
-[stagesculpt]: https://github.com/ItsNotPaths/tm-rallysculpt
-
-## State
-
-| Piece | State |
-| --- | --- |
-| Venue screen: what the game holds, what you have made | works |
-| `database.bin` read/write, byte-exact round trip | works |
-| Creating a venue derived from a vanilla one | local only; not deployed to the game |
-| Road spline editor, terrain, vegetation, pace notes | ported from stagesculpt |
-| glTF export | works |
-| DiRT 3 route export | writes files; the game does not drive them yet |
-| Deploying a venue into the game (registration, art) | not started |
-| Branching roads, one venue holding many routes | not started |
-
-See `docs/` for the format notes and the plan; it is gitignored.
-`docs/roadmap-venues.md` is the handoff for what comes next: deploying a venue
-into the game, and then a venue whose terrain is ours.
-
-## Layout
-
-```
-src/app/     the binary: venue screen, editor, panels, the CLI
-src/geo/     spline, ribbon, mesh, terrain, vegetation, pace-note generation
-src/ui/      Dear ImGui and ImGuizmo bindings, and nothing else
-src/d3/      DiRT 3: database.bin, PSSG, BinXML, track.vis, collision, the writer
-assets/      baked into the binary: pace-note clips, D3 materials, the db schema
-csrc/        the two C++ shims Odin cannot call across directly
-tools/       Python probes and game-integration scripts (gitignored)
-```
-
-Each package is a real Odin package, not a folder. `src/d3` imports `core:` only,
-so it stays usable without the editor; `src/geo` and `src/ui` know nothing about
-each other.
-
-## Build
+DiRT 3 stage/venue modding tool.
 
 ```
 ./download-deps.sh      # once: fetches and builds vendor/
