@@ -1,0 +1,161 @@
+package ui
+
+// Odin bindings for Dear ImGui, via cimgui's flat C API, plus the rlImGui
+// raylib backend. Vendored and compiled into vendor/imgui/libimgui.a by
+// download-deps.sh — see that script for the pinned versions and why they must
+// move as a set.
+//
+// Odin cannot call C++, so nothing here talks to ImGui:: directly. Everything
+// goes through cimgui's generated `ig*` functions, rlImGui's `extern "C"`
+// entry points, or csrc/dirt_imgui_shim.cpp for the two ImGuiIO fields that have
+// no flat-C accessor.
+//
+// This binds only the subset the editor uses. cimgui exposes the entire ImGui
+// API under the same `ig` prefix; to use a new widget, look its signature up in
+// vendor/imgui/cimgui.h and add it to the foreign block below.
+
+import "core:c"
+
+// libimgui.a is C++, hence libstdc++. It also references raylib, which the
+// vendor:raylib package links for us.
+foreign import imgui {
+	"../../vendor/imgui/libimgui.a",
+	"system:stdc++",
+}
+
+// --- types ------------------------------------------------------------------
+
+Im_Vec2 :: struct {
+	x, y: f32,
+}
+
+Im_Vec4 :: struct {
+	x, y, z, w: f32,
+}
+
+Im_Cond :: enum c.int {
+	None         = 0,
+	Always       = 1 << 0,
+	Once         = 1 << 1,
+	FirstUseEver = 1 << 2,
+	Appearing    = 1 << 3,
+}
+
+Im_Window_Flags :: distinct c.int
+IM_WINDOW_NONE :: Im_Window_Flags(0)
+IM_WINDOW_ALWAYS_AUTO_RESIZE :: Im_Window_Flags(1 << 6)
+
+Im_Slider_Flags :: distinct c.int
+IM_SLIDER_NONE :: Im_Slider_Flags(0)
+
+Im_Input_Text_Flags :: distinct c.int
+IM_INPUT_TEXT_NONE :: Im_Input_Text_Flags(0)
+IM_INPUT_TEXT_CHARS_NO_BLANK :: Im_Input_Text_Flags(1 << 4)
+
+Im_Tree_Node_Flags :: distinct c.int
+IM_TREE_NODE_NONE :: Im_Tree_Node_Flags(0)
+IM_TREE_NODE_DEFAULT_OPEN :: Im_Tree_Node_Flags(1 << 5)
+
+// Style slots, from the head of ImGuiCol_ in cimgui.h. Only what we restyle.
+Im_Col :: enum c.int {
+	Text = 0,
+}
+
+// --- rlImGui: backend lifecycle ---------------------------------------------
+
+@(default_calling_convention = "c")
+foreign imgui {
+	// Creates the ImGui context and hooks up raylib input + an rlgl renderer.
+	// Call after InitWindow.
+	rlImGuiSetup :: proc(dark_theme: bool) ---
+	// Begins the ImGui frame (feeds input, calls NewFrame). All ImGui and
+	// ImGuizmo calls for the frame go between Begin and End.
+	rlImGuiBegin :: proc() ---
+	// Ends the frame and renders the draw data through rlgl. Must be inside
+	// raylib's BeginDrawing/EndDrawing, and outside BeginMode3D/EndMode3D.
+	rlImGuiEnd :: proc() ---
+	// Destroys the context. Call before CloseWindow.
+	rlImGuiShutdown :: proc() ---
+}
+
+// --- dirt_imgui_shim: ImGuiIO fields with no flat-C accessor -------------------
+
+@(default_calling_convention = "c")
+foreign imgui {
+	// True when ImGui owns the mouse this frame (cursor over a window, or a
+	// drag in progress). The viewport must ignore clicks, drags and the wheel.
+	@(link_name = "dirtImGuiWantCaptureMouse")
+	imgui_want_capture_mouse :: proc() -> bool ---
+	// True when ImGui owns the keyboard, e.g. a text field has focus.
+	@(link_name = "dirtImGuiWantCaptureKeyboard")
+	imgui_want_capture_keyboard :: proc() -> bool ---
+}
+
+// --- cimgui: the ImGui subset we use ----------------------------------------
+
+@(default_calling_convention = "c")
+foreign imgui {
+	igBegin :: proc(name: cstring, p_open: ^bool, flags: Im_Window_Flags) -> bool ---
+	igEnd :: proc() ---
+
+	igSetNextWindowPos :: proc(pos: Im_Vec2, cond: Im_Cond, pivot: Im_Vec2) ---
+	igSetNextWindowSize :: proc(size: Im_Vec2, cond: Im_Cond) ---
+
+	igBeginMainMenuBar :: proc() -> bool ---
+	igEndMainMenuBar :: proc() ---
+	igBeginMenu :: proc(label: cstring, enabled: bool) -> bool ---
+	igEndMenu :: proc() ---
+	igMenuItem_Bool :: proc(label, shortcut: cstring, selected, enabled: bool) -> bool ---
+
+	// text_end = nil means "NUL-terminated", which is what an Odin cstring is.
+	igTextUnformatted :: proc(text: cstring, text_end: cstring) ---
+	igSeparatorText :: proc(label: cstring) ---
+	igSeparator :: proc() ---
+	igSpacing :: proc() ---
+	igSameLine :: proc(offset_from_start_x: f32, spacing: f32) ---
+
+	// Greys out and inert-ifies everything drawn between the two.
+	igBeginDisabled :: proc(disabled: bool) ---
+	igEndDisabled :: proc() ---
+
+	igPushStyleColor_Vec4 :: proc(idx: Im_Col, col: Im_Vec4) ---
+	igPopStyleColor :: proc(count: c.int) ---
+
+	igButton :: proc(label: cstring, size: Im_Vec2) -> bool ---
+	igRadioButton_Bool :: proc(label: cstring, active: bool) -> bool ---
+	igCheckbox :: proc(label: cstring, v: ^bool) -> bool ---
+	// `v` is C `float[3]`; rl.Vector3 is a distinct [3]f32, so cast into it.
+	igDragFloat3 :: proc(label: cstring, v: ^[3]f32, v_speed, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
+	igSliderFloat :: proc(label: cstring, v: ^f32, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
+	igSliderInt :: proc(label: cstring, v: ^c.int, v_min, v_max: c.int, format: cstring, flags: Im_Slider_Flags) -> bool ---
+	// step / step_fast drive the -/+ buttons and ctrl-click stepping.
+	igInputInt :: proc(label: cstring, v: ^c.int, step, step_fast: c.int, flags: Im_Input_Text_Flags) -> bool ---
+
+	// True when the header is expanded; draw its contents then.
+	igCollapsingHeader_TreeNodeFlags :: proc(label: cstring, flags: Im_Tree_Node_Flags) -> bool ---
+	// `buf` is an in/out NUL-terminated C string of capacity `buf_size`; ImGui
+	// edits it in place. Pass nil for the callback we do not use.
+	igInputText :: proc(label: cstring, buf: [^]u8, buf_size: uint, flags: Im_Input_Text_Flags, callback: rawptr, user_data: rawptr) -> bool ---
+
+	igShowDemoWindow :: proc(p_open: ^bool) ---
+}
+
+// Defaults that keep call sites readable: cimgui has no default arguments.
+im_text :: proc(text: cstring) {
+	igTextUnformatted(text, nil)
+}
+im_same_line :: proc() {
+	igSameLine(0, -1) // 0 = pack against previous item, -1 = default spacing
+}
+im_button :: proc(label: cstring) -> bool {
+	return igButton(label, {0, 0}) // {0,0} = size to fit the label
+}
+
+// Coloured text. Deliberately not cimgui's igTextColored, which is variadic and
+// would treat the text itself as a printf format — a stage named "100%" would
+// then read past the end of the argument list.
+im_text_colored :: proc(col: Im_Vec4, text: cstring) {
+	igPushStyleColor_Vec4(.Text, col)
+	igTextUnformatted(text, nil)
+	igPopStyleColor(1)
+}
