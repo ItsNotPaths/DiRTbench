@@ -33,10 +33,7 @@ Lng_Span :: struct {
 
 @(private = "file")
 lng_u32 :: proc(data: []u8, at: int) -> u32 {
-	return u32(data[at]) << 24 |
-	       u32(data[at + 1]) << 16 |
-	       u32(data[at + 2]) << 8 |
-	       u32(data[at + 3])
+	return binary_load_u32(data, at, .Big)
 }
 
 @(private = "file")

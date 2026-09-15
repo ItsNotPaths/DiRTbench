@@ -206,7 +206,7 @@ take :: proc(r: ^Reader, n: int) -> (out: []u8, ok: bool) {
 @(private = "file")
 take_u32 :: proc(r: ^Reader) -> (v: u32, ok: bool) {
 	b := take(r, 4) or_return
-	return u32(b[0]) | u32(b[1]) << 8 | u32(b[2]) << 16 | u32(b[3]) << 24, true
+	return binary_load_u32(b, 0), true
 }
 
 database_load :: proc(
@@ -316,15 +316,13 @@ read_value :: proc(
 		if b == nil {
 			return nil, "ran out of data", false
 		}
-		bits := u32(b[0]) | u32(b[1]) << 8 | u32(b[2]) << 16 | u32(b[3]) << 24
-		return transmute(f32)bits, "", true
+		return transmute(f32)binary_load_u32(b, 0), "", true
 	case .Int:
 		b := take(r, 4) or_else nil
 		if b == nil {
 			return nil, "ran out of data", false
 		}
-		bits := u32(b[0]) | u32(b[1]) << 8 | u32(b[2]) << 16 | u32(b[3]) << 24
-		return transmute(i32)bits, "", true
+		return transmute(i32)binary_load_u32(b, 0), "", true
 	case .Bool:
 		b := take(r, 4) or_else nil
 		if b == nil {

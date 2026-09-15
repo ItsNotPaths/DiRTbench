@@ -23,25 +23,23 @@ import "core:slice"
 import "core:strings"
 
 // --- byte access -------------------------------------------------------------
-// Out of range reads 0. Every offset is checked before use, so this only has to
-// stop a malformed file from panicking, not diagnose it.
+// Thin, file-scoped names over binary_read.odin's shared loads, kept because
+// this file's own reader code reads far more naturally as `le_u32` than
+// `binary_load_u32` at every one of its call sites.
 
 @(private = "file")
 le_u32 :: proc(b: []u8, at: int) -> u32 {
-	if at < 0 || at + 4 > len(b) {
-		return 0
-	}
-	return u32(b[at]) | u32(b[at + 1]) << 8 | u32(b[at + 2]) << 16 | u32(b[at + 3]) << 24
+	return binary_load_u32(b, at)
 }
 
 @(private = "file")
 le_i32 :: proc(b: []u8, at: int) -> int {
-	return int(i32(le_u32(b, at)))
+	return binary_load_i32(b, at)
 }
 
 @(private = "file")
 le_f32 :: proc(b: []u8, at: int) -> f32 {
-	return transmute(f32)le_u32(b, at)
+	return binary_load_f32(b, at)
 }
 
 @(private = "file")

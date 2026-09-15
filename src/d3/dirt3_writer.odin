@@ -34,8 +34,7 @@ d3_put_f32 :: proc(b: []u8, at: int, v: f32) { d3_put_u32(b, at, transmute(u32)v
 
 @(private = "file")
 d3_get_f32 :: proc(b: []u8, at: int) -> f32 {
-	u := u32(b[at]) | u32(b[at+1])<<8 | u32(b[at+2])<<16 | u32(b[at+3])<<24
-	return transmute(f32)u
+	return binary_load_f32(b, at)
 }
 
 @(private = "file")
