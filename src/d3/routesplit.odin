@@ -516,6 +516,17 @@ d3_write_routesplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (st
 	return msg, true
 }
 
+// Same container, venue scope: `job.Collision` is the whole road network, not
+// one route. `d3_routesplit_build` does not know the difference; only the
+// output name does.
+d3_write_tracksplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (string, bool) {
+	data, msg, ok := d3_routesplit_build(job.Collision, profile)
+	if !ok { return msg, false }
+	defer delete(data)
+	if write_msg, written := d3_write_out(job, "tracksplit.pssg", data); !written { return write_msg, false }
+	return msg, true
+}
+
 // The profile maps a material to a collision code; going back the other way
 // gives a stock or exported track.jpk the visual surface that matches it.
 d3_material_of :: proc(profile: ^D3_Venue_Profile, code: string) -> Collision_Material {

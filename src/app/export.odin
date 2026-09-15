@@ -52,22 +52,30 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 		markers[i]={Kind=kind,Distance=marker.station}
 	}
-	collision := make([]d3.Collision_Triangle, len(job.order), context.temp_allocator)
-	for triangle, i in job.order {
+	collision := collision_from_mesh(job.mesh, job.order, context.temp_allocator)
+	return d3.Export(&d3.Export_Job{Name=job.name,Out=job.out,Backup=job.installing,Route=route,Markers=markers,Collision=collision,Profile=job.profile})
+}
+
+// The triangle soup, in material order, as a target-agnostic collision list.
+// Every Dirt 3 file that names geometry reads from this, at route or venue
+// scope alike.
+collision_from_mesh :: proc(mesh: geo.Tri_Mesh, order: []int, allocator := context.temp_allocator) -> []d3.Collision_Triangle {
+	collision := make([]d3.Collision_Triangle, len(order), allocator)
+	for triangle, i in order {
 		material: d3.Collision_Material
-		switch job.mesh.mat[triangle] {
+		switch mesh.mat[triangle] {
 		case .Road:     material = .Road
 		case .Cliff:    material = .Cliff
 		case .Terrain:  material = .Terrain
 		case .RoadSand: material = .Road_Sand
 		}
 		for corner in 0..<3 {
-			p := job.mesh.pos[triangle*3+corner]
+			p := mesh.pos[triangle*3+corner]
 			collision[i].Points[corner] = {p.x,p.y,p.z}
 		}
 		collision[i].Material = material
 	}
-	return d3.Export(&d3.Export_Job{Name=job.name,Out=job.out,Backup=job.installing,Route=route,Markers=markers,Collision=collision,Profile=job.profile})
+	return collision
 }
 
 // --- the job -----------------------------------------------------------------

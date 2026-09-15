@@ -644,6 +644,62 @@ venues_headless :: proc() -> bool {
 	return true
 }
 
+// `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
+// venue's whole road network and write it to `out/<id>/`, for inspection
+// before `track.vis` is correct at venue scope. Never touches the game.
+venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok: bool) {
+	vs: Install_Scan
+	install_scan_init(&vs)
+	defer install_scan_delete(&vs)
+	if !vs.found {
+		return install_scan_status_text(&vs), false
+	}
+
+	road: geo.Spline
+	defer delete(road.points)
+	if load_msg, loaded := load_stage_from(&road, venue_road_path(id), nil, nil); !loaded {
+		return load_msg, false
+	}
+
+	ed := Editor{
+		topo      = geo.SAMPLES_PER_SEG,
+		roughness = 0.5,
+		terrain   = geo.TERRAIN_DEFAULTS,
+	}
+	ed.terrain.enabled = terrain
+	defer geo.terrain_delete(&ed.terrain)
+	defer geo.terrain_field_delete(&ed.terrain_field)
+	ed.spline = road
+	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), context.temp_allocator)
+	ed.ribbon_gen = 1
+
+	if ed.terrain.enabled {
+		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
+		arc := geo.ribbon_arc(ed.ribbon)
+		ds := geo.sample_spacing(ed.ribbon)
+		geo.terrain_field_ensure(&ed.terrain_field, &ed.terrain, ed.ribbon, arc, ds, ed.topo, ed.roughness, ed.ribbon_gen)
+	}
+
+	mesh := build_export_mesh(&ed, context.temp_allocator)
+	order, _ := sort_faces_by_material(mesh)
+	if len(order) == 0 {
+		return "nothing to export: the road network has no triangles", false
+	}
+	collision := collision_from_mesh(mesh, order, context.temp_allocator)
+
+	profile, profile_msg, profile_ok := export_profile(&vs, id, context.temp_allocator)
+	if !profile_ok {
+		return profile_msg, false
+	}
+
+	dir, _ := filepath.join({out_dir(), id}, context.temp_allocator)
+	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
+		return fmt.tprintf("could not create %s: %v", dir, err), false
+	}
+
+	return d3.Export_Geometry(&d3.Export_Job{Out = dir, Collision = collision, Profile = profile})
+}
+
 // `--project-new <id> --base <venue> [--name <shown>]`: the New venue button,
 // for a machine with no display. Creates the project and seeds its road graph.
 // Writes nothing into the game.

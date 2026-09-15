@@ -181,3 +181,14 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		grid_msg,
 	), true
 }
+
+// Venue-scope geometry only: `tracksplit.pssg` from the whole road network.
+// track.vis is not correct at venue scope yet, so a venue export cannot write
+// the other five files without producing something undriveable; this is the
+// piece that can move first and be inspected on its own.
+export_dirt3_geometry :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	if job.Profile == nil {
+		return "this export needs a venue, so it knows whose shaders the terrain draws with", false
+	}
+	return d3_write_tracksplit(job, job.Profile)
+}
