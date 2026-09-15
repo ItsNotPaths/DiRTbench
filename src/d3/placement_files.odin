@@ -151,6 +151,112 @@ d3_placement_shift_gap :: proc(result, unshifted: []u8, gap_at, gap_end, string_
 	}
 }
 
+d3_placement_decode_instance :: proc(data: []u8, at: int) -> (inst: D3_Placement_Instance) {
+	inst.reference_id = binary_load_u32(data, at)
+	for row in 0 ..< 3 {
+		for col in 0 ..< 3 {
+			inst.basis[row][col] = binary_load_f32(data, at+8+(row*3+col)*4)
+		}
+	}
+	for k in 0 ..< 3 { inst.position[k] = binary_load_f32(data, at+44+k*4) }
+	return
+}
+
+// Read every instance out of a placement file, in file order. The inverse of
+// `d3_placement_relocate`.
+d3_placement_read :: proc(
+	data: []u8,
+	allocator := context.allocator,
+) -> (
+	instances: []D3_Placement_Instance,
+	msg: string,
+	ok: bool,
+) {
+	layout, layout_ok := d3_placement_layout(data)
+	if !layout_ok { return nil, "not a recognised Dirt 3 placement file", false }
+
+	ref_table_offset := binary_load_i32(data, layout.ref_table_at)
+	reference_num := binary_load_i32(data, layout.ref_num_at)
+	instance_table_offset := binary_load_i32(data, layout.inst_table_at)
+	instance_num := binary_load_i32(data, layout.inst_num_write[0])
+
+	if ref_table_offset != layout.header_size ||
+	   instance_table_offset != ref_table_offset+reference_num*layout.ref_stride {
+		return nil, "placement file layout does not match what this reader expects", false
+	}
+	if instance_num < 0 {
+		return nil, "placement file has a negative instance count", false
+	}
+	tail_at := instance_table_offset + instance_num*layout.inst_stride
+	if tail_at > len(data) {
+		return nil, "placement file is shorter than its own instance table", false
+	}
+
+	out := make([]D3_Placement_Instance, instance_num, allocator)
+	for i in 0 ..< instance_num {
+		out[i] = d3_placement_decode_instance(data, instance_table_offset+i*layout.inst_stride)
+	}
+	return out, fmt.tprintf("%d instances, %d references", instance_num, reference_num), true
+}
+
+// A reference mesh's local-space bounding box, straight off its row in the
+// reference table. Both `trees.bin` and `ornaments.bin` carry it at the same
+// relative offset, +8/+20 from the row start, despite their different
+// strides — confirmed byte-exact against the BinXML siblings
+// (`trees.xml`/`ornaments.xml`'s `bounds_min`/`bounds_max`).
+d3_placement_reference_bounds :: proc(
+	data: []u8,
+	layout: D3_Placement_Layout,
+	reference_id: int,
+) -> (
+	lo, hi: [3]f32,
+	ok: bool,
+) {
+	ref_table_offset := binary_load_i32(data, layout.ref_table_at)
+	reference_num := binary_load_i32(data, layout.ref_num_at)
+	if reference_id < 0 || reference_id >= reference_num { return {}, {}, false }
+	at := ref_table_offset + reference_id*layout.ref_stride
+	for k in 0 ..< 3 {
+		lo[k] = binary_load_f32(data, at+8+k*4)
+		hi[k] = binary_load_f32(data, at+20+k*4)
+	}
+	return lo, hi, true
+}
+
+// The world-space box of one placed instance: the referenced mesh's local
+// bounding box, its 8 corners carried through the instance's basis and
+// position, then re-flattened to an axis-aligned box.
+d3_placement_instance_box :: proc(
+	data: []u8,
+	layout: D3_Placement_Layout,
+	inst: D3_Placement_Instance,
+) -> (
+	lo, hi: [3]f32,
+	ok: bool,
+) {
+	local_lo, local_hi, bounds_ok := d3_placement_reference_bounds(data, layout, int(inst.reference_id))
+	if !bounds_ok { return {}, {}, false }
+
+	seen := false
+	for i in 0 ..< 8 {
+		corner := [3]f32{
+			local_lo[0] if i&1 == 0 else local_hi[0],
+			local_lo[1] if i&2 == 0 else local_hi[1],
+			local_lo[2] if i&4 == 0 else local_hi[2],
+		}
+		world: [3]f32
+		for k in 0 ..< 3 {
+			world[k] = inst.position[k] +
+				inst.basis[0][k]*corner[0] + inst.basis[1][k]*corner[1] + inst.basis[2][k]*corner[2]
+		}
+		for k in 0 ..< 3 {
+			if !seen { lo[k] = world[k]; hi[k] = world[k] } else { lo[k] = min(lo[k], world[k]); hi[k] = max(hi[k], world[k]) }
+		}
+		seen = true
+	}
+	return lo, hi, true
+}
+
 // Replace every instance in a placement file, keeping its reference table and
 // string pool untouched. The game finds a prop mesh only through the
 // reference table, so a rewrite never needs to touch what a reference *is* —

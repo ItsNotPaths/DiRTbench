@@ -149,6 +149,74 @@ placement_relocate_clears_to_zero_instances :: proc(t: ^testing.T) {
 	testing.expect_value(t, d3_test_placement_name(out, got, 1), "omega")
 }
 
+@(test)
+placement_read_recovers_every_encoded_instance :: proc(t: ^testing.T) {
+	original := d3_test_placement_file(context.temp_allocator)
+	want := make([]D3_Placement_Instance, 3, context.temp_allocator)
+	for i in 0 ..< 3 {
+		want[i] = {reference_id = u32(i % 2), basis = D3_BASIS_IDENTITY, position = {f32(i)*10, 1, 0}}
+	}
+
+	got, msg, ok := d3_placement_read(original, context.temp_allocator)
+	testing.expect(t, ok, msg)
+	testing.expect_value(t, len(got), len(want))
+	for i in 0 ..< len(want) {
+		testing.expect_value(t, got[i].reference_id, want[i].reference_id)
+		testing.expect_value(t, got[i].basis, want[i].basis)
+		testing.expect_value(t, got[i].position, want[i].position)
+	}
+}
+
+@(test)
+placement_read_round_trips_through_relocate :: proc(t: ^testing.T) {
+	original := d3_test_placement_file(context.temp_allocator)
+	want := []D3_Placement_Instance{
+		{reference_id = 1, basis = D3_BASIS_IDENTITY, position = {5, 2, 9}},
+		{reference_id = 0, basis = D3_BASIS_IDENTITY, position = {-3, 0, 12}},
+	}
+	relocated, relocate_msg, relocate_ok := d3_placement_relocate(original, want, context.temp_allocator)
+	testing.expect(t, relocate_ok, relocate_msg)
+
+	got, msg, ok := d3_placement_read(relocated, context.temp_allocator)
+	testing.expect(t, ok, msg)
+	testing.expect_value(t, len(got), len(want))
+	for i in 0 ..< len(want) {
+		testing.expect_value(t, got[i].position, want[i].position)
+	}
+}
+
+// A rotation, not just a translation: basis swaps X and Z, so a reference box
+// that is long on X and thin on Z reads back long on Z and thin on X once the
+// instance's own bounds are folded in.
+@(test)
+placement_instance_box_transforms_local_bounds :: proc(t: ^testing.T) {
+	layout := D3_TREES_LAYOUT
+	ref_table_at := layout.header_size
+	data := make([]u8, ref_table_at+layout.ref_stride, context.temp_allocator)
+	binary_store_u32(data, 0x04, 12)
+	binary_store_u32(data, layout.ref_num_at, 1)
+	binary_store_u32(data, layout.ref_table_at, u32(ref_table_at))
+
+	binary_store_f32(data, ref_table_at+8, -4)  // local bounds_min
+	binary_store_f32(data, ref_table_at+12, 0)
+	binary_store_f32(data, ref_table_at+16, -1)
+	binary_store_f32(data, ref_table_at+20, 4) // local bounds_max
+	binary_store_f32(data, ref_table_at+24, 2)
+	binary_store_f32(data, ref_table_at+28, 1)
+
+	lo, hi, bounds_ok := d3_placement_reference_bounds(data, layout, 0)
+	testing.expect(t, bounds_ok)
+	testing.expect_value(t, lo, [3]f32{-4, 0, -1})
+	testing.expect_value(t, hi, [3]f32{4, 2, 1})
+
+	rotate_xz := [3][3]f32{{0, 0, 1}, {0, 1, 0}, {1, 0, 0}} // swap local X and Z
+	inst := D3_Placement_Instance{reference_id = 0, basis = rotate_xz, position = {100, 10, 100}}
+	box_lo, box_hi, box_ok := d3_placement_instance_box(data, layout, inst)
+	testing.expect(t, box_ok)
+	testing.expect_value(t, box_lo, [3]f32{99, 10, 96})
+	testing.expect_value(t, box_hi, [3]f32{101, 12, 104})
+}
+
 // A gap between the instance table and the string pool, the way ornaments.bin
 // sometimes has one (see `d3_placement_shift_gap`): one word that is a real
 // pointer and must shift with everything else, one that only looks like an
