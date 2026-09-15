@@ -212,6 +212,48 @@ run_cli :: proc() -> (handled: bool) {
 		msg, ok := d3.Routesplit(args[1], out)
 		fmt.println(msg); os.exit(0 if ok else 1)
 	}
+	// `--dirt3-vis-allvisible <route_dir> <venue_dir> [--donor track.vis] [--ornaments skip|donor|random] [-o out.vis]`:
+	// build an all-visible track.vis for an existing stock route from its own
+	// files (tracksplit/routesplit tiles, trees, ornaments — see
+	// vis_allvisible.odin for what is and is not covered). `--donor` floors
+	// every tag's header count at that file's own counts, so a tag this
+	// codebase undersells cannot undersize the game's own allocation for it,
+	// and also pulls in `objects.ens`'s real-id static-vis entities.
+	// `--ornaments` picks how `ornaments.bin`'s own instances get a tag-2 id:
+	// `donor` (default, needs `--donor`), `skip` (leave them out), or
+	// `random` (an unclaimed id with no real source — see
+	// D3_Ornaments_Id_Mode). Never touches the route directly.
+	if len(args) >= 3 && args[0] == "--dirt3-vis-allvisible" {
+		out := "out/track.vis"
+		donor := ""
+		ornaments_mode := d3.D3_Ornaments_Id_Mode.Donor
+		for i := 3; i < len(args); i += 1 {
+			switch args[i] {
+			case "-o":
+				if i+1 >= len(args) { fmt.println("-o needs a path"); os.exit(1) }
+				i += 1; out = args[i]
+			case "--donor":
+				if i+1 >= len(args) { fmt.println("--donor needs a path"); os.exit(1) }
+				i += 1; donor = args[i]
+			case "--ornaments":
+				if i+1 >= len(args) { fmt.println("--ornaments needs skip|donor|random"); os.exit(1) }
+				i += 1
+				switch args[i] {
+				case "skip": ornaments_mode = .Skip
+				case "donor": ornaments_mode = .Donor
+				case "random": ornaments_mode = .Random
+				case: fmt.printfln("--ornaments: unknown mode %q", args[i]); os.exit(1)
+				}
+			case:
+				fmt.printfln("unknown flag %q", args[i]); os.exit(1)
+			}
+		}
+		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
+			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
+		}
+		msg, ok := d3.Vis_All_Visible(args[1], args[2], donor, out, ornaments_mode)
+		fmt.println(msg); os.exit(0 if ok else 1)
+	}
 	// `--dirt3-rewrite <stock track.jpk> [-o rewritten.jpk]`: rebuild every
 	// stock chunk through our encoder, preserving the spatial archive layout.
 	if len(args) >= 2 && args[0] == "--dirt3-rewrite" {

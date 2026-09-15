@@ -66,6 +66,7 @@ Prepare_Registration :: prepare_registration
 Registration_Output_Delete :: registration_output_delete
 Database_Bytes_Have_Venue :: database_bytes_have_venue
 Routesplit :: dirt3_routesplit_headless
+Vis_All_Visible :: dirt3_vis_allvisible_headless
 Venue_Profile :: D3_Venue_Profile
 Profile_Load :: d3_profile_load
 Profile_Dir :: D3_PROFILE_DIR
