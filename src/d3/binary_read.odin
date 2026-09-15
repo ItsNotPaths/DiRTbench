@@ -5,6 +5,12 @@ package d3
 // should not panic, and every caller already validates structure (counts,
 // offsets) before trusting a value.
 
+binary_load_u16 :: proc(src: []u8, at: int, order: Byte_Order = .Little) -> u16 {
+	if !binary_range(len(src), at, 2) { return 0 }
+	if order == .Little { return u16(src[at]) | u16(src[at+1])<<8 }
+	return u16(src[at])<<8 | u16(src[at+1])
+}
+
 binary_load_u32 :: proc(src: []u8, at: int, order: Byte_Order = .Little) -> u32 {
 	if !binary_range(len(src), at, 4) { return 0 }
 	if order == .Little {
