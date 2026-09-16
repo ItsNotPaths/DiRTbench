@@ -4,6 +4,7 @@ build/
 # Byte-level format notes, the plan and the handoff roadmaps. Derived from
 # reading the user's own game files; not ours to redistribute.
 docs/
+out/
 
 # The Python and shell side of the Dirt 3 work: probes, one-off surgery on an
 # installed game, and the Ghidra scripts behind the binary notes. Scratch, and
