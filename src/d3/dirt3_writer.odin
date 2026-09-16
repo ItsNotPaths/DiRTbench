@@ -210,18 +210,51 @@ d3_tri_hits_cell :: proc(t: D3_Write_Tri, lo, hi: [2]f32) -> bool {
 	return true
 }
 
+// Quantized to the same 0.0001 epsilon `d3_same_pos` used before this was a
+// map key: two positions within that distance hash identically. A linear
+// scan per vertex against every vertex seen so far was O(k^2) in a cell's own
+// triangle count -- fine at the small, synthetic scale every caller used
+// until a real stock route's full ~456k triangles were fed through in one
+// flat soup, where it made partitioning too slow to be usable.
+@(private = "file")
+d3_quantize_pos :: proc(p: [3]f32) -> [3]i32 {
+	return {i32(math.round(p[0]*10000)), i32(math.round(p[1]*10000)), i32(math.round(p[2]*10000))}
+}
+
+// docs/dirt3-target.md records the real per-chunk budget every stock DiRT 3
+// .vcqtc was built to: 1565 triangles, 929 vertices (materials already
+// capped at 16 below). Vertex 0 of a packed triangle has only 10 bits, so
+// 1024 unique vertices is the hard ceiling regardless -- but nothing shipped
+// ever gets within 95 of it. d3_vcqtc_write's own PatchUp pass only reorders
+// existing vertices to satisfy the 255-offset constraint between a
+// triangle's corners; it never adds one, so this is the only place that
+// controls how many a chunk ends up with. Matching the real margin here,
+// not just the hard limit, is what a load-time crash unrelated to anything
+// in this file (a null read deep in unrelated render-task setup) pointed
+// back to: something sized for the stock budget elsewhere in the engine,
+// overrun by chunks bigger than any real one ever was.
+D3_CHUNK_TRI_BUDGET :: 1565
+D3_CHUNK_VERT_BUDGET :: 929
+
 @(private = "file")
 d3_partition_should_split :: proc(input: []D3_Write_Tri, ids: []int) -> bool {
-	if len(ids) > 2048 { return true }
-	verts := make([dynamic][3]f32, context.temp_allocator)
-	mats := make([dynamic]string, context.temp_allocator)
+	if len(ids) > D3_CHUNK_TRI_BUDGET { return true }
+	verts := make(map[[3]i32]bool, context.temp_allocator)
+	defer delete(verts)
+	mats := make(map[string]bool, context.temp_allocator)
+	defer delete(mats)
 	for id in ids {
 		t := input[id]
-		seen_mat := false; for m in mats { if m == t.mat { seen_mat=true; break } }
-		if !seen_mat { append(&mats, t.mat); if len(mats)>16 { return true } }
+		if !mats[t.mat] {
+			mats[t.mat] = true
+			if len(mats) > 16 { return true }
+		}
 		for p in t.p {
-			seen := false; for v in verts { if d3_same_pos(v,p) { seen=true; break } }
-			if !seen { append(&verts,p); if len(verts)>1024 { return true } }
+			key := d3_quantize_pos(p)
+			if !verts[key] {
+				verts[key] = true
+				if len(verts) > D3_CHUNK_VERT_BUDGET { return true }
+			}
 		}
 	}
 	return false
@@ -236,12 +269,26 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 	for t in input { for p in t.p { for axis in 0..<3 { bmin[axis]=min(bmin[axis],p[axis]); bmax[axis]=max(bmax[axis],p[axis]) } } }
 	bmin-=0.1; bmax+=0.1
 	root_ids:=make([]int,len(input),allocator); for _,i in root_ids { root_ids[i]=i }
-	queue:=make([dynamic]D3_Partition_Cell,allocator); defer { for c in queue { delete(c.tris) }; delete(queue) }
+	// `c.tris` and `root_ids` are plain slices, not `[dynamic]`, so unlike
+	// `queue`/`leaves`/`owned`/`sources` below they carry no allocator of
+	// their own -- deleting them bare would free through whatever
+	// `context.allocator` happens to be at the call site, not through
+	// `allocator`, and silently corrupt or crash the moment a caller passes
+	// anything other than the default (found by feeding a full real-route
+	// collision archive through with `context.temp_allocator`).
+	queue:=make([dynamic]D3_Partition_Cell,allocator); defer { for c in queue { delete(c.tris, allocator) }; delete(queue) }
 	append(&queue,D3_Partition_Cell{lo={bmin[0],bmin[2]},hi={bmax[0],bmax[2]},name="qt",tris=root_ids})
 	leaves:=make([dynamic]int,allocator); defer delete(leaves)
 	for qi:=0; qi<len(queue); qi+=1 {
 		c:=queue[qi]
-		if !d3_partition_should_split(input,c.tris) { append(&leaves,qi); continue }
+		// The root must always split at least once: Dirt 3 selects collision
+		// through the archive's entry-name grid, and a whole route collapsed
+		// to one root .vcqtc entry loads and validates fine but the game never
+		// finds it — the car falls through everything. Below-threshold input
+		// (a small custom stage, unlike any stock route) used to hit exactly
+		// that shape silently. See docs/dirt3-target.md, "archive topology
+		// matters".
+		if c.level>0 && !d3_partition_should_split(input,c.tris) { append(&leaves,qi); continue }
 		if c.level>=16 { return nil,fmt.tprintf("%s still exceeds a chunk limit at level 16",c.name),false }
 		mid:=(c.lo+c.hi)/2
 		for child in 0..<4 {
@@ -255,7 +302,7 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 		}
 	}
 	sources:=make([dynamic]D3_Jpak_Source,allocator); owned:=make([dynamic][]u8,allocator)
-	defer { for b in owned { delete(b) }; delete(owned); delete(sources) }
+	defer { for b in owned { delete(b, allocator) }; delete(owned); delete(sources) }
 	// TrackGround.Save writes cells in spatial depth-first order, and its loader
 	// verifies archive order against that traversal. Construction above is
 	// breadth-first, so sort the leaf paths before assembling the JPAK.

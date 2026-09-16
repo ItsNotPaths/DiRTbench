@@ -43,13 +43,33 @@ binary_align_up :: proc(value, alignment: int) -> (aligned: int, ok: bool) {
 	return (value + mask) & ~mask, true
 }
 
+// `resize` on a `[dynamic]T` sets its capacity to exactly the requested
+// length every time it grows -- there is no geometric over-allocation the
+// way `append` gets it. Calling it directly here, once per write, made every
+// write (even a single 4-byte header field) reallocate and copy the whole
+// buffer accumulated so far: fine at the small synthetic scale every writer
+// in this codebase was built against, but O(n^2) against a real ~20 MB PSSG
+// file with tens of thousands of small node/attribute writes -- slow, and it
+// floods the allocator with ever-larger transient blocks along the way,
+// which is what actually exhausted a memory-capped run before this file was
+// even close to done. `reserve` grows the backing capacity geometrically;
+// `resize` after that only touches `len`, which is free once capacity
+// already covers it.
 binary_reserve :: proc(w: ^Binary_Writer, size: int) -> (at: int, ok: bool) {
 	if !w.ok || size < 0 || len(w.data) > max(int) - size {
 		w.ok = false
 		return 0, false
 	}
 	at = len(w.data)
-	resize(&w.data, at + size)
+	needed := at + size
+	if needed > cap(w.data) {
+		grown := max(needed, cap(w.data)*2, 4096)
+		if reserve(&w.data, grown) != nil {
+			w.ok = false
+			return 0, false
+		}
+	}
+	resize(&w.data, needed)
 	return at, true
 }
 

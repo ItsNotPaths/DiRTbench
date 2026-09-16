@@ -16,22 +16,30 @@ stage_collision_builds_an_archive_readable_by_our_decoder :: proc(t:^testing.T) 
 	entries,opened:=jpak_read(raw,context.allocator)
 	defer delete(entries)
 	testing.expect(t,opened)
-	testing.expect_value(t,len(entries),2)
+	// The archive root always splits at least once (a whole route collapsed to
+	// one entry loads fine but the game never finds it, see d3_track_write), so
+	// four well-separated triangles land in more than one .vcqtc chunk plus
+	// qt.info.
+	testing.expect(t,len(entries)>2)
 
-	chunk,msg,decoded:=qt_read(entries[0].data,context.allocator)
-	defer qt_chunk_delete(&chunk,context.allocator)
-	testing.expect(t,decoded,msg)
-	testing.expect_value(t,len(chunk.tris),len(collision))
+	// A triangle straddling a partition seam is duplicated into every chunk it
+	// touches, so tally materials across every chunk rather than assuming one
+	// holds everything.
 	gravel,rock,grass:=0,0,0
-	for triangle in chunk.tris {
-		code:=chunk.mats[triangle.mat]
-		switch code {
-		case "GLD*": gravel+=1
-		case "ROK*": rock+=1
-		case "GRS*": grass+=1
+	for e in entries {
+		if e.name=="qt.info" { continue }
+		chunk,msg,decoded:=qt_read(e.data,context.allocator)
+		testing.expect(t,decoded,msg)
+		for triangle in chunk.tris {
+			switch chunk.mats[triangle.mat] {
+			case "GLD*": gravel+=1
+			case "ROK*": rock+=1
+			case "GRS*": grass+=1
+			}
 		}
+		qt_chunk_delete(&chunk,context.allocator)
 	}
-	testing.expect_value(t,gravel,2) // Road_Sand intentionally shares gravel physics.
-	testing.expect_value(t,rock,1)
-	testing.expect_value(t,grass,1)
+	testing.expect(t,gravel>=2) // Road_Sand intentionally shares gravel physics.
+	testing.expect(t,rock>=1)
+	testing.expect(t,grass>=1)
 }
