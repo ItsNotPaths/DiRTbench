@@ -233,5 +233,17 @@ export_dirt3_geometry :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if job.Profile == nil {
 		return "this export needs a venue, so it knows whose shaders the terrain draws with", false
 	}
-	return d3_write_tracksplit(job, job.Profile)
+	return d3_write_tracksplit(job, job.Profile, job.Profile.template, .Route)
+}
+
+// Venue installation keeps the base tracksplit's texture payloads while
+// replacing its geometry. Route/debug geometry export remains payload-free.
+export_dirt3_venue_geometry :: proc(job: ^Export_Job, template: []u8) -> (msg: string, ok: bool) {
+	if job.Profile == nil {
+		return "this export needs a venue, so it knows whose shaders the terrain draws with", false
+	}
+	if len(template) == 0 {
+		return "venue tracksplit emission needs the base venue's full tracksplit", false
+	}
+	return d3_write_tracksplit(job, job.Profile, template, .Venue)
 }

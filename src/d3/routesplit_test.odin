@@ -74,6 +74,56 @@ routesplit_builds_the_stock_tile_scene :: proc(t: ^testing.T) {
 }
 
 @(test)
+tracksplit_replaces_geometry_but_retains_texture_payloads :: proc(t: ^testing.T) {
+	profile := d3_test_profile()
+	donor, donor_msg, donor_ok := pssg_read(profile.template, context.allocator)
+	testing.expect(t, donor_ok, donor_msg); if !donor_ok { return }
+	defer pssg_delete(&donor)
+
+	texture_type: u32
+	for id, name in donor.node_names {
+		if name == "TEXTURE" { texture_type = id; break }
+	}
+	testing.expect(t, texture_type != 0, "fixture schema has no TEXTURE type")
+	bound := d3_library(&donor, "RENDERINTERFACEBOUND")
+	testing.expect(t, bound != nil, "fixture has no bound library"); if bound == nil { return }
+	payload := []u8{0xde, 0xad, 0xbe, 0xef}
+	texture := new(Pssg_Node)
+	texture.type_id = texture_type
+	texture.name = "TEXTURE"
+	texture.attrs = make([dynamic]Pssg_Attr)
+	texture.children = make([dynamic]^Pssg_Node)
+	texture.data = make([]u8, len(payload))
+	texture.data_owned = true
+	copy(texture.data, payload)
+	append(&bound.children, texture)
+	template, encoded := pssg_write(&donor, context.allocator)
+	testing.expect(t, encoded, "could not encode tracksplit fixture"); if !encoded { return }
+	defer delete(template)
+
+	tris := d3_test_mesh(context.temp_allocator)
+	raw, msg, built := d3_routesplit_build_with_template(tris, profile, template, .Venue, context.allocator)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	file, parse_msg, parsed := pssg_read(raw, context.allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	defer pssg_delete(&file)
+
+	bound = d3_library(&file, "RENDERINTERFACEBOUND")
+	textures, blocks := 0, 0
+	for child in bound.children {
+		switch child.name {
+		case "TEXTURE":
+			textures += 1
+			testing.expect(t, len(child.data) == len(payload) && child.data[0] == payload[0] && child.data[3] == payload[3], "texture payload changed")
+		case "DATABLOCK": blocks += 1
+		}
+	}
+	testing.expect_value(t, textures, 1)
+	testing.expect_value(t, blocks, 32*5)
+}
+
+@(test)
 routesplit_attribute_ids_match_the_material_pack :: proc(t: ^testing.T) {
 	pack, pack_msg, pack_ok := pssg_read(d3_test_profile().template, context.temp_allocator)
 	testing.expect(t, pack_ok, pack_msg); if !pack_ok { return }

@@ -428,9 +428,102 @@ d3_tile_boxes :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profil
 	return result[:], "", true
 }
 
+D3_Scene_Scope :: enum {
+	Route,
+	Venue,
+}
+
+d3_scene_cells :: proc(
+	collision: []Collision_Triangle,
+	profile: ^D3_Venue_Profile,
+	lo, hi: [3]f32,
+	pitch_x, pitch_z: f32,
+	allocator: mem.Allocator,
+) -> []D3_Cell {
+	cells := make([]D3_Cell, profile.tiles_x*profile.tiles_z, allocator)
+	for &cell in cells {
+		cell.all = make([dynamic]int, allocator)
+		for material in Collision_Material { cell.picks[material] = make([dynamic]int, allocator) }
+	}
+	for tri, i in collision {
+		centre := (tri.Points[0]+tri.Points[1]+tri.Points[2])/3
+		ix := clamp(int((centre[0]-lo[0])/pitch_x), 0, profile.tiles_x-1)
+		iz := clamp(int((hi[2]-centre[2])/pitch_z), 0, profile.tiles_z-1)
+		cell := &cells[iz*profile.tiles_x+ix]
+		append(&cell.picks[tri.Material], i)
+		append(&cell.all, i)
+	}
+	return cells
+}
+
+d3_scene_tiles :: proc(
+	b: ^D3_Build,
+	cells: []D3_Cell,
+	lo, hi: [3]f32,
+	pitch_x, pitch_z: f32,
+) -> []^Pssg_Node {
+	tiles := make([dynamic]^Pssg_Node, b.allocator)
+	for iz := b.profile.tiles_z-1; iz >= 0; iz -= 1 {
+		for ix := b.profile.tiles_x-1; ix >= 0; ix -= 1 {
+			cell := &cells[iz*b.profile.tiles_x+ix]
+			cell.ix = ix
+			cell.iz = iz
+			if len(cell.all) == 0 { continue }
+			origin := [2]f32{lo[0]+pitch_x*f32(ix), hi[2]-pitch_z*f32(iz+1)}
+			pitch := [2]f32{pitch_x, pitch_z}
+			renders := make([dynamic]^Pssg_Node, b.allocator)
+			for layer in D3_LAYERS {
+				if node := d3_render_node(b, layer, cell, origin, pitch); node != nil { append(&renders, node) }
+			}
+			if !b.ok { return nil }
+			if len(renders) > 0 {
+				append(&tiles, d3_scene_node(b, "NODE", fmt.tprintf("ROOT_%d_%d", ix, iz), {}, {}, renders[:]))
+			}
+		}
+	}
+	return tiles[:]
+}
+
+d3_scene_replace_libraries :: proc(
+	file: ^Pssg_File,
+	root: ^Pssg_Node,
+	segments, blocks: []^Pssg_Node,
+	scope: D3_Scene_Scope,
+	allocator: mem.Allocator,
+) -> (msg: string, ok: bool) {
+	node_library := d3_library(file, "NODE")
+	segment_library := d3_library(file, "SEGMENTSET")
+	bound_library := d3_library(file, "RENDERINTERFACEBOUND")
+	if node_library == nil || segment_library == nil || bound_library == nil {
+		return "the embedded Dirt 3 material pack is missing a scene library", false
+	}
+	pssg_set_children(node_library, []^Pssg_Node{root}, allocator)
+	pssg_set_children(segment_library, segments, allocator)
+	if scope == .Route {
+		pssg_set_children(bound_library, blocks, allocator)
+		return "", true
+	}
+
+	// Route shaders resolve texture payloads from the venue tracksplit.
+	textures := make([dynamic]^Pssg_Node, allocator)
+	for child in bound_library.children {
+		if child.name == "TEXTURE" { append(&textures, child) }
+	}
+	clear(&bound_library.children)
+	append(&bound_library.children, ..textures[:])
+	append(&bound_library.children, ..blocks)
+	return "", true
+}
+
 // Stock files list tiles by descending z index, then descending x, and tile z
 // index 0 is the high-z end.
-d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+d3_routesplit_build_with_template :: proc(
+	collision: []Collision_Triangle,
+	profile: ^D3_Venue_Profile,
+	template: []u8,
+	scope: D3_Scene_Scope,
+	allocator := context.allocator,
+) -> (out: []u8, msg: string, ok: bool) {
 	if len(collision) == 0 { return nil, "Dirt 3 graphics need triangles", false }
 
 	// One arena for the whole scene, so a rejected mesh frees everything it
@@ -442,7 +535,7 @@ d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_
 	defer virtual.arena_destroy(&arena)
 	scratch := virtual.arena_allocator(&arena)
 
-	file, read_msg, read_ok := pssg_read(profile.template, scratch)
+	file, read_msg, read_ok := pssg_read(template, scratch)
 	if !read_ok { return nil, read_msg, false }
 	types := pssg_types(&file, scratch)
 	ids := pssg_ids(&file, scratch)
@@ -457,56 +550,26 @@ d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_
 	lo, hi := d3_mesh_bounds(collision)
 	pitch_x := max(hi[0]-lo[0], D3_MIN_EXTENT)/f32(profile.tiles_x)
 	pitch_z := max(hi[2]-lo[2], D3_MIN_EXTENT)/f32(profile.tiles_z)
-	cells := make([]D3_Cell, profile.tiles_x*profile.tiles_z, scratch)
-	for &cell in cells {
-		cell.all = make([dynamic]int, scratch)
-		for material in Collision_Material { cell.picks[material] = make([dynamic]int, scratch) }
-	}
-	for tri, i in collision {
-		centre := (tri.Points[0]+tri.Points[1]+tri.Points[2])/3
-		ix := clamp(int((centre[0]-lo[0])/pitch_x), 0, profile.tiles_x-1)
-		iz := clamp(int((hi[2]-centre[2])/pitch_z), 0, profile.tiles_z-1)
-		cell := &cells[iz*profile.tiles_x+ix]
-		append(&cell.picks[tri.Material], i)
-		append(&cell.all, i)
-	}
-
-	tiles := make([dynamic]^Pssg_Node, scratch)
-	for iz := profile.tiles_z-1; iz >= 0; iz -= 1 {
-		for ix := profile.tiles_x-1; ix >= 0; ix -= 1 {
-			cell := &cells[iz*profile.tiles_x+ix]
-			cell.ix = ix; cell.iz = iz
-			if len(cell.all) == 0 { continue }
-			origin := [2]f32{lo[0]+pitch_x*f32(ix), hi[2]-pitch_z*f32(iz+1)}
-			pitch := [2]f32{pitch_x, pitch_z}
-			renders := make([dynamic]^Pssg_Node, scratch)
-			for layer in D3_LAYERS {
-				if node := d3_render_node(&b, layer, cell, origin, pitch); node != nil { append(&renders, node) }
-			}
-			if !b.ok { return nil, b.msg, false }
-			if len(renders) == 0 { continue }
-			append(&tiles, d3_scene_node(&b, "NODE", fmt.tprintf("ROOT_%d_%d", ix, iz), {}, {}, renders[:]))
-		}
-	}
+	cells := d3_scene_cells(collision, profile, lo, hi, pitch_x, pitch_z, scratch)
+	tiles := d3_scene_tiles(&b, cells, lo, hi, pitch_x, pitch_z)
+	if !b.ok { return nil, b.msg, false }
 	if len(tiles) == 0 { return nil, "Dirt 3 graphics need triangles inside the route bounds", false }
 
 	surface := d3_scene_node(&b, "NODE", "surface", {}, {}, tiles[:])
 	root := d3_scene_node(&b, "ROOTNODE", "Scene Root", {}, {}, []^Pssg_Node{surface})
 	if !b.ok { return nil, b.msg, false }
 
-	node_library := d3_library(&file, "NODE")
-	segment_library := d3_library(&file, "SEGMENTSET")
-	bound_library := d3_library(&file, "RENDERINTERFACEBOUND")
-	if node_library == nil || segment_library == nil || bound_library == nil {
-		return nil, "the embedded Dirt 3 material pack is missing a scene library", false
+	if library_msg, libraries_ok := d3_scene_replace_libraries(&file, root, b.segments[:], b.blocks[:], scope, scratch); !libraries_ok {
+		return nil, library_msg, false
 	}
-	pssg_set_children(node_library, []^Pssg_Node{root}, scratch)
-	pssg_set_children(segment_library, b.segments[:], scratch)
-	pssg_set_children(bound_library, b.blocks[:], scratch)
 
 	out, ok = pssg_write(&file, allocator)
 	if !ok { return nil, "could not encode routesplit.pssg", false }
 	return out, fmt.tprintf("%d triangles, %d tiles, %d draw calls", len(collision), len(tiles), b.draws), true
+}
+
+d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+	return d3_routesplit_build_with_template(collision, profile, profile.template, .Route, allocator)
 }
 
 d3_write_routesplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (string, bool) {
@@ -520,8 +583,8 @@ d3_write_routesplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (st
 // Same container, venue scope: `job.Collision` is the whole road network, not
 // one route. `d3_routesplit_build` does not know the difference; only the
 // output name does.
-d3_write_tracksplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (string, bool) {
-	data, msg, ok := d3_routesplit_build(job.Collision, profile)
+d3_write_tracksplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile, template: []u8, scope: D3_Scene_Scope) -> (string, bool) {
+	data, msg, ok := d3_routesplit_build_with_template(job.Collision, profile, template, scope)
 	if !ok { return msg, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "tracksplit.pssg", data); !written { return write_msg, false }

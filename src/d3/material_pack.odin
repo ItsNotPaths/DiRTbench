@@ -5,8 +5,8 @@ package d3
 //
 // It holds shader metadata and texture names, never a payload. A SHADERINPUT
 // names its texture as `tracksplit.pssg#<name>.tga`, and that resolves against
-// the base venue's own file, which a deployed venue hardlinks. So the pack and
-// the art it names always come from the same venue.
+// the base venue's own file. A synthesized venue tracksplit retains those
+// texture payloads, so the pack and its art remain from the same venue.
 //
 // Read from `tracksplit.pssg`, not from a route's `routesplit.pssg`: kenya and
 // norway_trail ship no routesplit at all, and every venue has a tracksplit.

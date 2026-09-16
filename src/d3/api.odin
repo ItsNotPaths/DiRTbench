@@ -61,6 +61,7 @@ Bridge_Bump :: dirt3_bridge_bump_headless
 Rewrite :: dirt3_rewrite_headless
 Export :: export_dirt3
 Export_Geometry :: export_dirt3_geometry
+Export_Venue_Geometry :: export_dirt3_venue_geometry
 Atomic_Write :: atomic_write_file
 Prepare_Registration :: prepare_registration
 Registration_Output_Delete :: registration_output_delete
