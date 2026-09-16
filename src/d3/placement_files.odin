@@ -1,6 +1,7 @@
 package d3
 
 import "core:fmt"
+import "core:strings"
 
 // Dirt 3 "instance placement" files: `trees.bin` and `ornaments.bin` share
 // one container. A fixed header, a reference table (one row per unique prop
@@ -8,9 +9,9 @@ import "core:fmt"
 // how rotated), then a NUL-terminated string pool at the end holding every
 // reference's filename, addressed by *absolute file offset*.
 //
-// Every field below is verified against the BinXML sibling files
-// (`trees.xml`/`ornaments.xml`), field by field, not guessed — one exception
-// noted at the ornaments layout.
+// Every core field below is verified against the plain XML sibling files
+// (`trees.xml`/`ornaments.xml`), field by field. See
+// docs/dirt3-placement-synthesis.md for the full header/reference map.
 
 D3_Placement_Format :: enum { Trees, Ornaments }
 
@@ -37,17 +38,11 @@ D3_TREES_LAYOUT := D3_Placement_Layout{
 	ref_stride = 40, inst_stride = 76,
 }
 
-// ornaments.bin: format tag 28, 116-byte header. Bytes 0x50..0x73, right
-// before the reference table, tally reference categories by name prefix —
-// confirmed exact for core_barr_*/core_game_*, a third slot unconfirmed —
-// and `d3_placement_relocate` leaves them untouched, because the reference
-// table they describe never moves or changes.
-//
-// Unlike trees.bin, offset 0x38 is *not* a second copy of instance_num: it
-// disagrees with the true count (checked against the `<instance>` element
-// count in the sibling ornaments.xml) in every stock file sampled. What it
-// actually holds is unknown, so a rewrite leaves it alone; only 0x4c, the
-// field whose value is consistent with the file's own size, is trusted.
+// ornaments.bin: format tag 28, 116-byte header. 0x38 is the full authored
+// main-list count from ornaments.xml; 0x4c is the smaller cooked instance
+// count. 0x50..0x70 describe optional dependent references/instances and path
+// animations. A valid minimal file has zero counts and all three table offsets
+// meeting at the string pool.
 D3_ORNAMENTS_LAYOUT := D3_Placement_Layout{
 	format = .Ornaments, header_size = 0x74,
 	inst_num_write = []int{0x4c},
@@ -64,14 +59,31 @@ d3_placement_layout :: proc(data: []u8) -> (layout: D3_Placement_Layout, ok: boo
 	return {}, false
 }
 
-// One placement: which reference mesh, a row-major 3x3 rotation/scale, and a
-// world position. The instance tag is minted by the caller's position in the
-// list — every stock file we measured has it unique but not necessarily
-// sequential, and nothing reads it back as an index.
+// One placement shared by decode, donor relocation, synthesis, and ENS
+// physics mirroring. Format-specific fields are ignored by the other format.
 D3_Placement_Instance :: struct {
 	reference_id: u32,
+	instance_id:  u32,
+	instance_tag: u32,
 	basis:        [3][3]f32,
 	position:     [3]f32,
+	shadow_factor: f32, // trees only; zero emits the stock default of 1
+	is_dynamic:    bool, // ornaments only
+}
+
+// Complete source data for a donor-free placement file. `reference_id` is
+// deliberately explicit on both records: stock files keep ids dense, but the
+// writer validates that invariant rather than silently depending on order.
+D3_Placement_Reference :: struct {
+	reference_id:     u32,
+	filename:         string,
+	bounds_min:       [3]f32,
+	bounds_max:       [3]f32,
+	prebaked_shadows: u32,
+	sponsor:          u32, // ornaments only; zero for ordinary references
+	// Ornament registration capacity, including dynamic ENS-only drawables.
+	// Zero derives capacity from the cooked instances.
+	instance_capacity: u32,
 }
 
 D3_BASIS_IDENTITY :: [3][3]f32{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}
@@ -98,6 +110,211 @@ d3_placement_encode_instance :: proc(w: []u8, at: int, index: u32, inst: D3_Plac
 		binary_store_u32(w, at+80, 0xffffffff)
 		binary_store_u32(w, at+84, 0xffffffff)
 	}
+}
+
+@(private = "file")
+d3_placement_build_box :: proc(
+	references: []D3_Placement_Reference,
+	instances: []D3_Placement_Instance,
+) -> (lo, hi: [3]f32, ok: bool) {
+	seen := false
+	for inst in instances {
+		if int(inst.reference_id) >= len(references) { return {}, {}, false }
+		ref := references[inst.reference_id]
+		for corner_i in 0..<8 {
+			corner := [3]f32{
+				ref.bounds_min[0] if corner_i&1 == 0 else ref.bounds_max[0],
+				ref.bounds_min[1] if corner_i&2 == 0 else ref.bounds_max[1],
+				ref.bounds_min[2] if corner_i&4 == 0 else ref.bounds_max[2],
+			}
+			world: [3]f32
+			for k in 0..<3 {
+				world[k] = inst.position[k] +
+					inst.basis[0][k]*corner[0] + inst.basis[1][k]*corner[1] + inst.basis[2][k]*corner[2]
+			}
+			for k in 0..<3 {
+				if !seen { lo[k], hi[k] = world[k], world[k] } else { lo[k], hi[k] = min(lo[k], world[k]), max(hi[k], world[k]) }
+			}
+			seen = true
+		}
+	}
+	return lo, hi, seen || len(instances) == 0
+}
+
+@(private = "file")
+d3_placement_reference_counts :: proc(
+	references: []D3_Placement_Reference,
+	instances: []D3_Placement_Instance,
+	allocator := context.allocator,
+) -> (counts: []u32, ok: bool) {
+	out := make([]u32, len(references), allocator)
+	for ref, i in references {
+		if ref.reference_id != u32(i) || ref.filename == "" { delete(out, allocator); return nil, false }
+		for k in 0..<3 { if ref.bounds_min[k] > ref.bounds_max[k] { delete(out, allocator); return nil, false } }
+	}
+	last_reference: u32
+	for inst, i in instances {
+		if int(inst.reference_id) >= len(references) { delete(out, allocator); return nil, false }
+		// Stock stores each reference immediately followed by its instances in
+		// the XML, and the BIN table follows that same grouped order.
+		if i > 0 && inst.reference_id < last_reference { delete(out, allocator); return nil, false }
+		out[inst.reference_id] += 1
+		last_reference = inst.reference_id
+	}
+	return out, true
+}
+
+@(private = "file")
+d3_placement_reference_capacities :: proc(
+	format: D3_Placement_Format,
+	references: []D3_Placement_Reference,
+	counts: []u32,
+	allocator := context.allocator,
+) -> (capacities: []u32, total: u32, ok: bool) {
+	out := make([]u32, len(references), allocator)
+	for ref, i in references {
+		capacity := counts[i]
+		if format == .Ornaments && ref.instance_capacity != 0 { capacity = ref.instance_capacity }
+		if capacity < counts[i] { delete(out, allocator); return nil, 0, false }
+		out[i] = capacity
+		if total > max(u32)-capacity { delete(out, allocator); return nil, 0, false }
+		total += capacity
+	}
+	return out, total, true
+}
+
+// Build trees.bin or ornaments.bin outright. The optional ornament sections
+// (dependent wet variants and path animations) are validly empty: stock files
+// with neither use this exact shape, with all three offsets meeting at the
+// string pool. They can be added to the source model when the editor exposes
+// those features without changing the core reference/instance tables.
+d3_placement_build :: proc(
+	format: D3_Placement_Format,
+	references: []D3_Placement_Reference,
+	instances: []D3_Placement_Instance,
+	allocator := context.allocator,
+) -> (out: []u8, msg: string, ok: bool) {
+	layout := D3_TREES_LAYOUT
+	if format == .Ornaments { layout = D3_ORNAMENTS_LAYOUT }
+	counts, counts_ok := d3_placement_reference_counts(references, instances, context.temp_allocator)
+	if !counts_ok { return nil, "placement references must be dense, named, bounded, and cover every instance", false }
+	capacities, authored_count, capacities_ok := d3_placement_reference_capacities(format, references, counts, context.temp_allocator)
+	if !capacities_ok { return nil, "placement reference capacity cannot be smaller than its cooked instance count", false }
+
+	string_bytes := 0
+	for ref in references { string_bytes += len(ref.filename)+1 }
+	ref_at := layout.header_size
+	inst_at := ref_at + len(references)*layout.ref_stride
+	strings_at := inst_at + len(instances)*layout.inst_stride
+	result := make([]u8, strings_at+string_bytes, allocator)
+
+	binary_store_u32(result, 0x04, 12 if format == .Trees else 28)
+	binary_store_u32(result, 0x08, 1)
+	lo, hi, bounds_ok := d3_placement_build_box(references, instances)
+	if !bounds_ok { delete(result, allocator); return nil, "could not bound placement instances", false }
+	bounds_at := 0x0c if format == .Trees else 0x1c
+	for k in 0..<3 { binary_store_f32(result, bounds_at+k*4, lo[k]); binary_store_f32(result, bounds_at+12+k*4, hi[k]) }
+
+	if format == .Trees {
+		binary_store_u32(result, 0x24, u32(len(references)))
+		binary_store_u32(result, 0x28, u32(len(instances)))
+		binary_store_u32(result, 0x30, u32(ref_at))
+		binary_store_u32(result, 0x34, u32(len(references)))
+		binary_store_u32(result, 0x38, u32(inst_at))
+		binary_store_u32(result, 0x3c, u32(len(instances)))
+	} else {
+		binary_store_u32(result, 0x0c, 0x50); binary_store_u32(result, 0x10, 1)
+		binary_store_u32(result, 0x14, 0x68); binary_store_u32(result, 0x18, 1)
+		binary_store_u32(result, 0x34, u32(len(references)))
+		binary_store_u32(result, 0x38, authored_count) // full exported id capacity, including ENS-only drawables
+		binary_store_u32(result, 0x40, u32(ref_at))
+		binary_store_u32(result, 0x44, u32(len(references)))
+		binary_store_u32(result, 0x48, u32(inst_at))
+		binary_store_u32(result, 0x4c, u32(len(instances))) // cooked instance count
+		// Empty dependent-reference, dependent-instance and path-animation lists.
+		binary_store_u32(result, 0x58, u32(strings_at))
+		binary_store_u32(result, 0x60, u32(strings_at))
+		binary_store_u32(result, 0x6c, u32(strings_at))
+	}
+
+	name_at := strings_at
+	for ref, i in references {
+		at := ref_at+i*layout.ref_stride
+		binary_store_u32(result, at, u32(name_at))
+		binary_store_u32(result, at+4, ref.reference_id)
+		for k in 0..<3 { binary_store_f32(result, at+8+k*4, ref.bounds_min[k]); binary_store_f32(result, at+20+k*4, ref.bounds_max[k]) }
+		if format == .Trees {
+			binary_store_u32(result, at+32, ref.prebaked_shadows)
+			binary_store_u32(result, at+36, counts[i])
+		} else {
+			binary_store_u32(result, at+32, ref.sponsor)
+			binary_store_u32(result, at+36, ref.prebaked_shadows)
+			binary_store_u32(result, at+40, capacities[i])
+			binary_store_u32(result, at+44, 0xffffffff)
+		}
+		copy(result[name_at:], ref.filename); name_at += len(ref.filename)+1
+	}
+	for inst, i in instances {
+		at := inst_at+i*layout.inst_stride
+		binary_store_u32(result, at, inst.reference_id)
+		binary_store_u32(result, at+4, inst.instance_id)
+		for row in 0..<3 { for col in 0..<3 { binary_store_f32(result, at+8+(row*3+col)*4, inst.basis[row][col]) } }
+		for k in 0..<3 { binary_store_f32(result, at+44+k*4, inst.position[k]) }
+		if format == .Trees {
+			binary_store_u32(result, at+56, 0xff000000)
+			binary_store_f32(result, at+60, inst.shadow_factor if inst.shadow_factor != 0 else 1)
+			binary_store_u32(result, at+72, inst.instance_tag)
+		} else {
+			binary_store_u32(result, at+64, 1 if inst.is_dynamic else 0)
+			binary_store_u32(result, at+76, inst.instance_tag)
+			binary_store_u32(result, at+80, 0xffffffff)
+			binary_store_u32(result, at+84, 0xffffffff)
+		}
+	}
+	return result, fmt.tprintf("%d references, %d instances", len(references), len(instances)), true
+}
+
+@(private = "file")
+d3_placement_xml_f3 :: proc(v: [3]f32) -> string { return fmt.tprintf("%.9g %.9g %.9g", v[0], v[1], v[2]) }
+
+@(private = "file")
+d3_placement_xml_transform :: proc(inst: D3_Placement_Instance) -> string {
+	return fmt.tprintf(
+		"%.9g %.9g %.9g 0 %.9g %.9g %.9g 0 %.9g %.9g %.9g 0 %.9g %.9g %.9g 1 ",
+		inst.basis[0][0], inst.basis[0][1], inst.basis[0][2], inst.basis[1][0], inst.basis[1][1], inst.basis[1][2],
+		inst.basis[2][0], inst.basis[2][1], inst.basis[2][2], inst.position[0], inst.position[1], inst.position[2],
+	)
+}
+
+// Emit the authoring sibling from the same source slices as the cooked BIN.
+d3_placement_xml_build :: proc(
+	format: D3_Placement_Format,
+	references: []D3_Placement_Reference,
+	instances: []D3_Placement_Instance,
+	allocator := context.allocator,
+) -> (out: []u8, msg: string, ok: bool) {
+	counts, counts_ok := d3_placement_reference_counts(references, instances, context.temp_allocator)
+	if !counts_ok { return nil, "placement references must be dense, named, bounded, and cover every instance", false }
+	capacities, authored_count, capacities_ok := d3_placement_reference_capacities(format, references, counts, context.temp_allocator)
+	if !capacities_ok { return nil, "placement reference capacity cannot be smaller than its cooked instance count", false }
+	lo, hi, bounds_ok := d3_placement_build_box(references, instances)
+	if !bounds_ok { return nil, "could not bound placement instances", false }
+	b := strings.builder_make(allocator)
+	fmt.sbprintf(&b, "<instancedata>\n  <instancelist bounds_min=\"%s 1\" bounds_max=\"%s 1\" reference_num=\"%d\" instance_num=\"%d\" total_landmarks=\"0\">\n", d3_placement_xml_f3(lo), d3_placement_xml_f3(hi), len(references), authored_count)
+	for ref, ri in references {
+		fmt.sbprintf(&b, "    <instanceref reference_id=\"%d\" filename=\"%s\" prebaked_shadows=\"%d\" bounds_min=\"%s \" bounds_max=\"%s \"", ref.reference_id, ref.filename, ref.prebaked_shadows, d3_placement_xml_f3(ref.bounds_min), d3_placement_xml_f3(ref.bounds_max))
+		if format == .Ornaments && ref.sponsor != 0 { fmt.sbprintf(&b, " sponsor=\"%d\"", ref.sponsor) }
+		fmt.sbprintf(&b, " max_instances=\"%d\" />\n", capacities[ri])
+		for inst in instances {
+			if inst.reference_id != ref.reference_id { continue }
+			fmt.sbprintf(&b, "    <instance transform=\"%s\" colour=\"0 0 0 1\" instance_tag=\"%d\" instance_id=\"%d\" reference_id=\"%d\"", d3_placement_xml_transform(inst), inst.instance_tag, inst.instance_id, inst.reference_id)
+			if format == .Trees { fmt.sbprintf(&b, " shadow_factor=\"%.9g\"", inst.shadow_factor if inst.shadow_factor != 0 else 1) }
+			if format == .Ornaments && inst.is_dynamic { strings.write_string(&b, " dynamic=\"1\"") }
+			strings.write_string(&b, " />\n")
+		}
+	}
+	strings.write_string(&b, "  </instancelist>\n  <dependentlist reference_num=\"0\" instance_num=\"0\" />\n</instancedata>\n")
+	return b.buf[:], fmt.tprintf("%d references, %d instances", len(references), len(instances)), true
 }
 
 // True where `at` is a byte offset an ASCII, NUL-terminated name could start:
@@ -153,12 +370,16 @@ d3_placement_shift_gap :: proc(result, unshifted: []u8, gap_at, gap_end, string_
 
 d3_placement_decode_instance :: proc(data: []u8, at: int) -> (inst: D3_Placement_Instance) {
 	inst.reference_id = binary_load_u32(data, at)
+	inst.instance_id = binary_load_u32(data, at+4)
 	for row in 0 ..< 3 {
 		for col in 0 ..< 3 {
 			inst.basis[row][col] = binary_load_f32(data, at+8+(row*3+col)*4)
 		}
 	}
 	for k in 0 ..< 3 { inst.position[k] = binary_load_f32(data, at+44+k*4) }
+	// Both formats carry the render/physics join tag, at different tails.
+	layout, layout_ok := d3_placement_layout(data)
+	if layout_ok { inst.instance_tag = binary_load_u32(data, at + (72 if layout.format == .Trees else 76)) }
 	return
 }
 

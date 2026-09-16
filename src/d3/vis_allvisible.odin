@@ -13,20 +13,11 @@ package d3
 // Crowd, interactive water and lights (tags 4, 6, 8) are not included either;
 // their placement files are not decoded here.
 //
-// Writing tag-2 (ornament) boxes with a made-up id crashes DiRT 3, always the
-// same address (dirt3_game.exe+0x940c17) — unless the id is real. A tag-2 id
-// is an opaque per-route registration handle assigned once at
-// level-authoring time, not a file position, and merely avoiding collisions
-// isn't enough (a random unclaimed id neither crashes nor draws anything).
-// Two sources give a real id: `objects.ens`'s `staticVis="1"` entities carry
-// their own id as `instanceID`, exact game-wide
-// (`d3_append_ens_static_vis_objects`); `ornaments.bin` itself carries no id
-// anywhere, but its plain-text sibling `ornaments.xml` does, as an explicit
-// `instance_id` attribute, exact against stock `track.vis`
-// (`d3_append_ornaments_with_donor_ids`). `D3_Ornaments_Id_Mode.Donor` with
-// both sources is the full, crash-free recipe. See
-// docs/dirt3-vis-format.md "The ornaments crash" and memory
-// dirt3-ornaments-vis-crash.
+// Tag-2 boxes require real registration ids. Cooked ornaments carry theirs at
+// instance +4; `objects.ens` contributes boxes only for `staticVis="1"`
+// entities. Ordinary dynamic ENS objects reserve ids through ornaments.bin
+// reference capacities but must not receive VIS boxes. See
+// docs/dirt3-vis-format.md, "The ornaments crash".
 //
 // `ornaments_mode` on `d3_stock_route_all_visible_objects` picks how
 // `ornaments.bin` gets its ids — see D3_Ornaments_Id_Mode.
@@ -101,9 +92,7 @@ d3_read_pssg_tile_boxes :: proc(path: string, allocator := context.allocator) ->
 }
 
 // Every instance of one placement file (`trees.bin` or `ornaments.bin`),
-// appended as VIS objects of `tag`, indexed by file order — the only order
-// available; the real engine's registration order for these two tags is
-// unconfirmed. See docs/dirt3-vis-format.md.
+// appended as VIS objects of `tag`, indexed by its cooked instance id.
 @(private = "file")
 d3_append_placement_objects :: proc(
 	out: ^[dynamic]D3_Vis_Object,
@@ -126,19 +115,17 @@ d3_append_placement_objects :: proc(
 		if !box_ok {
 			return added, fmt.tprintf("%s: instance %d names an unknown reference %d", path, i, inst.reference_id), false
 		}
-		append(out, D3_Vis_Object{tag = tag, index = u32(i), lo = lo, hi = hi})
+		append(out, D3_Vis_Object{tag = tag, index = inst.instance_id, lo = lo, hi = hi})
 		added += 1
 	}
 	return added, "", true
 }
 
 // Every `<instance ...>` tag's `instance_id` attribute in `ornaments.xml`, in
-// file order. This plain-text sibling of `ornaments.bin` (which ships
-// alongside it on every route) carries the real per-route tag-2 id
-// explicitly — confirmed exact against stock `track.vis` for every instance
-// present there. `ornaments.bin` itself carries no such field (checked and
-// ruled out: its own `instance_tag` at instance offset +76 is a different,
-// unrelated number). File order matches `ornaments.bin`'s own instance table
+// file order. This plain-text sibling of `ornaments.bin` carries the same
+// per-route tag-2 id as the cooked record's +4 field, independently confirmed
+// against stock `track.vis` for every instance present there. The
+// `instance_tag` at +76 is a different identity. File order matches the BIN
 // order exactly (same positions, cross-checked), so index i here names the
 // same placement as `ornaments.bin` instance i. See
 // docs/dirt3-vis-format.md, "The ornaments crash".
@@ -317,7 +304,7 @@ d3_append_ens_static_vis_objects :: proc(
 // `Random`: an unclaimed id picked with no real source at all — an
 // experiment to see whether *any* unclaimed id is safe, or whether it has to
 // trace back to something real. See [[dirt3-ornaments-vis-crash]].
-D3_Ornaments_Id_Mode :: enum { Skip, Donor, Random }
+D3_Ornaments_Id_Mode :: enum { Skip, Donor, Random, Synthesized }
 
 // `ornaments.bin`'s own instances for one `D3_Ornaments_Id_Mode`. `out` must
 // already hold every `objects.ens` object, so `Random` can avoid colliding
@@ -351,6 +338,11 @@ d3_ornaments_step :: proc(
 		added, add_msg, add_ok := d3_append_ornaments_with_random_ids(out, ornaments_path, avoid)
 		if !add_ok { return 0, 0, add_msg, false }
 		return added, 0, fmt.tprintf("%d, random unclaimed ids", added), true
+	case .Synthesized:
+		ornaments_path, _ := filepath.join({route_dir, "ornaments.bin"}, context.temp_allocator)
+		added, add_msg, add_ok := d3_append_placement_objects(out, ornaments_path, 2)
+		if !add_ok { return 0, 0, add_msg, false }
+		return added, 0, fmt.tprintf("%d authored ids", added), true
 	}
 	return 0, 0, "", true
 }
@@ -432,6 +424,7 @@ d3_stock_route_all_visible_vis :: proc(
 	route_dir, venue_dir, donor_vis_path: string,
 	ornaments_mode: D3_Ornaments_Id_Mode,
 	allocator := context.allocator,
+	header_floor := [16]u32{},
 ) -> (
 	out: []u8,
 	msg: string,
@@ -440,18 +433,20 @@ d3_stock_route_all_visible_vis :: proc(
 	objects, objects_msg, objects_ok := d3_stock_route_all_visible_objects(route_dir, venue_dir, donor_vis_path, ornaments_mode, context.temp_allocator)
 	if !objects_ok { return nil, objects_msg, false }
 
-	header_floor: [16]u32
+	effective_floor := header_floor
 	donor_msg := "no donor"
 	if donor_vis_path != "" {
 		donor_data, donor_read_msg, donor_read_ok := d3_read_or_fail(donor_vis_path, context.temp_allocator)
 		if !donor_read_ok { return nil, donor_read_msg, false }
 		floor_ok: bool
-		header_floor, floor_ok = d3_vis_read_header_tag_counts(donor_data)
+		donor_floor: [16]u32
+		donor_floor, floor_ok = d3_vis_read_header_tag_counts(donor_data)
 		if !floor_ok { return nil, fmt.tprintf("%s: too short to hold a Dirt 3 VIS header", donor_vis_path), false }
+		for count, tag in donor_floor { effective_floor[tag] = max(effective_floor[tag], count) }
 		donor_msg = fmt.tprintf("header floors from %s", donor_vis_path)
 	}
 
-	built, build_msg, built_ok := d3_vis_build_single_cell(objects, header_floor, allocator)
+	built, build_msg, built_ok := d3_vis_build_single_cell(objects, effective_floor, allocator)
 	if !built_ok { return nil, build_msg, false }
 	return built, fmt.tprintf("%s -- %s -- %s", objects_msg, donor_msg, build_msg), true
 }
