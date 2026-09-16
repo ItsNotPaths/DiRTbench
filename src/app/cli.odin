@@ -279,6 +279,18 @@ run_cli :: proc() -> (handled: bool) {
 		fmt.println(msg)
 		os.exit(0 if ok else 1)
 	}
+	// Raise every instance in a trees.bin/ornaments.bin while preserving its
+	// references and all non-position fields. Useful for separating the binary
+	// renderer placement from any independently loaded physics placement.
+	if len(args) >= 3 && args[0] == "--dirt3-placement-raise" {
+		dy, parsed := strconv.parse_f64(args[2])
+		if !parsed { fmt.println("metres must be a number"); os.exit(1) }
+		out := fmt.tprintf("%s.raised", args[1])
+		if len(args) >= 5 && args[3] == "-o" { out = args[4] }
+		msg, ok := dirt3_placement_raise_headless(args[1], f32(dy), out)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
 	if len(args) >= 2 && args[0] == "--venue-tracksplit" {
 		terrain := len(args) >= 3 && args[2] == "--terrain"
 		msg, ok := venue_tracksplit_headless(args[1], terrain)
@@ -455,6 +467,29 @@ dirt3_michigan_treeplace_headless :: proc(route_dir, out_dir: string) -> (msg: s
 		"%s -> %s\ntrees.bin: %s\nornaments.bin: %s\nself-check: %s",
 		route_dir, out_dir, trees_msg, ornaments_msg, verify_msg,
 	), true
+}
+
+dirt3_placement_raise_headless :: proc(path: string, dy: f32, out_path: string) -> (msg: string, ok: bool) {
+	data, err := os.read_entire_file(path, context.temp_allocator)
+	if err != nil { return fmt.tprintf("could not read %s: %v", path, err), false }
+	instances, read_msg, read_ok := d3.d3_placement_read(data, context.temp_allocator)
+	if !read_ok { return fmt.tprintf("%s: %s", path, read_msg), false }
+	for &instance in instances { instance.position[1] += dy }
+	out, write_msg, write_ok := d3.d3_placement_relocate(data, instances, context.temp_allocator)
+	if !write_ok { return fmt.tprintf("%s: %s", path, write_msg), false }
+	check, check_msg, check_ok := d3.d3_placement_read(out, context.temp_allocator)
+	if !check_ok || len(check) != len(instances) {
+		return fmt.tprintf("raised placement did not parse back: %s", check_msg), false
+	}
+	for instance, i in check {
+		if instance != instances[i] {
+			return fmt.tprintf("raised placement changed instance %d unexpectedly", i), false
+		}
+	}
+	if err := os.write_entire_file(out_path, out); err != nil {
+		return fmt.tprintf("could not write %s: %v", out_path, err), false
+	}
+	return fmt.tprintf("%s -> %s: raised %d instances by %.3f m Y (%s; %s)", path, out_path, len(instances), dy, read_msg, write_msg), true
 }
 
 // `--pacenotes <stage>`: load a stage, generate the notes and print them. No
