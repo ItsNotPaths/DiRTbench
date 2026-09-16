@@ -9,6 +9,7 @@ import "core:slice"
 D3_PROGRESS_GATE_STEP :: f32(70)
 D3_PROGRESS_POINT_STEP :: f32(10.5)
 D3_AI_GATE_STEP :: f32(17)
+D3_AI_MIN_GATES :: 61 // smallest count in the stock route census
 D3_PROGRESS_GATE_WIDTH :: f32(53)
 D3_RACING_INSET :: f32(1.4)
 // Stock routes never ship more than 4 timed sections, and steerAssistData.xml
@@ -114,7 +115,9 @@ d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, alloca
 }
 
 d3_ai_xml :: proc(line: []Route_Station, allocator := context.allocator) -> (data: []u8, ok: bool) {
-	length:=line[len(line)-1].distance; distances:=d3_even_distances(length,D3_AI_GATE_STEP)
+	length:=line[len(line)-1].distance
+	ai_step := min(D3_AI_GATE_STEP, length/f32(D3_AI_MIN_GATES-1))
+	distances:=d3_even_distances(length,ai_step)
 	gates:=make([dynamic]^Bxml_Node,context.temp_allocator)
 	for distance,i in distances {
 		s:=d3_station_at(line,distance); width:=d3_dist(s.left,s.right); inset:=min(D3_RACING_INSET,width/4)
@@ -188,5 +191,9 @@ d3_write_track_data :: proc(job:^Export_Job) -> (msg:string,ok:bool) {
 	defer delete(progress); defer delete(ai)
 	if write_msg,written:=d3_write_out(job,"progress_track.xml",progress); !written { return write_msg,false }
 	if write_msg,written:=d3_write_out(job,"ai_track.xml",ai); !written { return write_msg,false }
-	return fmt.tprintf("route data: %d progress gates, %d AI gates",len(d3_progress_gate_distances(line[len(line)-1].distance,job.Markers)),len(d3_even_distances(line[len(line)-1].distance,D3_AI_GATE_STEP))),true
+	return fmt.tprintf(
+		"route data: %d progress gates, %d AI gates",
+		len(d3_progress_gate_distances(line[len(line)-1].distance,job.Markers)),
+		max(D3_AI_MIN_GATES, len(d3_even_distances(line[len(line)-1].distance,D3_AI_GATE_STEP))),
+	),true
 }

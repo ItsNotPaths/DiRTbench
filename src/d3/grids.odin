@@ -21,9 +21,12 @@ import "core:mem/virtual"
 // route. This writer emits the standing grid alone and has not been driven yet.
 // See docs/dirt3-binary-notes.md.
 D3_GRID_SLOTS :: 8
+D3_GRID_SERVICE_SLOTS :: 3       // every stock grids.pssg carries exactly 3
+D3_GRID_SERVICE_SPACING :: f32(3) // metres between service slots, line abreast
 D3_GRID_SLOT_LEAD :: f32(7)      // first slot, behind the grid node
-D3_GRID_SLOT_PITCH :: f32(9.5)   // slot to slot, along the centre line
-D3_GRID_CLEARANCE :: f32(0.5)    // how far the slots sit above the road
+D3_GRID_SLOT_PITCH :: f32(11)    // slot to slot, along the centre line
+D3_GRID_CLEARANCE :: f32(0.5)    // how far the grid node sits above the road
+D3_GRID_SLOT_LIFT :: f32(2)      // how far each slot hovers over the road
 D3_GRID_SLOT_HALF_WIDTH :: f32(1.4)
 D3_GRID_SLOT_HALF_LENGTH :: f32(2.75)
 
@@ -55,7 +58,9 @@ d3_grid_slot_local :: proc(grid, slot: Route_Station) -> (lateral, tangent, orig
 	// it stands on relative to the grid's.
 	d := [3]f32{slot.centre[0]-grid.centre[0], slot.centre[1]-grid.centre[1], slot.centre[2]-grid.centre[2]}
 	project :: proc(v, x, z: [3]f32) -> [3]f32 { return {v[0]*x[0]+v[2]*x[2], v[1], v[0]*z[0]+v[2]*z[2]} }
-	return project(sl,gl,gt), project(st,gl,gt), project(d,gl,gt)
+	slot_origin := project(d,gl,gt)
+	slot_origin[1] += D3_GRID_SLOT_LIFT
+	return project(sl,gl,gt), project(st,gl,gt), slot_origin
 }
 
 d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
@@ -115,11 +120,20 @@ d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profil
 		children[:], nil, scratch)
 	if !start_ok { return nil, start_msg, false }
 
+	// Every stock grids.pssg also carries a `grid_service` node with 3 slots:
+	// where the AI cars stand for the intro showcase and the entrants/tune
+	// menus, distinct from the standing grid above and not on the route at
+	// all. Missing it is what leaves those cars with nowhere valid to spawn —
+	// co-locating it with the standing grid keeps it on real ground with no
+	// route position of its own to invent.
+	service_node, service_msg, service_ok := d3_grid_service_node(&types, gl, gt, origin, scratch)
+	if !service_ok { return nil, service_msg, false }
+
 	root_frame, root_msg, root_ok := d3_grid_node_frame(&types, {1,0,0}, {0,0,1}, {0,0,0}, {}, {}, scratch)
 	if !root_ok { return nil, root_msg, false }
 	root_children := make([dynamic]^Pssg_Node, scratch)
 	append(&root_children, ..root_frame[:])
-	append(&root_children, start_node)
+	append(&root_children, start_node, service_node)
 	scene, scene_msg, scene_ok := pssg_make(&types, "ROOTNODE",
 		[]Pssg_Set{{"stopTraversal",u32(0)},{"nickname","Scene Root"},{"id","Scene Root"}},
 		root_children[:], nil, scratch)
@@ -136,6 +150,33 @@ d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profil
 	heading := math.mod(math.to_degrees(math.atan2(gt[0], gt[2]))+360, 360)
 	return encoded, fmt.tprintf("%d slots from (%.2f, %.2f, %.2f), heading %.1f deg",
 		D3_GRID_SLOTS, origin[0], origin[1], origin[2], heading), true
+}
+
+// The presentational grid: 3 slots line abreast at the standing grid's own
+// position, no route position of their own. Real stock files jitter each
+// slot's local Y to sit on locally uneven ground; ours is flat, so zero is
+// already correct.
+d3_grid_service_node :: proc(types: ^Pssg_Types, gl, gt, origin: [3]f32, allocator := context.allocator) -> (node: ^Pssg_Node, msg: string, ok: bool) {
+	slots := make([dynamic]^Pssg_Node, allocator)
+	for i in 0 ..< D3_GRID_SERVICE_SLOTS {
+		offset := (f32(i) - f32(D3_GRID_SERVICE_SLOTS-1)/2) * D3_GRID_SERVICE_SPACING
+		frame, frame_msg, frame_ok := d3_grid_node_frame(types, {1,0,0}, {0,0,1}, {offset,0,0},
+			{-0.5,0,-1}, {0.5,0.0001,1}, allocator)
+		if !frame_ok { return nil, frame_msg, false }
+		id := fmt.tprintf("slot_%02d_service", i)
+		slot, slot_msg, slot_ok := pssg_make(types, "NODE",
+			[]Pssg_Set{{"stopTraversal",u32(0)},{"nickname",id},{"id",id}}, frame[:], nil, allocator)
+		if !slot_ok { return nil, slot_msg, false }
+		append(&slots, slot)
+	}
+	frame, frame_msg, frame_ok := d3_grid_node_frame(types, gl, gt, origin, {-0.5,-0.5,-0.5}, {0.5,0.5,0.5}, allocator)
+	if !frame_ok { return nil, frame_msg, false }
+	children := make([dynamic]^Pssg_Node, allocator)
+	append(&children, ..frame[:])
+	append(&children, ..slots[:])
+	return pssg_make(types, "NODE",
+		[]Pssg_Set{{"stopTraversal",u32(0)},{"nickname","grid_service_route_0"},{"id","grid_service_route_0"}},
+		children[:], nil, allocator)
 }
 
 d3_grid_node_frame :: proc(types: ^Pssg_Types, lateral, tangent, origin, lo, hi: [3]f32, allocator := context.allocator) -> (out: [2]^Pssg_Node, msg: string, ok: bool) {

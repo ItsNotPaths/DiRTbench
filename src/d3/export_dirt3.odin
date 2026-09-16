@@ -3,6 +3,7 @@ package d3
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 
 // A replacement is always written as a new inode and renamed over the old
 // directory entry. Deployed venues begin as hardlinks to stock art; truncating
@@ -144,6 +145,43 @@ d3_write_collision :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg
 	return detail, true
 }
 
+// A route inside a derived venue starts as a hardlink of the base route's own
+// files, including these two off-track quadtrees. Both describe the *old*
+// road; `resetlines.cqtc` is the out-of-bounds test, so a stale copy of it
+// keyed to the donor's real-world position can reset the car onto ground that
+// does not exist here rather than back onto ours — which looks exactly like
+// falling through the floor, and is not a collision-archive bug at all. The
+// game tolerates both files being absent outright, so omit rather than stub.
+// See docs/venue-synthesis.md, "The line in the sand".
+D3_OMITTED_ROUTE_FILES :: []string{"resetlines.cqtc", "boundarylines.cqtc"}
+
+d3_omit_stale_route_files :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	dir, dir_msg, dir_ok := d3_out_dir(job)
+	if !dir_ok {
+		return dir_msg, false
+	}
+	removed := make([dynamic]string, context.temp_allocator)
+	for name in D3_OMITTED_ROUTE_FILES {
+		path, _ := filepath.join({dir, name}, context.temp_allocator)
+		if !os.exists(path) {
+			continue
+		}
+		if job.Backup {
+			if backup_msg, backed_up := d3_backup_once(path); !backed_up {
+				return backup_msg, false
+			}
+		}
+		if err := os.remove(path); err != nil {
+			return fmt.tprintf("could not omit %s: %v", path, err), false
+		}
+		append(&removed, name)
+	}
+	if len(removed) == 0 {
+		return "nothing stale to omit", true
+	}
+	return fmt.tprintf("omitted %s", strings.join(removed[:], ", ", context.temp_allocator)), true
+}
+
 // Every file that names a shader needs the venue's own profile. Without one
 // there is no honest answer to "whose art is this", so the export refuses
 // rather than reaching for a fixture the player does not have.
@@ -172,13 +210,18 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !grid_ok {
 		return grid_msg, false
 	}
+	omit_msg, omit_ok := d3_omit_stale_route_files(job)
+	if !omit_ok {
+		return omit_msg, false
+	}
 	return fmt.tprintf(
-		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s",
+		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; %s",
 		track_msg,
 		collision_msg,
 		visual_msg,
 		vis_msg,
 		grid_msg,
+		omit_msg,
 	), true
 }
 

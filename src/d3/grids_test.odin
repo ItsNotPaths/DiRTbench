@@ -92,4 +92,16 @@ grids_slots_trail_the_start_and_follow_the_bend :: proc(t: ^testing.T) {
 		if math.abs(rows[3][0]) > 0.5 { turned = true }
 	}
 	testing.expect(t, turned, "a curved route should push its rear slots off the grid's axis")
+	// Stations past the bend start (distance 100) aside, neighbours on the
+	// straight march at exactly the slot pitch.
+	origins := make([][3]f32, D3_GRID_SLOTS, context.temp_allocator)
+	for i in 0..<D3_GRID_SLOTS {
+		rows, _ := grids_test_transform(grids_test_node(&file, fmt.tprintf("slot_%02d", i)))
+		origins[i] = rows[3]
+	}
+	for i in 2..<D3_GRID_SLOTS {
+		dx, dy, dz := origins[i][0]-origins[i-1][0], origins[i][1]-origins[i-1][1], origins[i][2]-origins[i-1][2]
+		testing.expect(t, math.abs(math.sqrt(dx*dx+dy*dy+dz*dz)-D3_GRID_SLOT_PITCH) < 0.5)
+		testing.expect(t, math.abs(origins[i][1]-D3_GRID_SLOT_LIFT) < 0.01)
+	}
 }

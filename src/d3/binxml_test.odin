@@ -100,8 +100,10 @@ dirt3_track_generators_accept_a_real_polyline :: proc(t:^testing.T) {
 	testing.expect_value(t,test_le_u32(ai,0),BXML_FILE)
 	testing.expect_value(t,test_bxml_attr(progress,"gates","num_gates"),"11")
 	testing.expect_value(t,test_bxml_attr(progress,"line","num_points"),"41")
-	testing.expect_value(t,test_bxml_attr(ai,"gates","num_gates"),"26")
-	testing.expect_value(t,test_bxml_attr(ai,"links","num_links"),"25")
+	// The engine's route interpolator assumes the stock minimum density even
+	// for short stages; fewer gates throws "invalid vector<T> subscript".
+	testing.expect_value(t,test_bxml_attr(ai,"gates","num_gates"),"61")
+	testing.expect_value(t,test_bxml_attr(ai,"links","num_links"),"60")
 	testing.expect_value(t,test_bxml_attr(ai,"brake_lines","num_brake_lines"),"0")
 	// Resampling includes both endpoints exactly.
 	testing.expect_value(t,d3_station_at(line,0).centre,route[0].Centre)

@@ -23,7 +23,6 @@ import "core:mem"
 import "core:mem/virtual"
 import "core:os"
 
-D3_UV_METRES :: 16
 // No stock render node has a box that is flat on any axis, and a flat one draws
 // nothing at all. Keep every axis at least this thick, centred on the extent.
 D3_MIN_EXTENT :: 0.1
@@ -147,13 +146,14 @@ d3_weld_add :: proc(w: ^D3_Weld, tri: Collision_Triangle) {
 	append(&w.tris, corner)
 }
 
-// UVs are measured from the tile's own corner. Half floats hold about three
-// decimal digits, so a whole-route UV quantizes to over 0.1 m at the far end of
-// a 4 km stage and the ground texture visibly swims.
+// Dirt 3's terrain shaders consume tile-local normalized atlas coordinates.
+// Stock Finland tiles span roughly 426 x 197 metres while their ST values stay
+// in 0..1. Measuring in metres (the old /16 rule) emitted values as large as
+// 26 x 12 for those same tiles, wrapping/clamping the atlas into coarse grass.
 d3_pack_vertices :: proc(
 	w: ^D3_Weld,
 	layout: D3_Vertex_Layout,
-	origin: [2]f32,
+	origin, pitch: [2]f32,
 	colour: [4]u8,
 	allocator: mem.Allocator,
 ) -> []u8 {
@@ -164,8 +164,8 @@ d3_pack_vertices :: proc(
 		for k in 0..<3 { binary_store_f32(data, base+k*4, p[k], .Big) }
 		if layout.colour >= 0 { copy(data[base+layout.colour:][:4], rgba[:]) }
 		if layout.uv >= 0 {
-			binary_store_u16(data, base+layout.uv, d3_half((p[0]-origin[0])/D3_UV_METRES), .Big)
-			binary_store_u16(data, base+layout.uv+2, d3_half((p[2]-origin[1])/D3_UV_METRES), .Big)
+			binary_store_u16(data, base+layout.uv, d3_half((p[0]-origin[0])/pitch[0]), .Big)
+			binary_store_u16(data, base+layout.uv+2, d3_half((p[2]-origin[1])/pitch[1]), .Big)
 		}
 		if layout.normal >= 0 {
 			n := w.normal[i]
@@ -252,7 +252,7 @@ d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_G
 d3_draw_call :: proc(
 	b: ^D3_Build,
 	layout: D3_Vertex_Layout,
-	origin: [2]f32,
+	origin, pitch: [2]f32,
 	w: ^D3_Weld,
 	group: D3_Group,
 	sources, instances: ^[dynamic]^Pssg_Node,
@@ -273,7 +273,7 @@ d3_draw_call :: proc(
 			{"stride", u32(layout.stride)},
 		}))
 	}
-	payload := d3_pack_vertices(w, layout, origin, group.colour, b.allocator)
+	payload := d3_pack_vertices(w, layout, origin, pitch, group.colour, b.allocator)
 	size := u32(len(payload))
 	append(&block_kids, d3_node(b, "DATABLOCKDATA", nil, nil, payload))
 	append(&b.blocks, d3_node(b, "DATABLOCK", []Pssg_Set{
@@ -314,7 +314,7 @@ d3_draw_call :: proc(
 	return d3_bounds(w.points[:])
 }
 
-d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell, origin: [2]f32) -> ^Pssg_Node {
+d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell, origin, pitch: [2]f32) -> ^Pssg_Node {
 	layout, supported := d3_vertex_layout(layer.stride)
 	if !supported { d3_fail(b, fmt.tprintf("unsupported Dirt 3 vertex stride %d", layer.stride)); return nil }
 
@@ -336,7 +336,7 @@ d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell, origin: [2
 		if len(current.tris) > 0 { append(&welds, current) }
 
 		for &weld in welds {
-			call_lo, call_hi := d3_draw_call(b, layout, origin, &weld, group, &sources, &instances)
+			call_lo, call_hi := d3_draw_call(b, layout, origin, pitch, &weld, group, &sources, &instances)
 			if !b.ok { return nil }
 			if !seen { lo, hi = call_lo, call_hi; seen = true } else {
 				for k in 0..<3 { lo[k] = min(lo[k], call_lo[k]); hi[k] = max(hi[k], call_hi[k]) }
@@ -478,9 +478,10 @@ d3_routesplit_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_
 			cell.ix = ix; cell.iz = iz
 			if len(cell.all) == 0 { continue }
 			origin := [2]f32{lo[0]+pitch_x*f32(ix), hi[2]-pitch_z*f32(iz+1)}
+			pitch := [2]f32{pitch_x, pitch_z}
 			renders := make([dynamic]^Pssg_Node, scratch)
 			for layer in D3_LAYERS {
-				if node := d3_render_node(&b, layer, cell, origin); node != nil { append(&renders, node) }
+				if node := d3_render_node(&b, layer, cell, origin, pitch); node != nil { append(&renders, node) }
 			}
 			if !b.ok { return nil, b.msg, false }
 			if len(renders) == 0 { continue }
