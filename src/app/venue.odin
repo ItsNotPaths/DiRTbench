@@ -548,18 +548,26 @@ venue_compiled_delete :: proc(stages: []geo.Spline, allocator := context.allocat
 	delete(stages, allocator)
 }
 
-// Delete only dirtbench's project directory. A deployed venue must first be
-// reverted because deleting its source document would strand an installed copy.
+// Delete dirtbench's project directory, reverting a deployed copy first. The
+// regular revert path retains its backup and newest-first safety checks.
 venue_delete :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
-	if venue_already_deployed(vs, p) {
-		return fmt.tprintf("revert %s before deleting it", p.id), false
-	}
 	if p.id == "" || sanitise_venue_id(p.id) != p.id {
 		return fmt.tprintf("refusing unsafe venue id %q", p.id), false
+	}
+	revert_msg := ""
+	if venue_already_deployed(vs, p) {
+		if reverted_msg, reverted := venue_revert(vs, p); !reverted {
+			return fmt.tprintf("could not unstage %s before deleting it: %s", p.id, reverted_msg), false
+		} else {
+			revert_msg = reverted_msg
+		}
 	}
 	dir := venue_dir(p.id)
 	if err := os.remove_all(dir); err != nil {
 		return fmt.tprintf("could not delete %s: %v", dir, err), false
+	}
+	if revert_msg != "" {
+		return fmt.tprintf("%s\ndeleted venue %s", revert_msg, p.id), true
 	}
 	return fmt.tprintf("deleted venue %s", p.id), true
 }
