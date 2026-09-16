@@ -383,6 +383,7 @@ export_headless :: proc(
 	debug_out: bool,
 	route: string,
 	venue: string,
+	roughness: f32 = 0.5,
 ) -> (
 	msg: string,
 	ok: bool,
@@ -404,7 +405,7 @@ export_headless :: proc(
 	// headless export into it needs the scan too.
 	ed := Editor {
 		topo      = geo.SAMPLES_PER_SEG,
-		roughness = 0.5,
+		roughness = roughness,
 		terrain   = geo.TERRAIN_DEFAULTS,
 		pace      = geo.PACE_DEFAULTS,
 		veg       = geo.VEG_DEFAULTS,

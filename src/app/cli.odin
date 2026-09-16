@@ -285,6 +285,41 @@ run_cli :: proc() -> (handled: bool) {
 		fmt.println(msg)
 		os.exit(0 if ok else 1)
 	}
+	// `--dirt3-flat-venue <venue_id> [<route_id>]`: after `--export ...
+	// --terrain --roughness 0` has written the route's own track files,
+	// decorate it with a tree square, a haybale stack and a house stack, and
+	// rebuild track.vis so the trees draw.
+	if len(args) >= 2 && args[0] == "--dirt3-flat-venue" {
+		route := len(args) >= 3 ? args[2] : "route_0"
+		msg, ok := flat_venue_headless(args[1], route)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
+	// `--dirt3-bisect-1 <venue_id> [<route_id>]`: AI-finalise-hang bisection,
+	// stage 1 -- see finland_bisect.odin for what it does and why.
+	if len(args) >= 2 && args[0] == "--dirt3-bisect-1" {
+		route := len(args) >= 3 ? args[2] : "route_0"
+		msg, ok := finland_bisect_stage1_headless(args[1], route)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
+	// `--dirt3-bisect-1-flat <venue_id> [<route_id>]`: same reset as stage 1,
+	// but track.jpk/routesplit.pssg become a flat tiled plane spanning the
+	// real route's own bounding box instead of a faithful shape rebuild.
+	if len(args) >= 2 && args[0] == "--dirt3-bisect-1-flat" {
+		route := len(args) >= 3 ? args[2] : "route_0"
+		msg, ok := finland_bisect_stage1_flat_headless(args[1], route)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
+	// Route-level replacement after the Finland writer bisection: a 90 m grid
+	// runway followed by a 100 m timed straight at the donor's real start.
+	if len(args) >= 2 && args[0] == "--dirt3-bisect-short" {
+		route := "route_0" if len(args) < 3 else args[2]
+		msg, ok := finland_bisect_short_headless(args[1], route)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
 	if len(args) < 2 || args[0] != "--export" {
 		return false
 	}
@@ -294,12 +329,25 @@ run_cli :: proc() -> (handled: bool) {
 	debug_out := false
 	route := ""
 	venue := ""
+	roughness := f32(0.5)
 	for i := 2; i < len(args); i += 1 {
 		switch args[i] {
 		case "--terrain":
 			terrain = true
 		case "--debug-out":
 			debug_out = true
+		case "--roughness":
+			if i + 1 >= len(args) {
+				fmt.println("--roughness needs a value in 0..1")
+				os.exit(1)
+			}
+			i += 1
+			value, valid := strconv.parse_f64(args[i])
+			if !valid {
+				fmt.printfln("invalid --roughness value %q", args[i])
+				os.exit(1)
+			}
+			roughness = f32(value)
 		case "--route":
 			if i + 1 >= len(args) {
 				fmt.println("--route needs <venue>/<route_n>")
@@ -326,7 +374,7 @@ run_cli :: proc() -> (handled: bool) {
 			os.exit(1)
 		}
 	}
-	msg, ok := export_headless(args[1], target, terrain, debug_out, route, venue)
+	msg, ok := export_headless(args[1], target, terrain, debug_out, route, venue, roughness)
 	fmt.println(msg)
 	os.exit(0 if ok else 1)
 }

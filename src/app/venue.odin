@@ -647,30 +647,38 @@ venues_headless :: proc() -> bool {
 // `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
 // venue's whole road network and write it to `out/<id>/`, for inspection
 // before `track.vis` is correct at venue scope. Never touches the game.
-venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok: bool) {
-	vs: Install_Scan
-	install_scan_init(&vs)
-	defer install_scan_delete(&vs)
-	if !vs.found {
-		return install_scan_status_text(&vs), false
-	}
-
+// The whole road network's own triangle soup and the venue's shader profile —
+// the two things `tracksplit.pssg` is built from, at venue rather than route
+// scope, no route markers involved. Shared by the debug converter below and
+// by deployment's own venue-wide tracksplit writer.
+venue_tracksplit_collision :: proc(
+	vs: ^Install_Scan,
+	id: string,
+	terrain: bool,
+	allocator := context.temp_allocator,
+) -> (
+	collision: []d3.Collision_Triangle,
+	ribbon: []geo.Cross_Section,
+	profile: ^d3.Venue_Profile,
+	msg: string,
+	ok: bool,
+) {
 	road: geo.Spline
 	defer delete(road.points)
 	if load_msg, loaded := load_stage_from(&road, venue_road_path(id), nil, nil); !loaded {
-		return load_msg, false
+		return nil, nil, nil, load_msg, false
 	}
 
 	ed := Editor{
 		topo      = geo.SAMPLES_PER_SEG,
-		roughness = 0.5,
+		roughness = 0,
 		terrain   = geo.TERRAIN_DEFAULTS,
 	}
 	ed.terrain.enabled = terrain
 	defer geo.terrain_delete(&ed.terrain)
 	defer geo.terrain_field_delete(&ed.terrain_field)
 	ed.spline = road
-	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), context.temp_allocator)
+	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), allocator)
 	ed.ribbon_gen = 1
 
 	if ed.terrain.enabled {
@@ -683,13 +691,31 @@ venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok
 	mesh := build_export_mesh(&ed, context.temp_allocator)
 	order, _ := sort_faces_by_material(mesh)
 	if len(order) == 0 {
-		return "nothing to export: the road network has no triangles", false
+		return nil, nil, nil, "nothing to export: the road network has no triangles", false
 	}
-	collision := collision_from_mesh(mesh, order, context.temp_allocator)
+	collision = collision_from_mesh(mesh, order, allocator)
 
-	profile, profile_msg, profile_ok := export_profile(&vs, id, context.temp_allocator)
-	if !profile_ok {
-		return profile_msg, false
+	profile, msg, ok = export_profile(vs, id, allocator)
+	if !ok {
+		return nil, nil, nil, msg, false
+	}
+	return collision, ed.ribbon, profile, "", true
+}
+
+// `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
+// venue's whole road network and write it to `out/<id>/`, for inspection
+// before `track.vis` is correct at venue scope. Never touches the game.
+venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok: bool) {
+	vs: Install_Scan
+	install_scan_init(&vs)
+	defer install_scan_delete(&vs)
+	if !vs.found {
+		return install_scan_status_text(&vs), false
+	}
+
+	collision, _, profile, build_msg, built := venue_tracksplit_collision(&vs, id, terrain, context.temp_allocator)
+	if !built {
+		return build_msg, false
 	}
 
 	dir, _ := filepath.join({out_dir(), id}, context.temp_allocator)
@@ -847,7 +873,10 @@ link_venue_root :: proc(src, dst: string) -> (msg: string, ok: bool) {
 	return "", true
 }
 
-@(private = "file")
+// The base venue and base route a project derives from, resolved against the
+// live install. Used by deployment, and by anything that needs to read real
+// donor content (venue-wide art, placements) a from-scratch export leaves
+// untouched.
 venue_source :: proc(
 	vs: ^Install_Scan,
 	p: Venue,
