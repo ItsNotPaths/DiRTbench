@@ -30,13 +30,14 @@ D3_GRID_SLOT_LIFT :: f32(2)      // how far each slot hovers over the road
 D3_GRID_SLOT_HALF_WIDTH :: f32(1.4)
 D3_GRID_SLOT_HALF_LENGTH :: f32(2.75)
 
-// Local +Z is forward. The lateral axis runs left to right across the road, so
-// the tangent is that axis turned a quarter turn.
+// The grid parent's +Z axis follows route travel. Vehicle slots below are
+// rotated 180 degrees inside this frame because Dirt 3 cars face local -Z.
 d3_grid_frame :: proc(s: Route_Station) -> (lateral, tangent: [3]f32) {
 	dx, dz := s.right[0]-s.left[0], s.right[2]-s.left[2]
 	n := math.sqrt(dx*dx+dz*dz)
-	if n < 1e-6 { return {1,0,0}, {0,0,1} }
-	return {dx/n, 0, dz/n}, {-dz/n, 0, dx/n}
+	if n < 1e-6 { return {-1,0,0}, {0,0,1} }
+	// In D3, left->right is route-forward rotated counter-clockwise.
+	return {dx/n, 0, dz/n}, {dz/n, 0, -dx/n}
 }
 
 d3_grid_transform_bytes :: proc(lateral, tangent, origin: [3]f32, allocator := context.allocator) -> []u8 {
@@ -60,7 +61,10 @@ d3_grid_slot_local :: proc(grid, slot: Route_Station) -> (lateral, tangent, orig
 	project :: proc(v, x, z: [3]f32) -> [3]f32 { return {v[0]*x[0]+v[2]*x[2], v[1], v[0]*z[0]+v[2]*z[2]} }
 	slot_origin := project(d,gl,gt)
 	slot_origin[1] += D3_GRID_SLOT_LIFT
-	return project(sl,gl,gt), project(st,gl,gt), slot_origin
+	// The node axes describe local +X/+Z, but a vehicle's nose is local -Z.
+	// Negating both horizontal axes is a 180-degree yaw without changing the
+	// slot's already-correct position behind the start.
+	return -project(sl,gl,gt), -project(st,gl,gt), slot_origin
 }
 
 d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
@@ -160,7 +164,7 @@ d3_grid_service_node :: proc(types: ^Pssg_Types, gl, gt, origin: [3]f32, allocat
 	slots := make([dynamic]^Pssg_Node, allocator)
 	for i in 0 ..< D3_GRID_SERVICE_SLOTS {
 		offset := (f32(i) - f32(D3_GRID_SERVICE_SLOTS-1)/2) * D3_GRID_SERVICE_SPACING
-		frame, frame_msg, frame_ok := d3_grid_node_frame(types, {1,0,0}, {0,0,1}, {offset,0,0},
+		frame, frame_msg, frame_ok := d3_grid_node_frame(types, {-1,0,0}, {0,0,-1}, {offset,0,0},
 			{-0.5,0,-1}, {0.5,0.0001,1}, allocator)
 		if !frame_ok { return nil, frame_msg, false }
 		id := fmt.tprintf("slot_%02d_service", i)

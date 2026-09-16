@@ -98,7 +98,7 @@ dirt3_track_generators_accept_a_real_polyline :: proc(t:^testing.T) {
 	testing.expect(t,pok); testing.expect(t,aok)
 	testing.expect_value(t,test_le_u32(progress,0),BXML_FILE)
 	testing.expect_value(t,test_le_u32(ai,0),BXML_FILE)
-	testing.expect_value(t,test_bxml_attr(progress,"gates","num_gates"),"11")
+	testing.expect_value(t,test_bxml_attr(progress,"gates","num_gates"),"15")
 	testing.expect_value(t,test_bxml_attr(progress,"line","num_points"),"41")
 	// The engine's route interpolator assumes the stock minimum density even
 	// for short stages; fewer gates throws "invalid vector<T> subscript".
@@ -111,12 +111,41 @@ dirt3_track_generators_accept_a_real_polyline :: proc(t:^testing.T) {
 }
 
 @(test)
-dirt3_progress_refuses_a_fifth_timed_section :: proc(t:^testing.T) {
-	four:=[]Progress_Marker{{.Start,50},{.Checkpoint,120},{.Checkpoint,190},{.Checkpoint,260},{.Finish,330}}
-	five:=[]Progress_Marker{{.Start,50},{.Checkpoint,110},{.Checkpoint,170},{.Checkpoint,230},{.Checkpoint,290},{.Finish,350}}
-	_,ok:=d3_validate_markers(four,400); testing.expect(t,ok)
-	msg,bad:=d3_validate_markers(five,400)
-	testing.expect(t,!bad); testing.expect(t,len(msg)>0)
+dirt3_route_overrides_cover_the_route :: proc(t:^testing.T) {
+	data,ok:=d3_route_overrides_build(261,context.temp_allocator)
+	testing.expect(t,ok)
+	testing.expect_value(t,test_le_u32(data,0),BXML_FILE)
+	testing.expect_value(t,test_bxml_attr(data,"block0","start"),"-4.5")
+	testing.expect_value(t,test_bxml_attr(data,"block0","end"),"261")
+	testing.expect_value(t,test_bxml_attr(data,"Systems","tree_settings"),"medium")
+	_,bad:=d3_route_overrides_build(0,context.temp_allocator)
+	testing.expect(t,!bad)
+}
+
+@(test)
+dirt3_progress_requires_exactly_three_time_splits :: proc(t:^testing.T) {
+	two:=[]Progress_Marker{{.Start,50},{.Checkpoint,150},{.Checkpoint,250},{.Finish,330}}
+	three:=[]Progress_Marker{{.Start,50},{.Checkpoint,120},{.Checkpoint,190},{.Checkpoint,260},{.Finish,330}}
+	four:=[]Progress_Marker{{.Start,50},{.Checkpoint,110},{.Checkpoint,170},{.Checkpoint,230},{.Checkpoint,290},{.Finish,350}}
+	// The route interpolator requires exactly three intermediate splits.
+	msg2,bad2:=d3_validate_markers(two,400); testing.expect(t,!bad2); testing.expect(t,len(msg2)>0)
+	_,ok:=d3_validate_markers(three,400); testing.expect(t,ok)
+	msg4,bad4:=d3_validate_markers(four,400); testing.expect(t,!bad4); testing.expect(t,len(msg4)>0)
+}
+
+@(test)
+dirt3_progress_rejects_splits_that_share_a_gate :: proc(t: ^testing.T) {
+	route := []Route_Sample{
+		{Centre={0,0,0}, Left={4,0,0}, Right={-4,0,0}},
+		{Centre={0,0,400}, Left={4,0,400}, Right={-4,0,400}},
+	}
+	line := d3_route_stations(route)
+	markers := []Progress_Marker{
+		{.Start,50}, {.Checkpoint,51}, {.Checkpoint,200}, {.Checkpoint,300}, {.Finish,350},
+	}
+	data, ok := d3_progress_xml(line, markers, context.temp_allocator)
+	testing.expect(t, !ok)
+	testing.expect_value(t, len(data), 0)
 }
 
 @(test)

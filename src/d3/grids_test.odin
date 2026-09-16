@@ -7,9 +7,9 @@ import "core:testing"
 // A right turn, so a straight-line grid would leave the road.
 grids_test_line :: proc() -> []Route_Station {
 	route := []Route_Sample{
-		{Centre={0,2,-100},Left={-4,2,-100},Right={4,2,-100}},
-		{Centre={0,2,0},   Left={-4,2,0},   Right={4,2,0}},
-		{Centre={100,2,100},Left={96,2,96}, Right={104,2,104}},
+		{Centre={0,2,-100},Left={4,2,-100},Right={-4,2,-100}},
+		{Centre={0,2,0},   Left={4,2,0},   Right={-4,2,0}},
+		{Centre={100,2,100},Left={104,2,96}, Right={96,2,104}},
 	}
 	return d3_route_stations(route, context.temp_allocator)
 }
@@ -57,9 +57,10 @@ grids_place_the_start_on_the_route_facing_travel :: proc(t: ^testing.T) {
 	testing.expect(t, math.abs(rows[3][0]-station.centre[0]) < 0.01)
 	testing.expect(t, math.abs(rows[3][2]-station.centre[2]) < 0.01)
 	testing.expect(t, math.abs(rows[3][1]-(station.centre[1]+D3_GRID_CLEARANCE)) < 0.01)
-	// This stretch runs along +Z, so local forward is +Z and lateral is +X.
+	// This stretch runs along +Z, so the grid parent's +Z axis follows travel.
+	// Vehicle slot nodes carry the separate 180-degree model yaw.
 	testing.expect(t, rows[2][2] > 0.99)
-	testing.expect(t, rows[0][0] > 0.99)
+	testing.expect(t, rows[0][0] < -0.99)
 }
 
 @(test)
@@ -77,11 +78,13 @@ grids_slots_trail_the_start_and_follow_the_bend :: proc(t: ^testing.T) {
 		testing.expect(t, slot != nil)
 		rows, got := grids_test_transform(slot)
 		testing.expect(t, got)
-		// Local +Z is forward, so every slot sits behind the grid node and they
-		// march away from it in order.
+		// Trailing slots have negative parent-local Z and march away from the
+		// grid node in order.
 		testing.expect(t, rows[3][2] < 0)
 		if i > 0 { testing.expect(t, rows[3][2] < previous) }
 		previous = rows[3][2]
+		// Cars face local -Z, so each slot's +Z row points backward.
+		testing.expect(t, rows[2][2] < 0)
 		// Slots ride the road, so a bend turns them off the grid's own heading.
 		length := math.sqrt(rows[2][0]*rows[2][0]+rows[2][2]*rows[2][2])
 		testing.expect(t, math.abs(length-1) < 0.01)

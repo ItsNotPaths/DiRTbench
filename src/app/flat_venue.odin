@@ -1,58 +1,16 @@
 package main
 
-// `--dirt3-flat-venue <venue_id> [<route_id>]`: build everything in one pass
-// -- track files, the venue's own tracksplit.pssg, decorations, track.vis --
-// straight off the venue's road.json, no `--export` step first.
-//
-// `geo.compile_stage` (what the ordinary road/marker/stage system compiles)
-// always starts its output exactly at the start marker: there is no way to
-// carry road from *before* the start line into an exported route through it.
-// That is fine for a real stage, which never needs to place a grid behind its
-// own start, but it starved the standing grid of the ~74 m of straight
-// lead-in `d3_grids_build` wants for 8 cars, so every slot clamped to the
-// same point. Fixed below by reading the *whole* road.json directly rather
-// than going through a compiled stage at all -- but a winedbg re-attach after
-// the fix showed the exact same stuck call chain (main thread inside
-// VehicleManagerPlugin::finalise's per-vehicle wait), byte-identical down to
-// the instruction offset. Grid overlap was never the cause; it's still open.
-//
-// `road.json` is one straight line from FLAT_VENUE_RUNWAY_M behind the start
-// to FLAT_VENUE_STAGE_M past it; the timed stage's start and finish are two
-// distances within that longer strip, not its ends, so the grid gets its
-// full runway and the route is still exactly 100 m timed. venue.json's own
-// start/finish markers exist only so the ordinary deploy-time
-// `venue_compile` sanity check has something valid to compile — nothing here
-// reads their output.
-//
-// Current hypothesis: `resetlines.cqtc` is omitted (permits unrestricted
-// out-of-bounds movement), and our own track.jpk only covers our tiny local
-// platform. If anything -- an AI opponent's spawn check, a stray reference in
-// one of the untouched hardlinked route files -- gets evaluated out at
-// Finland's real route coordinates, there is no ground there at all, and
-// whatever is waiting on that query never gets an answer. FLAT_VENUE_FLOOR_*
-// below lays a coarse tiled floor across the real donor route_0's own
-// qt.info bounding box (read straight off its track.jpk) as a defensive
-// probe -- same shape as the once-working full-venue flat-plane control from
-// an earlier session (see memory dirt3-grid-blocks-the-route), tiled rather
-// than one quad so the archive still partitions correctly.
-//
-// Off the +X side of the road: a 3x3 square of trees, tag 3, registered in
-// the rebuilt track.vis like any other tree, with matching BASIC entities in
-// objects.ens for collision. Off the -X side: a haybale stack
-// and a house stack through objects.ens, which needs no VIS entry at all —
-// see memory dirt3-objects-ens-vis-linkage: a native, one-group,
-// everything-visible track.vis (this venue's own, never a donor's) already
-// let a brand-new objects.ens instance id draw with no track.vis change.
-// ornaments.bin is emptied outright: this venue registers no tag-2 objects.
+// Build route and venue files directly from the complete road.json. Reading
+// the whole road preserves the grid lead-in that compiled stages trim away.
+// A broad tiled floor covers retained route-system terrain probes, while the
+// placement fixtures exercise the ancillary files D3 expects.
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:path/filepath"
 import d3 "../d3"
 import "../geo"
-
-FLAT_VENUE_RUNWAY_M :: f32(90) // straight road behind the start line, for the grid
-FLAT_VENUE_STAGE_M :: f32(100) // the timed stage itself
 
 // finland_rally/route_0's own real qt.info bounding box (X, Z), read straight
 // off its stock track.jpk: (-2258.24, -13.46, -1129.01) .. (2008.01, 29.14, 838.38).
@@ -194,8 +152,9 @@ flat_venue_route_samples :: proc(ribbon: []geo.Cross_Section, allocator := conte
 	out := make([]d3.Route_Sample, len(ribbon), allocator)
 	for section, i in ribbon {
 		half := section.width / 2
-		left := section.pos - section.right*half
-		right := section.pos + section.right*half
+		// D3 expects left->right to be route-forward rotated counter-clockwise.
+		left := section.pos + section.right*half
+		right := section.pos - section.right*half
 		out[i] = {
 			Centre = {section.pos.x, section.pos.y, section.pos.z},
 			Left   = {left.x, left.y, left.z},
@@ -205,15 +164,25 @@ flat_venue_route_samples :: proc(ribbon: []geo.Cross_Section, allocator := conte
 	return out
 }
 
-// Start, 2 evenly-spaced checkpoints, finish -- the same shape road.json's
-// old `checkpoint_count = 2` produced, just at explicit distances since
-// nothing here goes through Timing_Params.
-flat_venue_markers :: proc(allocator := context.allocator) -> []d3.Progress_Marker {
-	out := make([]d3.Progress_Marker, 4, allocator)
-	out[0] = {Kind = .Start, Distance = FLAT_VENUE_RUNWAY_M}
-	out[1] = {Kind = .Checkpoint, Distance = FLAT_VENUE_RUNWAY_M + FLAT_VENUE_STAGE_M/3}
-	out[2] = {Kind = .Checkpoint, Distance = FLAT_VENUE_RUNWAY_M + FLAT_VENUE_STAGE_M*2/3}
-	out[3] = {Kind = .Finish, Distance = FLAT_VENUE_RUNWAY_M + FLAT_VENUE_STAGE_M}
+flat_venue_route_length :: proc(route: []d3.Route_Sample) -> f32 {
+	length: f32
+	for i in 1..<len(route) {
+		dx := route[i].Centre[0]-route[i-1].Centre[0]
+		dy := route[i].Centre[1]-route[i-1].Centre[1]
+		dz := route[i].Centre[2]-route[i-1].Centre[2]
+		length += math.sqrt(dx*dx+dy*dy+dz*dz)
+	}
+	return length
+}
+
+// Spread five splits over the required 15-gate topology: 2/4/7/10/13.
+flat_venue_markers :: proc(length: f32, allocator := context.allocator) -> []d3.Progress_Marker {
+	out := make([]d3.Progress_Marker, 5, allocator)
+	out[0] = {Kind = .Start, Distance = length*2/14}
+	out[1] = {Kind = .Checkpoint, Distance = length*4/14}
+	out[2] = {Kind = .Checkpoint, Distance = length*7/14}
+	out[3] = {Kind = .Checkpoint, Distance = length*10/14}
+	out[4] = {Kind = .Finish, Distance = length*13/14}
 	return out
 }
 
@@ -241,10 +210,11 @@ flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: boo
 	tracksplit_msg, tracksplit_ok := d3.Export_Geometry(&d3.Export_Job{Out = venue_dir, Backup = true, Collision = collision, Profile = profile})
 	if !tracksplit_ok { return fmt.tprintf("tracksplit.pssg: %s", tracksplit_msg), false }
 
+	route := flat_venue_route_samples(ribbon, context.temp_allocator)
 	route_msg, route_ok := d3.Export(&d3.Export_Job{
 		Name = route_id, Out = dir, Backup = true,
-		Route = flat_venue_route_samples(ribbon, context.temp_allocator),
-		Markers = flat_venue_markers(context.temp_allocator),
+		Route = route,
+		Markers = flat_venue_markers(flat_venue_route_length(route), context.temp_allocator),
 		Collision = collision, Profile = profile,
 	})
 	if !route_ok { return fmt.tprintf("route: %s", route_msg), false }

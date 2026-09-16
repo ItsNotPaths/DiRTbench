@@ -4,16 +4,16 @@ import "core:fmt"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
-import "core:slice"
 
 D3_PROGRESS_GATE_STEP :: f32(70)
+D3_PROGRESS_MIN_GATES :: 15
 D3_PROGRESS_POINT_STEP :: f32(10.5)
 D3_AI_GATE_STEP :: f32(17)
 D3_AI_MIN_GATES :: 61 // smallest count in the stock route census
 D3_PROGRESS_GATE_WIDTH :: f32(53)
 D3_RACING_INSET :: f32(1.4)
-// steerAssistData.xml only has storage for three intermediate checkpoints.
-D3_MAX_TIME_SPLITS :: 3
+// Both fewer and more checkpoints overrun assumptions in the route interpolator.
+D3_TIME_SPLITS :: 3
 
 Route_Station :: struct {
 	distance: f32,
@@ -78,20 +78,27 @@ d3_across :: proc(s: Route_Station, offset: f32) -> [3]f32 {
 	return {s.centre[0]+dx/length*offset, s.centre[1], s.centre[2]+dz/length*offset}
 }
 
-d3_progress_gate_distances :: proc(length:f32,markers:[]Progress_Marker) -> []f32 {
-	regular := d3_even_distances(length,D3_PROGRESS_GATE_STEP)
-	gate_list:=make([dynamic]f32,context.temp_allocator)
-	append(&gate_list,..regular)
-	for marker in markers { append(&gate_list,marker.Distance) }
-	slice.sort_by(gate_list[:],proc(a,b:f32)->bool{return a<b})
-	out:=make([dynamic]f32,context.temp_allocator)
-	for distance in gate_list { if len(out)==0 || math.abs(distance-out[len(out)-1])>0.001 { append(&out,distance) } }
-	return out[:]
+d3_progress_gate_distances :: proc(length:f32) -> []f32 {
+	// Split markers map onto this uniform sampling; they are not extra gates.
+	step := min(D3_PROGRESS_GATE_STEP, length/f32(D3_PROGRESS_MIN_GATES-1))
+	return d3_even_distances(length,step)
+}
+
+d3_nearest_gate :: proc(gates: []f32, distance: f32) -> int {
+	nearest := 0
+	best := math.abs(gates[0]-distance)
+	for gate, i in gates[1:] {
+		if delta := math.abs(gate-distance); delta < best {
+			nearest = i+1
+			best = delta
+		}
+	}
+	return nearest
 }
 
 d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, allocator := context.allocator) -> (data: []u8, ok: bool) {
 	length := line[len(line)-1].distance
-	gate_d:=d3_progress_gate_distances(length,markers)
+	gate_d:=d3_progress_gate_distances(length)
 	point_d := d3_even_distances(length,D3_PROGRESS_POINT_STEP)
 	if len(gate_d)<4 { return nil,false }
 	gates := make([dynamic]^Bxml_Node,context.temp_allocator)
@@ -105,9 +112,11 @@ d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, alloca
 	points:=make([dynamic]^Bxml_Node,context.temp_allocator)
 	for distance,i in point_d { s:=d3_station_at(line,distance); append(&points,bxml_node("point",[]Bxml_Attr{{"id",d3_i(i)},{"distance",d3_f5(distance)}},[]^Bxml_Node{bxml_text("position",d3_f3(s.centre),[]Bxml_Attr{{"format","float3"}})})) }
 	splits:=make([dynamic]^Bxml_Node,context.temp_allocator)
+	previous_gate := -1
 	for marker,i in markers {
-		gate:=0
-		for distance,j in gate_d { if math.abs(distance-marker.Distance)<0.001 { gate=j; break } }
+		gate := d3_nearest_gate(gate_d, marker.Distance)
+		if gate <= previous_gate { return nil, false }
+		previous_gate = gate
 		kind:="time"
 		if marker.Kind==.Start { kind="start" } else if marker.Kind==.Finish { kind="finish_absolute" }
 		append(&splits,bxml_node("split",[]Bxml_Attr{{"id",d3_i(i)},{"type",kind},{"gate",d3_i(gate)}}))
@@ -183,8 +192,8 @@ d3_validate_markers :: proc(markers:[]Progress_Marker,length:f32) -> (msg:string
 		if i>0 && i<len(markers)-1 && marker.Kind!=.Checkpoint { return fmt.tprintf("Dirt 3 progress marker %d is not a checkpoint",i),false }
 		previous=marker.Distance
 	}
-	if checkpoints:=len(markers)-2; checkpoints>D3_MAX_TIME_SPLITS {
-		return fmt.tprintf("Dirt 3 holds at most %d checkpoints; this stage has %d",D3_MAX_TIME_SPLITS,checkpoints),false
+	if checkpoints:=len(markers)-2; checkpoints!=D3_TIME_SPLITS {
+		return fmt.tprintf("Dirt 3 needs exactly %d checkpoints; this stage has %d",D3_TIME_SPLITS,checkpoints),false
 	}
 	return "",true
 }
@@ -198,17 +207,40 @@ d3_write_track_data :: proc(job:^Export_Job) -> (msg:string,ok:bool) {
 	// A progress track needs at least four gates, so a stage shorter than a few
 	// gate steps cannot make one. Say that, rather than "could not encode".
 	length:=line[len(line)-1].distance
-	if gates:=d3_progress_gate_distances(length,job.Markers); len(gates)<4 {
+	if gates:=d3_progress_gate_distances(length); len(gates)<4 {
 		return fmt.tprintf("the stage is %.0f m long and yields %d progress gates; Dirt 3 needs at least 4",length,len(gates)),false
 	}
 	progress,pok:=d3_progress_xml(line,job.Markers); if !pok { return "could not encode progress_track.xml",false }
 	ai,aok:=d3_ai_xml(line); if !aok { delete(progress); return "could not encode ai_track.xml",false }
-	defer delete(progress); defer delete(ai)
+	overrides,ook:=d3_route_overrides_build(line[len(line)-1].distance); if !ook { delete(progress); delete(ai); return "could not encode route_overrides.xml",false }
+	defer delete(progress); defer delete(ai); defer delete(overrides)
 	if write_msg,written:=d3_write_out(job,"progress_track.xml",progress); !written { return write_msg,false }
 	if write_msg,written:=d3_write_out(job,"ai_track.xml",ai); !written { return write_msg,false }
+	if write_msg,written:=d3_write_out(job,"route_overrides.xml",overrides); !written { return write_msg,false }
 	return fmt.tprintf(
 		"route data: %d progress gates, %d AI gates",
-		len(d3_progress_gate_distances(line[len(line)-1].distance,job.Markers)),
+		len(d3_progress_gate_distances(line[len(line)-1].distance)),
 		len(d3_ai_gate_distances(line[len(line)-1].distance)),
 	),true
+}
+
+// Distance bands over this route, in the shape stock route_overrides.xml
+// uses: one block per range plus a Systems row. A short debug route gets a
+// single block; the cull values copy stock block0, the one whose range our
+// whole route fits inside.
+d3_route_overrides_build :: proc(length: f32, allocator := context.allocator) -> (data: []u8, ok: bool) {
+	if length < 1 { return nil, false }
+	block := bxml_node("block0", []Bxml_Attr{
+		{"start", "-4.5"}, {"end", d3_f5(length)},
+		{"world_cull_dist", "1000.0"}, {"track_cull_dist", "530.0"},
+		{"track_lod_dist", "160.0"}, {"shadow_dist", "80.0"},
+		{"envmap_cull_dist", "50"}, {"main_obj_size", "0.01"},
+		{"shadow_obj_size", "0.05"}, {"refmap_obj_size", "0.3"},
+		{"fade", "20.0"},
+	})
+	systems := bxml_node("Systems", []Bxml_Attr{
+		{"tree_settings", "medium"}, {"ornament_settings", "low"},
+	})
+	root := bxml_node("route", nil, []^Bxml_Node{block, systems})
+	return bxml_build(root, allocator)
 }
