@@ -1,5 +1,6 @@
 package d3
 
+import "core:fmt"
 import "core:slice"
 import "core:testing"
 
@@ -133,4 +134,62 @@ ens_edit_by_filtering_and_appending_nodes :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, !found_old)
 	testing.expect(t, found_new)
+}
+
+@(test)
+ens_static_set_synthesizes_reference_and_matching_physics_instances :: proc(t: ^testing.T) {
+	placements := []D3_Placement_Instance{
+		{reference_id=7, basis=D3_BASIS_IDENTITY, position={10,20,30}},
+		{reference_id=7, basis={{0,0,-2},{0,2,0},{2,0,0}}, position={40,50,60}},
+	}
+	nodes, msg, ok := d3_ens_static_set_nodes({
+		ens_reference_id="fir", entity_uri="objecttypes.pssg#fir.max",
+		instance_id_prefix="stage_fir", instances=placements,
+		placement_reference_id=7,
+	}, context.temp_allocator)
+	testing.expect(t, ok, msg)
+	testing.expect_value(t, len(nodes), 3)
+	testing.expect_value(t, nodes[0].tag, "TEMPLATEENTITYREFERENCE")
+	ref_uri, ref_uri_ok := ens_attr(nodes[0], "uri")
+	testing.expect(t, ref_uri_ok)
+	testing.expect_value(t, ref_uri, "objecttypes.pssg#fir.max")
+
+	for i in 0..<2 {
+		testing.expect_value(t, nodes[i+1].tag, "TEMPLATEBASICENTITYINSTANCE")
+		uri, uri_ok := ens_attr(nodes[i+1], "uri")
+		testing.expect(t, uri_ok)
+		testing.expect_value(t, uri, "#fir")
+		tag, tag_ok := ens_attr(nodes[i+1], "instance_tag")
+		testing.expect(t, tag_ok)
+		testing.expect_value(t, tag, fmt.tprintf("%d", i+1))
+		testing.expect_value(t, len(nodes[i+1].children), 1)
+	}
+
+	encoded := d3_ens_emit(nodes, context.temp_allocator)
+	reparsed, reparsed_ok := d3_ens_parse(encoded, context.temp_allocator)
+	testing.expect(t, reparsed_ok)
+	testing.expect_value(t, len(reparsed), 3)
+	testing.expect_value(t, reparsed[1].children[0].text, "1 0 0 0 0 1 0 0 0 0 1 0 10 20 30 1 ")
+	testing.expect_value(t, reparsed[2].children[0].text, "0 0 -2 0 0 2 0 0 2 0 0 0 40 50 60 1 ")
+}
+
+@(test)
+ens_static_set_rejects_a_mismatched_visual_reference :: proc(t: ^testing.T) {
+	placements := []D3_Placement_Instance{{reference_id=8, basis=D3_BASIS_IDENTITY}}
+	_, _, ok := d3_ens_static_set_nodes({
+		ens_reference_id="fir", entity_uri="objecttypes.pssg#fir.max",
+		instance_id_prefix="stage_fir", instances=placements,
+		placement_reference_id=7,
+	}, context.temp_allocator)
+	testing.expect(t, !ok)
+}
+
+@(test)
+ens_static_set_omits_an_empty_type :: proc(t: ^testing.T) {
+	nodes, _, ok := d3_ens_static_set_nodes({
+		ens_reference_id="fir", entity_uri="objecttypes.pssg#fir.max",
+		instance_id_prefix="stage_fir", placement_reference_id=7,
+	}, context.temp_allocator)
+	testing.expect(t, ok)
+	testing.expect_value(t, len(nodes), 0)
 }

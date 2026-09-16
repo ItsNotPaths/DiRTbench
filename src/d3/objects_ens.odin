@@ -1,17 +1,22 @@
 package d3
 
+import "core:fmt"
 import "core:strconv"
 import "core:strings"
 
 // `objects.ens`: the per-route physics/cloth placement file — rigid-body
-// props (hay bales, fences, tyre stacks) and cloth (pole mesh/tape), traced
+// props (hay bales, fences, tyre stacks), the collidable subset of static
+// trees/ornaments, and cloth (pole mesh/tape), traced
 // in Ghidra to a real runtime load inside physics setup, not the renderer.
 // Unlike `trees.bin`/`ornaments.bin` this is plain text, not BinXML: CRLF
 // line endings, no trailing newline, a fixed header and footer, and a flat
 // list of records in between. A hand-built parser/emitter round-trips a real
 // stock file byte-for-byte, which is what `d3_ens_parse`/`d3_ens_emit` below
 // do — see `docs/dirt3-odin-roadmap.md` and `docs/roadmap-venues.md` for the
-// byte-level evidence and the live-drive confirmations.
+// byte-level evidence and the live-drive confirmations. Static scenery is
+// deliberately duplicated: trees.bin/ornaments.bin place its render copy,
+// while a matching ENS instance places its objecttypes.pssg rigid body. See
+// docs/dirt3-static-object-collision.md.
 //
 // Five record shapes appear, and every one fits one of three generic shapes
 // rather than needing its own struct: self-closing (`TEMPLATEENTITYREFERENCE`,
@@ -241,4 +246,93 @@ d3_ens_emit :: proc(nodes: []Ens_Node, allocator := context.allocator) -> []u8 {
 	for node in nodes { ens_write_node(&b, node, 2) }
 	strings.write_string(&b, ENS_FOOTER)
 	return b.buf[:]
+}
+
+// One object type's visual placements and corresponding rigid bodies.
+D3_Ens_Static_Set :: struct {
+	ens_reference_id:      string,
+	entity_uri:            string,
+	instance_id_prefix:    string,
+	placement_reference_id: u32,
+	instances:             []D3_Placement_Instance,
+}
+
+ens_owned_attrs :: proc(pairs: ..Ens_Attr, allocator := context.allocator) -> []Ens_Attr {
+	out := make([]Ens_Attr, len(pairs), allocator)
+	for pair, i in pairs {
+		out[i] = {
+			name  = strings.clone(pair.name, allocator),
+			value = strings.clone(pair.value, allocator),
+		}
+	}
+	return out
+}
+
+ens_owned_child :: proc(child: Ens_Node, allocator := context.allocator) -> []Ens_Node {
+	out := make([]Ens_Node, 1, allocator)
+	out[0] = child
+	return out
+}
+
+// objecttypes.pssg's shape-local transform is composed later by the engine.
+d3_ens_placement_transform :: proc(instance: D3_Placement_Instance, allocator := context.allocator) -> Ens_Node {
+	text := fmt.tprintf(
+		"%.9g %.9g %.9g 0 %.9g %.9g %.9g 0 %.9g %.9g %.9g 0 %.9g %.9g %.9g 1 ",
+		instance.basis[0][0], instance.basis[0][1], instance.basis[0][2],
+		instance.basis[1][0], instance.basis[1][1], instance.basis[1][2],
+		instance.basis[2][0], instance.basis[2][1], instance.basis[2][2],
+		instance.position[0], instance.position[1], instance.position[2],
+	)
+	return {
+		tag     = "TEMPLATETRANSFORM",
+		content = .Text,
+		text    = strings.clone(text, allocator),
+	}
+}
+
+// Emit BASIC physics entities from the exact slice used by the visual writer.
+d3_ens_static_set_nodes :: proc(
+	set: D3_Ens_Static_Set,
+	allocator := context.allocator,
+) -> (
+	nodes: []Ens_Node,
+	msg: string,
+	ok: bool,
+) {
+	if set.ens_reference_id == "" { return nil, "ENS static set needs a reference id", false }
+	if set.entity_uri == "" { return nil, "ENS static set needs an objecttypes entity URI", false }
+	if set.instance_id_prefix == "" { return nil, "ENS static set needs an instance id prefix", false }
+	if len(set.instances) == 0 { return []Ens_Node{}, "0 static physics instances", true }
+	for instance, i in set.instances {
+		if instance.reference_id != set.placement_reference_id {
+			return nil, fmt.tprintf(
+				"ENS static set instance %d uses visual reference %d, expected %d",
+				i, instance.reference_id, set.placement_reference_id,
+			), false
+		}
+	}
+
+	out := make([]Ens_Node, 1+len(set.instances), allocator)
+	out[0] = {
+		tag = "TEMPLATEENTITYREFERENCE",
+		attrs = ens_owned_attrs(
+			{"id", set.ens_reference_id}, {"uri", set.entity_uri}, {"allocAlt", "5"},
+			allocator = allocator,
+		),
+		content = .Self_Close,
+	}
+	for instance, i in set.instances {
+		id := fmt.tprintf("%s_%d", set.instance_id_prefix, i)
+		tag := fmt.tprintf("%d", i+1)
+		out[1+i] = {
+			tag = "TEMPLATEBASICENTITYINSTANCE",
+			attrs = ens_owned_attrs(
+				{"id", id}, {"uri", fmt.tprintf("#%s", set.ens_reference_id)}, {"instance_tag", tag},
+				allocator = allocator,
+			),
+			content  = .Children,
+			children = ens_owned_child(d3_ens_placement_transform(instance, allocator), allocator),
+		}
+	}
+	return out, fmt.tprintf("%d static physics instances of %s", len(set.instances), set.entity_uri), true
 }

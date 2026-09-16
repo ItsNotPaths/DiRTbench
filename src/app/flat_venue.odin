@@ -37,7 +37,8 @@ package main
 // than one quad so the archive still partitions correctly.
 //
 // Off the +X side of the road: a 3x3 square of trees, tag 3, registered in
-// the rebuilt track.vis like any other tree. Off the -X side: a haybale stack
+// the rebuilt track.vis like any other tree, with matching BASIC entities in
+// objects.ens for collision. Off the -X side: a haybale stack
 // and a house stack through objects.ens, which needs no VIS entry at all —
 // see memory dirt3-objects-ens-vis-linkage: a native, one-group,
 // everything-visible track.vis (this venue's own, never a donor's) already
@@ -92,6 +93,7 @@ flat_venue_tiled_plane :: proc(
 // trees.bin, the donor every flatvenue-style project hardlinks its
 // trees.bin from. Specific to that donor; re-check if the base venue changes.
 FLAT_VENUE_TREE_REF :: 1
+FLAT_VENUE_TREE_ENTITY :: "objecttypes.pssg#dougfir_tall_02_a.max"
 FLAT_VENUE_HAYBALE_MESH :: "objecttypes.pssg#core_barr_haybale_e.max"
 FLAT_VENUE_HOUSE_MESH :: "objecttypes.pssg#rural_house_yellow_a.max"
 
@@ -254,7 +256,8 @@ flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: boo
 
 	trees_data, trees_err := os.read_entire_file(trees_path, context.temp_allocator)
 	if trees_err != nil { return fmt.tprintf("could not read %s: %v", trees_path, trees_err), false }
-	new_trees, trees_msg, trees_ok := d3.d3_placement_relocate(trees_data, flat_venue_tree_square(context.temp_allocator), context.temp_allocator)
+	tree_instances := flat_venue_tree_square(context.temp_allocator)
+	new_trees, trees_msg, trees_ok := d3.d3_placement_relocate(trees_data, tree_instances, context.temp_allocator)
 	if !trees_ok { return fmt.tprintf("trees.bin: %s", trees_msg), false }
 	if write_msg, written := d3.Atomic_Write(trees_path, new_trees); !written { return write_msg, false }
 
@@ -265,6 +268,15 @@ flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: boo
 	if write_msg, written := d3.Atomic_Write(ornaments_path, new_ornaments); !written { return write_msg, false }
 
 	nodes := make([dynamic]d3.Ens_Node, context.temp_allocator)
+	tree_physics, tree_physics_msg, tree_physics_ok := d3.d3_ens_static_set_nodes({
+		ens_reference_id       = "flat_tree",
+		entity_uri             = FLAT_VENUE_TREE_ENTITY,
+		instance_id_prefix     = "flat_tree",
+		placement_reference_id = FLAT_VENUE_TREE_REF,
+		instances              = tree_instances,
+	}, context.temp_allocator)
+	if !tree_physics_ok { return fmt.tprintf("objects.ens trees: %s", tree_physics_msg), false }
+	append(&nodes, ..tree_physics)
 	append(&nodes, ..flat_venue_haybale_stack(context.temp_allocator))
 	append(&nodes, ..flat_venue_house_stack(context.temp_allocator))
 	ens_data := d3.d3_ens_emit(nodes[:], context.temp_allocator)
@@ -275,7 +287,7 @@ flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: boo
 	if write_msg, written := d3.Atomic_Write(vis_path, vis_data); !written { return write_msg, false }
 
 	return fmt.tprintf(
-		"%s\ntracksplit.pssg: %s\nroute: %s\ntrees.bin: %s\nornaments.bin: %s\nobjects.ens: %d nodes (haybale stack + house stack)\ntrack.vis: %s",
-		dir, tracksplit_msg, route_msg, trees_msg, ornaments_msg, len(nodes), vis_msg,
+		"%s\ntracksplit.pssg: %s\nroute: %s\ntrees.bin: %s\nornaments.bin: %s\nobjects.ens: %d nodes (%s + haybale stack + house stack)\ntrack.vis: %s",
+		dir, tracksplit_msg, route_msg, trees_msg, ornaments_msg, len(nodes), tree_physics_msg, vis_msg,
 	), true
 }
