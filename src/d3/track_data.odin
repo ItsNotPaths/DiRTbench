@@ -12,8 +12,7 @@ D3_AI_GATE_STEP :: f32(17)
 D3_AI_MIN_GATES :: 61 // smallest count in the stock route census
 D3_PROGRESS_GATE_WIDTH :: f32(53)
 D3_RACING_INSET :: f32(1.4)
-// Stock routes never ship more than 4 timed sections, and steerAssistData.xml
-// holds exactly split_0..split_3.  A 5th section overruns that array.
+// steerAssistData.xml only has storage for three intermediate checkpoints.
 D3_MAX_TIME_SPLITS :: 3
 
 Route_Station :: struct {
@@ -58,6 +57,14 @@ d3_even_distances :: proc(length, step: f32, allocator := context.temp_allocator
 	out := make([]f32, count, allocator)
 	for i in 0..<count { out[i] = length*f32(i)/f32(count-1) }
 	return out
+}
+
+// The engine's route interpolator assumes at least the smallest gate count
+// seen in stock data, even when the physical route is much shorter than the
+// usual 17 m sampling interval.
+d3_ai_gate_distances :: proc(length: f32, allocator := context.temp_allocator) -> []f32 {
+	step := min(D3_AI_GATE_STEP, length/f32(D3_AI_MIN_GATES-1))
+	return d3_even_distances(length, step, allocator)
 }
 
 d3_f3 :: proc(v: [3]f32) -> string { return fmt.tprintf("%.2f %.2f %.2f", v[0],v[1],v[2]) }
@@ -116,12 +123,13 @@ d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, alloca
 
 d3_ai_xml :: proc(line: []Route_Station, allocator := context.allocator) -> (data: []u8, ok: bool) {
 	length:=line[len(line)-1].distance
-	ai_step := min(D3_AI_GATE_STEP, length/f32(D3_AI_MIN_GATES-1))
-	distances:=d3_even_distances(length,ai_step)
+	distances:=d3_ai_gate_distances(length)
 	gates:=make([dynamic]^Bxml_Node,context.temp_allocator)
 	for distance,i in distances {
-		s:=d3_station_at(line,distance); width:=d3_dist(s.left,s.right); inset:=min(D3_RACING_INSET,width/4)
-		dx,dz:=s.right[0]-s.left[0],s.right[2]-s.left[2]; n:=math.sqrt(dx*dx+dz*dz)
+		s:=d3_station_at(line,distance)
+		dx,dz:=s.right[0]-s.left[0],s.right[2]-s.left[2]
+		width:=math.sqrt(dx*dx+dz*dz)
+		inset:=min(D3_RACING_INSET,width/4)
 		waypoints:=[]^Bxml_Node{
 			bxml_node("waypoint",[]Bxml_Attr{{"id","0"},{"type","left_track_limit"},{"length","0.00"}}),
 			bxml_node("waypoint",[]Bxml_Attr{{"id","1"},{"type","left_racing_limit"},{"length",fmt.tprintf("%.2f",inset)}}),
@@ -132,7 +140,7 @@ d3_ai_xml :: proc(line: []Route_Station, allocator := context.allocator) -> (dat
 		}
 		append(&gates,bxml_node("gate",[]Bxml_Attr{{"id",d3_i(i)}},[]^Bxml_Node{
 			bxml_text("position",d3_f3(s.left),[]Bxml_Attr{{"format","float3"}}),
-			bxml_text("normal",fmt.tprintf("%.6f 0.0 %.6f",dx/n,dz/n),[]Bxml_Attr{{"format","float3"}}),
+			bxml_text("normal",fmt.tprintf("%.6f 0.0 %.6f",dx/width,dz/width),[]Bxml_Attr{{"format","float3"}}),
 			bxml_node("waypoints",[]Bxml_Attr{{"num_waypoints","6"}},waypoints),
 		}))
 	}
@@ -150,6 +158,10 @@ d3_validate_route :: proc(route:[]Route_Sample) -> (msg:string,ok:bool) {
 	if len(route)<2 { return "Dirt 3 export needs at least two route samples",false }
 	for sample,i in route {
 		if d3_dist(sample.Left,sample.Right)<0.1 { return fmt.tprintf("Dirt 3 route sample %d has no width",i),false }
+		dx, dz := sample.Right[0]-sample.Left[0], sample.Right[2]-sample.Left[2]
+		if dx*dx+dz*dz < 0.01 {
+			return fmt.tprintf("Dirt 3 route sample %d has no horizontal width",i),false
+		}
 		points := [3][3]f32{sample.Centre,sample.Left,sample.Right}
 		for point in points {
 			for value in point { if value!=value || math.abs(value)>3.4028234e38 { return fmt.tprintf("Dirt 3 route sample %d is not finite",i),false } }
@@ -162,6 +174,9 @@ d3_validate_markers :: proc(markers:[]Progress_Marker,length:f32) -> (msg:string
 	if len(markers)<2 || markers[0].Kind!=.Start || markers[len(markers)-1].Kind!=.Finish {
 		return "Dirt 3 progress markers need one start and one finish",false
 	}
+	if markers[0].Distance <= 0 || markers[len(markers)-1].Distance >= length {
+		return "Dirt 3 progress markers need road before the start and after the finish",false
+	}
 	previous:f32=-1
 	for marker,i in markers {
 		if marker.Distance<0 || marker.Distance>length || marker.Distance<=previous { return fmt.tprintf("Dirt 3 progress marker %d is out of order",i),false }
@@ -169,7 +184,7 @@ d3_validate_markers :: proc(markers:[]Progress_Marker,length:f32) -> (msg:string
 		previous=marker.Distance
 	}
 	if checkpoints:=len(markers)-2; checkpoints>D3_MAX_TIME_SPLITS {
-		return fmt.tprintf("Dirt 3 holds at most %d checkpoints, which is %d timed sections; this stage has %d",D3_MAX_TIME_SPLITS,D3_MAX_TIME_SPLITS+1,checkpoints),false
+		return fmt.tprintf("Dirt 3 holds at most %d checkpoints; this stage has %d",D3_MAX_TIME_SPLITS,checkpoints),false
 	}
 	return "",true
 }
@@ -194,6 +209,6 @@ d3_write_track_data :: proc(job:^Export_Job) -> (msg:string,ok:bool) {
 	return fmt.tprintf(
 		"route data: %d progress gates, %d AI gates",
 		len(d3_progress_gate_distances(line[len(line)-1].distance,job.Markers)),
-		max(D3_AI_MIN_GATES, len(d3_even_distances(line[len(line)-1].distance,D3_AI_GATE_STEP))),
+		len(d3_ai_gate_distances(line[len(line)-1].distance)),
 	),true
 }

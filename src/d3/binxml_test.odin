@@ -118,3 +118,24 @@ dirt3_progress_refuses_a_fifth_timed_section :: proc(t:^testing.T) {
 	msg,bad:=d3_validate_markers(five,400)
 	testing.expect(t,!bad); testing.expect(t,len(msg)>0)
 }
+
+@(test)
+dirt3_progress_requires_start_and_finish_buffers :: proc(t: ^testing.T) {
+	start_at_origin := []Progress_Marker{{.Start,0},{.Finish,90}}
+	finish_at_end := []Progress_Marker{{.Start,10},{.Finish,100}}
+	_, start_ok := d3_validate_markers(start_at_origin, 100)
+	_, finish_ok := d3_validate_markers(finish_at_end, 100)
+	testing.expect(t, !start_ok)
+	testing.expect(t, !finish_ok)
+}
+
+@(test)
+dirt3_route_rejects_vertical_ai_cross_section :: proc(t: ^testing.T) {
+	route := []Route_Sample{
+		{Centre={0,0,0}, Left={0,-1,0}, Right={0,1,0}},
+		{Centre={0,0,10}, Left={0,-1,10}, Right={0,1,10}},
+	}
+	msg, ok := d3_validate_route(route)
+	testing.expect(t, !ok)
+	testing.expect(t, len(msg) > 0)
+}
