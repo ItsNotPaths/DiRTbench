@@ -309,6 +309,18 @@ run_cli :: proc() -> (handled: bool) {
 	}
 	// `--dirt3-bisect-1 <venue_id> [<route_id>]`: AI-finalise-hang bisection,
 	// stage 1 -- see finland_bisect.odin for what it does and why.
+	// `--dirt3-paths-place <venue_id> [<route_id>]`: the full custom-level
+	// debug emit -- route core, ground, tree plus, haybales, houses, stubs.
+	// See paths_place.odin.
+	if len(args) >= 2 && args[0] == "--dirt3-paths-place" {
+		route := len(args) >= 3 && args[2] != "--debug-out" ? args[2] : "route_0"
+		debug_out := (len(args) >= 3 && args[2] == "--debug-out") || (len(args) >= 4 && args[3] == "--debug-out")
+		target := Paths_Place_Target.Installed
+		if debug_out { target = .Debug_Out }
+		msg, ok := paths_place_headless(args[1], route, target)
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
+	}
 	if len(args) >= 2 && args[0] == "--dirt3-bisect-1" {
 		route := len(args) >= 3 ? args[2] : "route_0"
 		msg, ok := finland_bisect_stage1_headless(args[1], route)
