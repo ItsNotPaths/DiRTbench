@@ -133,11 +133,68 @@ terrain_node_count :: proc(t: ^Terrain) -> int {
 	return len(t.controls)
 }
 
-// Drop the sculpt controls. Replacing the spline wholesale must not carry its
+// --- sculpt snapshot --------------------------------------------------------
+//
+// The whole control set, saved and restored in one piece. There is no
+// incremental form: the set is re-derived from the ribbon on every rebuild, so
+// a road edit renumbers it wholesale and an index into it means nothing later.
+//
+// What survives is the offset at a world position. `base_y` and `radius` are
+// both re-derived, so only x, z and offset are kept.
+
+// Seed the controls from a snapshot. They are not the live set: the next
+// rebuild re-derives that from the ribbon and carries these offsets across by
+// position (see terrain_control_add). Clearing the signature is what forces
+// that rebuild to happen.
+terrain_sculpt_load :: proc(t: ^Terrain, saved: []Terrain_Control) {
+	clear(&t.controls)
+	append(&t.controls, ..saved)
+	t.controls_gen = 0
+	t.controls_reach, t.controls_cell, t.controls_spacing = 0, 0, 0
+}
+
+// Drop the sculpt. Replacing the spline wholesale must not carry its
 // world-space offsets into an unrelated route.
 terrain_invalidate :: proc(t: ^Terrain) {
-	clear(&t.controls)
-	t.controls_gen = 0
+	terrain_sculpt_load(t, nil)
+}
+
+// Back to defaults, sculpt dropped. Assigning TERRAIN_DEFAULTS wholesale would
+// drop the control allocation with it.
+terrain_reset :: proc(t: ^Terrain) {
+	d := TERRAIN_DEFAULTS
+	t.enabled = d.enabled
+	t.reach_m, t.blend_m, t.cell_m, t.row_m = d.reach_m, d.blend_m, d.cell_m, d.row_m
+	terrain_invalidate(t)
+}
+
+// The control set, for saving. **Every control, not only the moved ones.**
+//
+// terrain_control_add adopts the offset of the nearest old control within
+// spacing*1.5. The untouched controls are what stop that reaching: a new
+// control finds its own zero at distance ~0 and keeps it. Drop them and every
+// control within one and a half spacings of a moved one inherits its height,
+// so the sculpt smears outward on every load.
+//
+// An untouched terrain saves nothing at all. With no offsets to carry, the
+// match has no work to do, and the alternative is thousands of zeroes in the
+// file for every venue that was never sculpted.
+terrain_sculpt :: proc(t: ^Terrain, allocator := context.temp_allocator) -> []Terrain_Control {
+	sculpted := false
+	for c in t.controls {
+		if c.offset != 0 {
+			sculpted = true
+			break
+		}
+	}
+	if !sculpted {
+		return nil
+	}
+	out := make([]Terrain_Control, len(t.controls), allocator)
+	for c, i in t.controls {
+		out[i] = {x = c.x, z = c.z, offset = c.offset}
+	}
+	return out
 }
 
 terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughness: f32) {

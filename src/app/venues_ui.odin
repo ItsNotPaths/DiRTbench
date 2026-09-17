@@ -379,14 +379,14 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 		path = venue_stage_path(p.id, p.stages[0])
 		migrating = true
 	}
-	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing); !ok {
+	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing, &ed.terrain); !ok {
 		set_status(ed, msg, false)
 		return false
 	}
 	ed.start, ed.finish = venue_markers(p^)
 	ed.stage_mode = false
 	if migrating {
-		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing); !ok {
+		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing, &ed.terrain); !ok {
 			set_status(ed, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
 			return false
 		}

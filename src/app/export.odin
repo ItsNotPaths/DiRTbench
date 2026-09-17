@@ -410,7 +410,6 @@ export_headless :: proc(
 		pace      = geo.PACE_DEFAULTS,
 		veg       = geo.VEG_DEFAULTS,
 	}
-	ed.terrain.enabled = terrain
 	ed.debug_export = debug_out
 	install_scan_init(&ed.install)
 	defer install_scan_delete(&ed.install)
@@ -435,18 +434,21 @@ export_headless :: proc(
 			// A venue stage is compiled out of the road graph, not read from a
 			// document of its own.
 			stage, cmsg, cok := venue_compile_route(
-				p, ed.open_stage, &ed.veg, &ed.timing, context.allocator,
+				p, ed.open_stage, &ed.veg, &ed.timing, &ed.terrain, context.allocator,
 			)
 			if !cok { return cmsg, false }
 			delete(ed.spline.points)
 			ed.spline = stage
 			return cmsg, true
 		}
-		return load_stage(&ed.spline, stage, &ed.veg, &ed.timing)
+		return load_stage(&ed.spline, stage, &ed.veg, &ed.timing, &ed.terrain)
 	}
 	if m, lok := load(&ed, stage); !lok {
 		return m, false
 	}
+	// The document owns the sculpt and the sliders. The flag only forces ground
+	// on for a stage that has none.
+	ed.terrain.enabled = ed.terrain.enabled || terrain
 	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), context.allocator)
 	defer delete(ed.ribbon)
 	ed.ribbon_gen = 1

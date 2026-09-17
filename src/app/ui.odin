@@ -29,7 +29,7 @@ do_save :: proc(ed: ^Editor) {
 	// maps/ under whatever the name field says would quietly fork the document.
 	if ed.open_venue != "" {
 		path := venue_road_path(ed.open_venue)
-		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing)
+		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing, &ed.terrain)
 		if ok {
 			// The markers are the stage, and they live in venue.json. Saving the
 			// road without them would drop the start and finish lines.
@@ -43,7 +43,7 @@ do_save :: proc(ed: ^Editor) {
 	}
 	name := sanitise_stage_name(stage_name_text(ed))
 	set_stage_name(ed, name)
-	msg, ok := save_stage(ed.spline, name, ed.veg, ed.timing)
+	msg, ok := save_stage(ed.spline, name, ed.veg, ed.timing, &ed.terrain)
 	set_status(ed, msg, ok)
 }
 
@@ -61,11 +61,12 @@ do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 }
 
 do_load :: proc(ed: ^Editor, name: string) {
-	msg, ok := load_stage(&ed.spline, name, &ed.veg, &ed.timing)
+	// The sculpt comes out of the file, so it must not be invalidated after:
+	// the loaded offsets are what the next rebuild re-attaches by position.
+	msg, ok := load_stage(&ed.spline, name, &ed.veg, &ed.timing, &ed.terrain)
 	if ok {
 		set_stage_name(ed, name)
 		ed.sel = {} // indices from the old spline mean nothing now
-		geo.terrain_invalidate(&ed.terrain) // and so do the route's world controls
 		mark_dirty(ed)
 	}
 	set_status(ed, msg, ok)

@@ -485,6 +485,7 @@ venue_compile_route :: proc(
 	route_id: string,
 	veg: ^geo.Veg_Params = nil,
 	timing: ^Timing_Params = nil,
+	terrain: ^geo.Terrain = nil,
 	allocator := context.allocator,
 ) -> (out: geo.Spline, msg: string, ok: bool) {
 	for route in p.routes {
@@ -494,7 +495,7 @@ venue_compile_route :: proc(
 		}
 		road: geo.Spline
 		defer delete(road.points)
-		if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), veg, timing); !loaded {
+		if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), veg, timing, terrain); !loaded {
 			return out, load_msg, false
 		}
 		return geo.compile_stage(road, route.start, route.finish, allocator)
@@ -671,19 +672,22 @@ venue_tracksplit_collision :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	road: geo.Spline
-	defer delete(road.points)
-	if load_msg, loaded := load_stage_from(&road, venue_road_path(id), nil, nil); !loaded {
-		return nil, nil, nil, load_msg, false
-	}
-
 	ed := Editor{
 		topo      = geo.SAMPLES_PER_SEG,
 		roughness = 0,
 		terrain   = geo.TERRAIN_DEFAULTS,
 	}
-	ed.terrain.enabled = terrain
 	defer geo.terrain_delete(&ed.terrain)
+
+	road: geo.Spline
+	defer delete(road.points)
+	if load_msg, loaded := load_stage_from(&road, venue_road_path(id), nil, nil, &ed.terrain); !loaded {
+		return nil, nil, nil, load_msg, false
+	}
+	// The document owns the sculpt and the sliders. The flag only forces ground
+	// on for a venue that has none.
+	ed.terrain.enabled = ed.terrain.enabled || terrain
+
 	defer geo.terrain_field_delete(&ed.terrain_field)
 	ed.spline = road
 	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), allocator)

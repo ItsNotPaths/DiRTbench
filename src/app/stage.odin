@@ -30,7 +30,8 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // to zero, which is the correct default (no cliff / no roughness offset / veg off).
 // v6 added the parent index and v7 the weld. Both are read behind a version
 // check, because zero is a valid point index and would silently mean "point 0".
-STAGE_VERSION :: 7
+// v8 added the terrain block.
+STAGE_VERSION :: 8
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
@@ -72,6 +73,24 @@ Stage_Timing :: struct {
 	buffer_m: f32,
 }
 
+// The terrain block (v8). The sliders, plus the sculpt as a set of world-space
+// offsets — see geo.terrain_sculpt for why only those three fields keep.
+// Absent in older files, where every field unmarshals to zero. That reads as
+// terrain off with no controls, so an old road simply carries no ground.
+Stage_Terrain_Control :: struct {
+	x, z:   f32,
+	offset: f32,
+}
+
+Stage_Terrain :: struct {
+	enabled:  bool,
+	reach_m:  f32,
+	blend_m:  f32,
+	cell_m:   f32,
+	row_m:    f32,
+	controls: []Stage_Terrain_Control,
+}
+
 Stage_File :: struct {
 	format:  string,
 	version: int,
@@ -79,6 +98,7 @@ Stage_File :: struct {
 	points:  []Stage_Point,
 	veg:     Stage_Veg,
 	timing:  Stage_Timing,
+	terrain: Stage_Terrain,
 }
 
 // --- paths ------------------------------------------------------------------
@@ -147,11 +167,11 @@ quat_from_array :: proc(a: [4]f32) -> rl.Quaternion {
 // --- save / load ------------------------------------------------------------
 
 // Writes maps/<name>.json. Returns a message fit for the status line.
-save_stage :: proc(sp: geo.Spline, name: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS) -> (msg: string, ok: bool) {
+save_stage :: proc(sp: geo.Spline, name: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
 	if _, dir_ok := ensure_maps_dir(); !dir_ok {
 		return fmt.tprintf("could not create %s", maps_dir()), false
 	}
-	if msg, ok = save_stage_to(sp, stage_path(name), veg, timing); !ok {
+	if msg, ok = save_stage_to(sp, stage_path(name), veg, timing, terrain); !ok {
 		return
 	}
 	return fmt.tprintf("saved %d points to maps/%s%s", len(sp.points), name, STAGE_EXT), true
@@ -159,7 +179,7 @@ save_stage :: proc(sp: geo.Spline, name: string, veg := geo.VEG_DEFAULTS, timing
 
 // The same document, at a path the caller chose. A venue's stages live under
 // `venues/<id>/stages/`, not in `maps/`.
-save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS) -> (msg: string, ok: bool) {
+save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
 	if len(sp.points) < 2 {
 		return "nothing to save: a stage needs at least 2 points", false
 	}
@@ -201,6 +221,21 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 		},
 		timing = {checkpoint_count=i32(timing.checkpoint_count),buffer_m=timing.buffer_m},
 	}
+	if terrain != nil {
+		sculpt := geo.terrain_sculpt(terrain)
+		controls := make([]Stage_Terrain_Control, len(sculpt), context.temp_allocator)
+		for c, i in sculpt {
+			controls[i] = {x = c.x, z = c.z, offset = c.offset}
+		}
+		stage.terrain = {
+			enabled  = terrain.enabled,
+			reach_m  = terrain.reach_m,
+			blend_m  = terrain.blend_m,
+			cell_m   = terrain.cell_m,
+			row_m    = terrain.row_m,
+			controls = controls,
+		}
+	}
 	data, merr := json.marshal(stage, {pretty = true, use_spaces = true}, context.temp_allocator)
 	if merr != nil {
 		return fmt.tprintf("could not encode stage: %v", merr), false
@@ -216,12 +251,12 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 // on any failure — a bad file must not destroy the spline in the editor. When
 // `veg` is non-nil it receives the stage's vegetation block, or VEG_DEFAULTS for a
 // pre-v4 file that predates it.
-load_stage :: proc(sp: ^geo.Spline, name: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil) -> (msg: string, ok: bool) {
-	return load_stage_from(sp, stage_path(name), veg, timing)
+load_stage :: proc(sp: ^geo.Spline, name: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
+	return load_stage_from(sp, stage_path(name), veg, timing, terrain)
 }
 
 // The same document, from a path the caller chose. See save_stage_to.
-load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil) -> (msg: string, ok: bool) {
+load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
 	data, rerr := os.read_entire_file(path, context.temp_allocator)
 	if rerr != nil {
 		return fmt.tprintf("could not read %s: %v", path, rerr), false
@@ -312,6 +347,23 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 	if timing!=nil {
 		if stage.version<5 { timing^=TIMING_DEFAULTS } else {
 			timing^={checkpoint_count=c.int(clamp(stage.timing.checkpoint_count,0,20)),buffer_m=clamp(stage.timing.buffer_m,f32(0),f32(500))}
+		}
+	}
+	if terrain != nil {
+		if stage.version < 8 {
+			geo.terrain_reset(terrain) // predates the block: no ground, sane sliders
+		} else {
+			t := stage.terrain
+			saved := make([]geo.Terrain_Control, len(t.controls), context.temp_allocator)
+			for c, i in t.controls {
+				saved[i] = {x = c.x, z = c.z, offset = c.offset}
+			}
+			terrain.enabled = t.enabled
+			terrain.reach_m = clamp(t.reach_m, 0, geo.TERRAIN_REACH_MAX)
+			terrain.blend_m = max(t.blend_m, 0)
+			terrain.cell_m = max(t.cell_m, 1)
+			terrain.row_m = clamp(t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX)
+			geo.terrain_sculpt_load(terrain, saved)
 		}
 	}
 	return fmt.tprintf("loaded %d points from %s", len(sp.points), filepath.base(path)), true
