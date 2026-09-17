@@ -42,7 +42,7 @@ foreign imgui_lib {
 	@(link_name = "ImGuizmo_BeginFrame")
 	gizmo_begin_frame :: proc() ---
 
-	// The screen rect the gizmo projects into; must match the OpenGL viewport.
+	// The screen rect the gizmo projects into; must match the SDL_GPU viewport.
 	@(link_name = "ImGuizmo_SetRect")
 	gizmo_set_rect :: proc(x, y, width, height: f32) ---
 

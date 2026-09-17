@@ -63,7 +63,7 @@ Im_Col :: enum c.int {
 	Text = 0,
 }
 
-// --- SDL3/OpenGL backend lifecycle ------------------------------------------
+// --- SDL3/SDL_GPU backend lifecycle -----------------------------------------
 
 @(default_calling_convention = "c")
 foreign imgui {

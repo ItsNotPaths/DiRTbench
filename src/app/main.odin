@@ -2,7 +2,7 @@ package main
 
 // dirtbench — a DiRT 3 rally road editor.
 //
-// Editor slice: OpenGL viewport with an orbiting camera over a smooth,
+// Editor slice: SDL_GPU viewport with an orbiting camera over a smooth,
 // tangent-driven road ribbon. The road is a chain of oriented control points
 // (geo/spline.odin); selecting one shows a translate+rotate gizmo (gizmo.odin,
 // over the ImGuizmo binding in ui/) so it can be steered, sloped and banked.
