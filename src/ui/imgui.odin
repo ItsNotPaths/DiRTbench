@@ -1,12 +1,12 @@
 package ui
 
-// Odin bindings for Dear ImGui, via cimgui's flat C API, plus the rlImGui
-// raylib backend. Vendored and compiled into vendor/imgui/libimgui.a by
+// Odin bindings for Dear ImGui, via cimgui's flat C API, plus the official
+// SDL3/OpenGL3 backends. Vendored and compiled into vendor/imgui/libimgui.a by
 // download-deps.sh — see that script for the pinned versions and why they must
 // move as a set.
 //
 // Odin cannot call C++, so nothing here talks to ImGui:: directly. Everything
-// goes through cimgui's generated `ig*` functions, rlImGui's `extern "C"`
+// goes through cimgui's generated `ig*` functions, our backend shim,
 // entry points, or csrc/dirt_imgui_shim.cpp for the two ImGuiIO fields that have
 // no flat-C accessor.
 //
@@ -63,21 +63,23 @@ Im_Col :: enum c.int {
 	Text = 0,
 }
 
-// --- rlImGui: backend lifecycle ---------------------------------------------
+// --- SDL3/OpenGL backend lifecycle ------------------------------------------
 
 @(default_calling_convention = "c")
 foreign imgui {
-	// Creates the ImGui context and hooks up raylib input + an rlgl renderer.
-	// Call after InitWindow.
-	rlImGuiSetup :: proc(dark_theme: bool) ---
+	// Creates the ImGui context and attaches it to an SDL OpenGL window.
+	@(link_name = "dirtImGuiSetup")
+	imgui_backend_setup :: proc(dark_theme: bool, window, gl_context: rawptr) -> bool ---
 	// Begins the ImGui frame (feeds input, calls NewFrame). All ImGui and
 	// ImGuizmo calls for the frame go between Begin and End.
-	rlImGuiBegin :: proc() ---
-	// Ends the frame and renders the draw data through rlgl. Must be inside
-	// raylib's BeginDrawing/EndDrawing, and outside BeginMode3D/EndMode3D.
-	rlImGuiEnd :: proc() ---
-	// Destroys the context. Call before CloseWindow.
-	rlImGuiShutdown :: proc() ---
+	@(link_name = "dirtImGuiBegin")
+	imgui_backend_begin :: proc() ---
+	// Ends the frame and renders draw data into the current OpenGL context.
+	@(link_name = "dirtImGuiEnd")
+	imgui_backend_end :: proc() ---
+	// Destroys the context before its SDL window and GL context disappear.
+	@(link_name = "dirtImGuiShutdown")
+	imgui_backend_shutdown :: proc() ---
 }
 
 // --- dirt_imgui_shim: ImGuiIO fields with no flat-C accessor -------------------
@@ -91,6 +93,17 @@ foreign imgui {
 	// True when ImGui owns the keyboard, e.g. a text field has focus.
 	@(link_name = "dirtImGuiWantCaptureKeyboard")
 	imgui_want_capture_keyboard :: proc() -> bool ---
+
+	igGetForegroundDrawList_Nil :: proc() -> rawptr ---
+	igGetFont :: proc() -> rawptr ---
+	ImFont_CalcTextSizeA :: proc(font: rawptr, size, max_width, wrap_width: f32, text_begin, text_end: cstring, remaining: ^cstring) -> Im_Vec2 ---
+	ImDrawList_AddText_FontPtr :: proc(draw_list, font: rawptr, font_size: f32, pos: Im_Vec2, color: u32, text_begin, text_end: cstring, wrap_width: f32, clip_rect: ^Im_Vec4) ---
+}
+
+draw_overlay_text_centered :: proc(text: cstring, size, y, width: f32, color: u32) {
+	font := igGetFont()
+	extent := ImFont_CalcTextSizeA(font, size, 3.402823e38, 0, text, nil, nil)
+	ImDrawList_AddText_FontPtr(igGetForegroundDrawList_Nil(), font, size, {(width - extent.x) / 2, y}, color, text, nil, 0, nil)
 }
 
 // --- cimgui: the ImGui subset we use ----------------------------------------

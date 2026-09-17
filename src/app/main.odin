@@ -530,19 +530,26 @@ main :: proc() {
 		}
 		editor_venue = os.args[2]
 	}
-	rl.SetConfigFlags({.MSAA_4X_HINT, .WINDOW_RESIZABLE})
+	window: rl.Window
+	window_ok: bool
 	if editor_venue == "" {
-		rl.InitWindow(PROJECT_MANAGER_W, PROJECT_MANAGER_H, "dirtbench — project manager")
+		window_ok = rl.CreateWindow(&window, PROJECT_MANAGER_W, PROJECT_MANAGER_H, "dirtbench — project manager")
 	} else {
-		rl.InitWindow(WINDOW_W, WINDOW_H, "dirtbench — editor")
+		window_ok = rl.CreateWindow(&window, WINDOW_W, WINDOW_H, "dirtbench — editor")
 	}
-	defer rl.CloseWindow()
-	rl.SetTargetFPS(60)
+	if !window_ok {
+		fmt.println("could not create SDL window")
+		return
+	}
+	defer rl.DestroyWindow(&window)
 	// The backend installs its clip state with the window.
 	rl.SetClipPlanes(CAM_NEAR, CAM_FAR)
 
-	ui.rlImGuiSetup(true) // dark theme
-	defer ui.rlImGuiShutdown()
+	if !ui.imgui_backend_setup(true, rl.NativeWindow(&window), rl.NativeGLContext(&window)) {
+		fmt.println("could not initialize Dear ImGui")
+		return
+	}
+	defer ui.imgui_backend_shutdown()
 
 	// The default process is only the project manager. In particular, it does
 	// not initialize audio, seed an editor document, or allocate GPU geometry.
@@ -553,9 +560,10 @@ main :: proc() {
 		defer install_scan_delete(&ed.install)
 		venues_screen_init(&ed.screen)
 		defer venues_screen_delete(&ed.screen)
-		for !rl.WindowShouldClose() && !ed.quit {
+		for !rl.WindowShouldClose(&window) && !ed.quit {
+			rl.PollWindowEvents()
 			venues_editors_reap(&ed.screen)
-			draw_venues_frame(&ed)
+			draw_venues_frame(&ed, &window)
 			free_all(context.temp_allocator)
 		}
 		return
@@ -614,7 +622,9 @@ main :: proc() {
 	defer delete(ed.veg_cache)
 	mark_dirty(&ed)
 
-	for !rl.WindowShouldClose() && !ed.quit {
+	for !rl.WindowShouldClose(&window) && !ed.quit {
+		rl.PollWindowEvents()
+		rl.BeginWindowFrame(&window)
 		// ImGui gets first refusal on input: a click on a panel, or a keypress
 		// into a text field, must never also reach the viewport behind it.
 		ui_mouse := ui.imgui_want_capture_mouse()
@@ -677,7 +687,6 @@ main :: proc() {
 		node_pos := geo.terrain_node_world(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
 		sel_node := selected_node(&ed, node_pos)
 
-		rl.BeginDrawing()
 		rl.ClearBackground({26, 28, 34, 255})
 		rl.BeginMode3D(cam3d)
 		rl.DrawGrid(GRID_SLICES, GRID_SPACING)
@@ -696,17 +705,15 @@ main :: proc() {
 		}
 		rl.EndMode3D()
 
-		// Ride HUD: the current call, so firing is visible even with audio off.
-		if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.notes) {
-			txt := fmt.ctprintf("%s", geo.pace_note_text(ed.notes[ed.preview_last]))
-			tw := rl.MeasureText(txt, 40)
-			rl.DrawText(txt, (rl.GetScreenWidth() - tw) / 2, 40, 40, {255, 220, 120, 255})
-		}
-
 		// --- ImGui frame (the gizmo both draws and reports interaction) ----
 		// ImGuizmo draws into an ImGui draw list, so it lives here rather than
 		// inside BeginMode3D, and projects itself with the camera's matrices.
-		ui.rlImGuiBegin()
+		ui.imgui_backend_begin()
+		// Show the current call even when pace-note audio is disabled.
+		if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.notes) {
+			txt := fmt.ctprintf("%s", geo.pace_note_text(ed.notes[ed.preview_last]))
+			ui.draw_overlay_text_centered(txt, 40, 40, f32(rl.GetScreenWidth()), 0xff78dcff)
+		}
 		ui.gizmo_begin_frame()
 		ui.gizmo_set_orthographic(false)
 		ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
@@ -737,7 +744,7 @@ main :: proc() {
 		if ed.show_demo {
 			ui.igShowDemoWindow(&ed.show_demo)
 		}
-		ui.rlImGuiEnd()
+		ui.imgui_backend_end()
 
 		// --- input (now that gizmo interaction for this frame is known) ----
 		// A click arbitrates between a control point and a terrain node by depth,
@@ -809,7 +816,7 @@ main :: proc() {
 			}
 		}
 
-		rl.EndDrawing()
+		rl.EndWindowFrame(&window)
 		free_all(context.temp_allocator)
 	}
 }

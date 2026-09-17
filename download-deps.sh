@@ -72,7 +72,7 @@ fetch_sdl() {
 
 fetch_sdl
 
-# --- Dear ImGui + ImGuizmo (+ C APIs + raylib backend) -----------------------
+# --- Dear ImGui + ImGuizmo (+ C APIs + SDL3/OpenGL backend) ------------------
 # All five sources are C++ and all compile into one static lib, vendor/imgui/
 # libimgui.a, which src/imgui.odin and src/imguizmo.odin link against.
 #
@@ -80,7 +80,7 @@ fetch_sdl
 #   cimgui     generated flat C API for imgui                 (MIT)
 #   ImGuizmo   the 3D transform gizmo                         (MIT)
 #   cimguizmo  generated flat C API for ImGuizmo              (MIT)
-#   rlImGui    raylib backend; renders imgui through rlgl     (zlib)
+#   backends   official SDL3 platform + OpenGL3 renderer       (MIT)
 #
 # Odin cannot call C++, so everything crosses the boundary through the two
 # generated C APIs plus csrc/dirt_imgui_shim.cpp. Nothing here needs cimgui's Lua
@@ -92,32 +92,29 @@ fetch_sdl
 #     submodule), and cimguizmo.cpp against an exact ImGuizmo (likewise).
 #   - IMGUI_TAG must equal what CIMGUI_SHA's submodule points at (v1.92.8).
 #   - GUIZMO_SHA must equal what CIMGUIZMO_SHA's submodule points at.
-#   - RAYLIB_TAG must match ODINROOT vendor/raylib (libraylib.so.550).
-#   - rlImGui's Raylib_5_5 tag is the raylib-5.5-compatible cut.
 IMGUI_TAG="v1.92.8"
 CIMGUI_SHA="d298666861ebf00dcfeb2407409931c04e47e33c"
 GUIZMO_SHA="a712ea83e937cc6f11e22c3b2c82920857ae13df"
 CIMGUIZMO_SHA="c351c2da1de08d7db94a51ca12c3b03697aee80b"
-RLIMGUI_TAG="Raylib_5_5"
-RAYLIB_TAG="5.5"
 IMGUI_DEST="$VENDOR/imgui"
 
 # The layout below is dictated by the generated sources' own #includes:
 # cimgui.cpp does #include "./imgui/imgui.h", and cimguizmo.cpp does
 # #include "./ImGuizmo/src/ImGuizmo.h". Keep the tree shaped that way.
 fetch_imgui() {
-    if [ -f "$IMGUI_DEST/libimgui.a" ]; then
+    if [ -f "$IMGUI_DEST/libimgui.a" ] && [ -f "$IMGUI_DEST/backends/imgui_impl_sdl3.cpp" ]; then
         echo "  already present: imgui"
         return
     fi
     local tmp
     tmp="$(mktemp -d)"
-    mkdir -p "$IMGUI_DEST/imgui" "$IMGUI_DEST/ImGuizmo/src"
+    mkdir -p "$IMGUI_DEST/imgui" "$IMGUI_DEST/backends" "$IMGUI_DEST/ImGuizmo/src"
 
     echo "  downloading Dear ImGui $IMGUI_TAG..."
     curl -fsSL "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz" | tar xz -C "$tmp"
     cp "$tmp"/imgui-*/{imgui.cpp,imgui_draw.cpp,imgui_tables.cpp,imgui_widgets.cpp,imgui_demo.cpp} "$IMGUI_DEST/imgui/"
     cp "$tmp"/imgui-*/{imgui.h,imgui_internal.h,imconfig.h,imstb_textedit.h,imstb_rectpack.h,imstb_truetype.h} "$IMGUI_DEST/imgui/"
+    cp "$tmp"/imgui-*/backends/{imgui_impl_sdl3.cpp,imgui_impl_sdl3.h,imgui_impl_opengl3.cpp,imgui_impl_opengl3.h,imgui_impl_opengl3_loader.h} "$IMGUI_DEST/backends/"
 
     echo "  downloading cimgui @ ${CIMGUI_SHA:0:8}..."
     curl -fsSL "https://github.com/cimgui/cimgui/archive/${CIMGUI_SHA}.tar.gz" | tar xz -C "$tmp"
@@ -131,27 +128,15 @@ fetch_imgui() {
     curl -fsSL "https://github.com/cimgui/cimguizmo/archive/${CIMGUIZMO_SHA}.tar.gz" | tar xz -C "$tmp"
     cp "$tmp"/cimguizmo-*/{cimguizmo.cpp,cimguizmo.h} "$IMGUI_DEST/"
 
-    echo "  downloading rlImGui $RLIMGUI_TAG..."
-    curl -fsSL "https://github.com/raylib-extras/rlImGui/archive/refs/tags/${RLIMGUI_TAG}.tar.gz" | tar xz -C "$tmp"
-    cp "$tmp"/rlImGui-*/{rlImGui.cpp,rlImGui.h,imgui_impl_raylib.h,rlImGuiColors.h} "$IMGUI_DEST/"
-
-    # rlImGui.cpp is the only thing that needs raylib's C headers; rlImGui
-    # renders through rlgl, so imgui's own GL/GLFW backends are never built.
-    echo "  downloading raylib $RAYLIB_TAG headers..."
-    local rlbase="https://raw.githubusercontent.com/raysan5/raylib/${RAYLIB_TAG}/src"
-    for h in raylib.h raymath.h rlgl.h; do
-        curl -fsSL -o "$IMGUI_DEST/$h" "$rlbase/$h"
-    done
     rm -rf "$tmp"
 
-    # NO_FONT_AWESOME drops rlImGui's embedded icon font (an extra ~200KB and a
-    # third licence) which the editor does not use.
     echo "  compiling libimgui.a..."
-    local flags=(-std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti -DNO_FONT_AWESOME
-                 -I"$IMGUI_DEST" -I"$IMGUI_DEST/imgui")
+    local flags=(-std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti
+                 -I"$IMGUI_DEST" -I"$IMGUI_DEST/imgui" -I"$SDL_SRC/include")
     local srcs=(imgui/imgui.cpp imgui/imgui_draw.cpp imgui/imgui_tables.cpp
                 imgui/imgui_widgets.cpp imgui/imgui_demo.cpp
-                cimgui.cpp ImGuizmo/src/ImGuizmo.cpp cimguizmo.cpp rlImGui.cpp)
+                cimgui.cpp ImGuizmo/src/ImGuizmo.cpp cimguizmo.cpp
+                backends/imgui_impl_sdl3.cpp backends/imgui_impl_opengl3.cpp)
     local objs=()
     for s in "${srcs[@]}"; do
         local o="$IMGUI_DEST/${s//\//_}.o"
@@ -162,6 +147,7 @@ fetch_imgui() {
     c++ "${flags[@]}" -c -o "$IMGUI_DEST/dirt_imgui_shim.o" "$ROOT/csrc/dirt_imgui_shim.cpp"
     objs+=("$IMGUI_DEST/dirt_imgui_shim.o")
 
+    rm -f "$IMGUI_DEST/libimgui.a"
     ar rcs "$IMGUI_DEST/libimgui.a" "${objs[@]}"
     echo "  done."
 }

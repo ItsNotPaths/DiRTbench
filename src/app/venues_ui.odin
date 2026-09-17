@@ -452,19 +452,19 @@ venues_editors_reap :: proc(ps: ^Venues_Screen) {
 // One frame of the venue screen. Deliberately not the editor's frame with
 // panels swapped: there is no camera, no gizmo and no geometry here, and a mode
 // that shares a loop with the editor ends up sharing its state too.
-draw_venues_frame :: proc(ed: ^Editor) {
-	rl.BeginDrawing()
+draw_venues_frame :: proc(ed: ^Editor, window: ^rl.Window) {
+	rl.BeginWindowFrame(window)
 	rl.ClearBackground({22, 24, 29, 255})
 
-	ui.rlImGuiBegin()
+	ui.imgui_backend_begin()
 	draw_venues_menubar(ed)
 	draw_venues_screen(ed)
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
 	}
-	ui.rlImGuiEnd()
+	ui.imgui_backend_end()
 
-	rl.EndDrawing()
+	rl.EndWindowFrame(window)
 }
 
 @(private = "file")
