@@ -789,9 +789,11 @@ main :: proc() {
 			left_down := rl.IsMouseButtonDown(.LEFT)
 			right_down := rl.IsMouseButtonDown(.RIGHT)
 
-			// Capture the height at the instant RMB joins the existing node drag.
-			// Movement before that instant is intentional single-node editing.
-			if ed.terrain_brush_phase == .None && left_down && right_down {
+			// RMB joining the node drag starts brush sizing, and may join again
+			// mid-move to re-size without dropping the node. Movement before the
+			// first join is intentional single-node editing; a later join keeps
+			// the moved offsets and re-anchors on them.
+			if ed.terrain_brush_phase != .Size && left_down && right_down {
 				ed.terrain_brush_phase = .Size
 				ed.terrain_brush_mouse_y = mouse.y
 				ed.terrain_brush_radius_start = ed.terrain_brush_radius
