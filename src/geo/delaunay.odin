@@ -16,7 +16,6 @@ import "core:c"
 
 foreign import delaunay_lib {
 	"../../vendor/delaunay/libdelaunay.a",
-	"system:stdc++",
 }
 
 @(default_calling_convention = "c")

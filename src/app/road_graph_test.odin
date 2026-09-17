@@ -2,7 +2,7 @@ package main
 
 import "core:os"
 import "core:testing"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 
 @(test)

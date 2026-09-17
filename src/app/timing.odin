@@ -1,7 +1,7 @@
 package main
 
 import "core:c"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 
 Timing_Params :: struct {

@@ -20,8 +20,7 @@ import "core:math"
 import "core:os"
 import "../geo"
 import "../ui"
-import rl "vendor:raylib"
-import "vendor:raylib/rlgl"
+import rl "../gfx"
 
 WINDOW_W :: 1280
 WINDOW_H :: 800
@@ -539,8 +538,8 @@ main :: proc() {
 	}
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
-	// Must come after InitWindow: rlgl installs its defaults there.
-	rlgl.SetClipPlanes(CAM_NEAR, CAM_FAR)
+	// The backend installs its clip state with the window.
+	rl.SetClipPlanes(CAM_NEAR, CAM_FAR)
 
 	ui.rlImGuiSetup(true) // dark theme
 	defer ui.rlImGuiShutdown()

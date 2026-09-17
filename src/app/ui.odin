@@ -16,7 +16,7 @@ import "core:c"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 import "../ui"
 

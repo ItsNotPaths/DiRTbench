@@ -25,7 +25,7 @@ import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:strings"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 Pace_Kind :: enum u8 {
 	Corner,

@@ -17,8 +17,7 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "vendor:raylib"
-import "vendor:raylib/rlgl"
+import rl "../gfx"
 
 // Cliff shape. Heights, spans, tapers and the face angle are per-point (see
 // spline.odin); these are the constants that give a cliff its character.
@@ -573,16 +572,16 @@ gpu_mesh_draw :: proc(rm: Gpu_Mesh, mat: rl.Material, wireframe: bool) {
 	// up, and a cliff faces the road it grew from. In the editor the camera
 	// orbits freely, so culling would make cliffs vanish whenever you look at
 	// their backs. Draw both sides here; the mesh itself is unchanged.
-	rlgl.DisableBackfaceCulling()
-	defer rlgl.EnableBackfaceCulling()
+	rl.DisableBackfaceCulling()
+	defer rl.EnableBackfaceCulling()
 
 	// Not `defer` inside the if: Odin scopes defer to the enclosing block, so it
 	// would disable wire mode before the draw rather than after.
 	if wireframe {
-		rlgl.EnableWireMode()
+		rl.EnableWireMode()
 	}
 	rl.DrawMesh(rm.mesh, mat, rl.Matrix(1))
 	if wireframe {
-		rlgl.DisableWireMode()
+		rl.DisableWireMode()
 	}
 }

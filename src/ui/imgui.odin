@@ -16,11 +16,9 @@ package ui
 
 import "core:c"
 
-// libimgui.a is C++, hence libstdc++. It also references raylib, which the
-// vendor:raylib package links for us.
+// The build scripts place the static C++ runtime after this archive.
 foreign import imgui {
 	"../../vendor/imgui/libimgui.a",
-	"system:stdc++",
 }
 
 // --- types ------------------------------------------------------------------

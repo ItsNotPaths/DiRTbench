@@ -31,7 +31,7 @@ import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 
 GLTF_F32 :: 5126 // accessor componentType

@@ -10,14 +10,12 @@ package ui
 // screen regardless of camera distance, which is ImGuizmo's native behaviour.
 
 import "core:c"
-import rl "vendor:raylib"
-import "vendor:raylib/rlgl"
+import rl "../gfx"
 
 // ImGuizmo lives in the same archive as ImGui. `foreign import` is file-scoped,
 // so this restates the import from imgui.odin rather than sharing it.
 foreign import imgui_lib {
 	"../../vendor/imgui/libimgui.a",
-	"system:stdc++",
 }
 
 // --- cimguizmo --------------------------------------------------------------
@@ -95,8 +93,8 @@ matrix_from_float_v :: proc(v: Gizmo_Matrix) -> rl.Matrix {
 camera_matrices :: proc(cam: rl.Camera3D) -> (view, proj: Gizmo_Matrix) {
 	w := f32(rl.GetScreenWidth())
 	h := f32(rl.GetScreenHeight())
-	near := f32(rlgl.GetCullDistanceNear())
-	far := f32(rlgl.GetCullDistanceFar())
+	near := f32(rl.GetCullDistanceNear())
+	far := f32(rl.GetCullDistanceFar())
 	view = rl.MatrixToFloatV(rl.GetCameraMatrix(cam))
 	proj = rl.MatrixToFloatV(rl.MatrixPerspective(cam.fovy * rl.DEG2RAD, w / h, near, far))
 	return

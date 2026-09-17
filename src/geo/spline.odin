@@ -18,7 +18,7 @@ package geo
 import "core:fmt"
 import "core:math"
 import "core:slice"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 DEFAULT_WIDTH :: 8.0    // metres — plausible rally road width
 SAMPLES_PER_SEG :: 14   // curve subdivisions between two control points

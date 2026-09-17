@@ -5,6 +5,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENDOR="$ROOT/vendor"
 
+# SDL is linked into dirtbench, not installed.  Keeping the archive beside the
+# rest of the vendored code also prevents a system libSDL3.so from winning the
+# link on development machines.
+SDL_VERSION="3.4.16"
+SDL_SRC="$VENDOR/sdl3-src"
+SDL_DEST="$VENDOR/sdl3"
+SDL_A="$SDL_DEST/libSDL3.a"
+
 fetch() {
     local name="$1"
     local url="$2"
@@ -26,6 +34,43 @@ fetch() {
     fi
     echo "  done."
 }
+
+# --- SDL3 (window, input, audio and GPU abstraction) ------------------------
+# X11, Wayland, libdecor, ALSA/Pulse/PipeWire and Vulkan are loaded at runtime.
+# Their development files are build inputs only and add no ELF dependencies.
+fetch_sdl() {
+    if [ -f "$SDL_A" ]; then
+        echo "  already present: sdl3"
+        return
+    fi
+    if [ ! -d "$SDL_SRC" ] || [ -z "$(ls -A "$SDL_SRC" 2>/dev/null)" ]; then
+        echo "  downloading SDL $SDL_VERSION..."
+        mkdir -p "$SDL_SRC"
+        curl -fsSL "https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL3-${SDL_VERSION}.tar.gz" \
+            | tar xz --strip-components=1 -C "$SDL_SRC" \
+            || { rm -rf "$SDL_SRC"; exit 1; }
+    fi
+
+    echo "  compiling static SDL3..."
+    # A failed feature probe leaves a misleading cache behind, so configuration
+    # is intentionally fresh.  SDL_GPU stays enabled; SDL_Render is unrelated.
+    rm -rf "$SDL_SRC/build"
+    cmake -S "$SDL_SRC" -B "$SDL_SRC/build" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+        -DSDL_GPU=ON -DSDL_VULKAN=ON -DSDL_AUDIO=ON \
+        -DSDL_RENDER=OFF -DSDL_CAMERA=OFF -DSDL_JOYSTICK=OFF \
+        -DSDL_HAPTIC=OFF -DSDL_HIDAPI=OFF -DSDL_SENSOR=OFF \
+        -DSDL_POWER=OFF -DSDL_DIALOG=OFF -DSDL_TRAY=OFF \
+        -DSDL_X11_XTEST=OFF -DSDL_TEST_LIBRARY=OFF >/dev/null
+    cmake --build "$SDL_SRC/build" --parallel >/dev/null
+    mkdir -p "$SDL_DEST"
+    cp "$SDL_SRC/build/libSDL3.a" "$SDL_A"
+    echo "  done."
+}
+
+fetch_sdl
 
 # --- Dear ImGui + ImGuizmo (+ C APIs + raylib backend) -----------------------
 # All five sources are C++ and all compile into one static lib, vendor/imgui/

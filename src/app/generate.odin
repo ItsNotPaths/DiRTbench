@@ -16,7 +16,7 @@ package main
 import "core:c"
 import "core:fmt"
 import "core:math"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 
 GEN_DS :: 0.25         // integration step, metres of horizontal arc

@@ -8,7 +8,7 @@ import "core:c"
 import "core:math"
 import "core:path/filepath"
 import "core:strings"
-import rl "vendor:raylib"
+import rl "../gfx"
 import "../geo"
 
 // The recorded co-driver clips, baked into the binary. About 1.2 MB of Ogg

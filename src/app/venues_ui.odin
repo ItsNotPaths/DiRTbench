@@ -20,7 +20,7 @@ import "core:os"
 import "core:strings"
 import d3 "../d3"
 import "../ui"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}

@@ -45,7 +45,7 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 // Vertex colours, since the material is unlit (see mesh.odin). Slope picks
 // between them: flat ground is grass, a steep face is the rock under it.

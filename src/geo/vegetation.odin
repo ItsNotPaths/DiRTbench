@@ -18,7 +18,7 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 // The stock species families offered as presets. The enum value is stable — it is
 // persisted in the stage file — so only ever append.

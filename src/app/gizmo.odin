@@ -6,7 +6,7 @@ package main
 
 import "../geo"
 import "../ui"
-import rl "vendor:raylib"
+import rl "../gfx"
 
 // Draw the gizmo on `p` and, while it is dragged, fold the result back into the
 // point's transform. Returns true while dragging.
