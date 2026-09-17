@@ -175,6 +175,11 @@ terrain_tri_colour :: proc(n: rl.Vector3) -> rl.Color {
 // --- the field ---------------------------------------------------------------
 
 // Everything a world point needs from one ribbon sample to evaluate the field.
+//
+// A branched road is sampled as several runs, one per graph edge, laid end to end
+// in one array (build_ribbon). Neighbours, spacing and ends are therefore stored
+// per sample rather than read as i-1 / i+1: across a run boundary those index a
+// different edge somewhere else entirely. Index 0 is backward, 1 is forward.
 Field_Sample :: struct {
 	p:      [2]f32,    // centreline, XZ
 	right:  [2]f32,    // side-0 outward, flattened, unit
@@ -182,14 +187,14 @@ Field_Sample :: struct {
 	seam:   [2][2]f32, // seam XZ per side
 	seam_y: [2]f32,
 	e:      [2]f32, // the seam's outward offset from the centreline, per side
-	s_frac: f32,
 	arc:    f32,
-	ds:     f32,
+	run:    int,       // which run this sample belongs to
+	nb:     [2]int,    // neighbouring sample per direction, -1 at a run end
+	nd:     [2]f32,    // distance to that neighbour
 }
 
 // A world point's relationship to one leg of the road.
 Terrain_Leg :: struct {
-	s_frac: f32,
 	u:      f32, // metres outward from that leg's seam; never negative
 	seam_y: f32,
 	w:      f32, // normalised blend weight
@@ -205,17 +210,24 @@ field_samples :: proc(
 	allocator := context.temp_allocator,
 ) -> []Field_Sample {
 	n := len(ribbon)
-	total := arc[n - 1]
 	vrows := verge_rows(topo)
 	out := make([]Field_Sample, n, allocator)
 
+	run := 0
 	for i in 0 ..< n {
 		cs := ribbon[i]
 		s: Field_Sample
 		s.p = {cs.pos.x, cs.pos.z}
 		s.arc = arc[i]
-		s.ds = ds[i]
-		s.s_frac = total > 0 ? arc[i] / total : 0
+		if i > 0 && cs.break_before {
+			run += 1
+		}
+		s.run = run
+
+		back := i > 0 && !cs.break_before
+		fore := i < n - 1 && !ribbon[i + 1].break_before
+		s.nb = {back ? i - 1 : -1, fore ? i + 1 : -1}
+		s.nd = {back ? ds[i - 1] : 0, fore ? ds[i] : 0}
 
 		r0 := terrain_outward(cs, 0)
 		s.right = {r0.x, r0.z}
@@ -298,6 +310,10 @@ dist2 :: proc(a, b: [2]f32) -> f32 {
 // rather than more of the same one: far along the road from `skip_arc`, *and* far
 // along it relative to how close it is to `skip_p`. The ratio is measured from
 // `skip_p` — a point on the road — not from `p`, which may be way out in a field.
+//
+// Arc only means anything within one run, so a candidate from another run is
+// another leg by construction — which is what makes a junction blend the way a
+// hairpin does.
 hash_nearest :: proc(
 	h: Sample_Hash,
 	fs: []Field_Sample,
@@ -306,6 +322,7 @@ hash_nearest :: proc(
 	skip_arc: f32 = -1,
 	skip_p: [2]f32 = {},
 	other_leg := false,
+	skip_run: int = -1,
 ) -> (best: int, best_d: f32) {
 	best = -1
 	best_d = max(f32)
@@ -332,7 +349,7 @@ hash_nearest :: proc(
 				ci := gz * h.nx + gx
 				for k in h.starts[ci] ..< h.starts[ci + 1] {
 					i := h.items[k]
-					if other_leg {
+					if other_leg && fs[i].run == skip_run {
 						gap := abs(fs[i].arc - skip_arc)
 						if gap < TERRAIN_LEG_ARC_SEP {
 							continue
@@ -370,7 +387,7 @@ terrain_near_other :: proc(
 ) -> []bool {
 	out := make([]bool, len(fs), allocator)
 	for i in 0 ..< len(fs) {
-		other, _ := hash_nearest(h, fs, fs[i].p, 2 * t.reach_m, fs[i].arc, fs[i].p, true)
+		other, _ := hash_nearest(h, fs, fs[i].p, 2 * t.reach_m, fs[i].arc, fs[i].p, true, fs[i].run)
 		out[i] = other >= 0
 	}
 	return out
@@ -378,13 +395,9 @@ terrain_near_other :: proc(
 
 // How far `p` lies outside the road corridor, in metres, measured from the seam
 // of whichever leg is nearest. Negative means inside the road or its verge.
-//
-// `beyond` marks a point off the end of the stage: its nearest sample is an
-// endpoint and it lies past it, so there is no road here to skirt.
 Field_Probe :: struct {
-	su:     f32,
-	beyond: bool,
-	ok:     bool,
+	su: f32,
+	ok: bool,
 }
 
 // Where `p` sits relative to sample `i`, in that sample's own road frame.
@@ -396,6 +409,10 @@ Field_Probe :: struct {
 Field_Frame :: struct {
 	lateral: f32, // signed distance across the road
 	fwd:     f32, // signed distance along it, from the sample
+	// Metres past the end of this leg, zero while the run carries on. A run end
+	// owns no road beyond itself, so the corridor must stop there instead of
+	// reaching forward for ever.
+	out:     f32,
 	side:    int,
 	j:       int, // the neighbouring sample `fwd` points at
 	tt:      f32, // how far toward it, 0..1
@@ -408,9 +425,29 @@ field_project :: proc(fs: []Field_Sample, i: int, p: [2]f32) -> (fr: Field_Frame
 	fr.lateral = dx * s.right[0] + dz * s.right[1]
 	fr.fwd = dx * s.fwd[0] + dz * s.fwd[1]
 	fr.side = fr.lateral >= 0 ? 0 : 1
-	fr.j = fr.fwd >= 0 ? min(i + 1, len(fs) - 1) : max(i - 1, 0)
-	fr.tt = clamp(abs(fr.fwd) / max(s.ds, 1e-4), 0, 1)
+	dir := fr.fwd >= 0 ? 1 : 0
+	open := s.nb[dir] < 0
+	fr.out = open ? abs(fr.fwd) : 0
+	fr.j = open ? i : s.nb[dir]
+	fr.tt = open ? 0 : clamp(abs(fr.fwd) / max(s.nd[dir], 1e-4), 0, 1)
 	return
+}
+
+// How far `p` lies outside this leg of the road, in metres; negative inside it.
+//
+// The road is a band of the seam's half-width, and it stops at a run end: past
+// that end the distance is measured from the end face, so the ground closes
+// around the tip. Measuring it across the road instead would carve a road-shaped
+// hole out of the ground ahead of every dead end.
+field_su :: proc(fs: []Field_Sample, i: int, fr: Field_Frame) -> f32 {
+	lat := abs(fr.lateral) - field_seam_offset(fs, i, fr)
+	if fr.out <= 0 {
+		return lat
+	}
+	if lat <= 0 {
+		return fr.out
+	}
+	return math.sqrt(lat * lat + fr.out * fr.out)
 }
 
 // The seam's outward offset, interpolated toward the neighbouring sample.
@@ -419,18 +456,32 @@ field_seam_offset :: proc(fs: []Field_Sample, i: int, fr: Field_Frame) -> f32 {
 	return e + (fs[fr.j].e[fr.side] - e) * fr.tt
 }
 
-field_probe :: proc(h: Sample_Hash, fs: []Field_Sample, p: [2]f32, limit: f32) -> Field_Probe {
+field_probe :: proc(
+	h: Sample_Hash,
+	fs: []Field_Sample,
+	near_other: []bool,
+	p: [2]f32,
+	limit: f32,
+) -> Field_Probe {
 	i0, _ := hash_nearest(h, fs, p, limit)
 	if i0 < 0 {
 		return {}
 	}
 	fr := field_project(fs, i0, p)
-	beyond := (i0 == 0 && fr.fwd < 0) || (i0 == len(fs) - 1 && fr.fwd > 0)
-	return {
-		su = abs(fr.lateral) - field_seam_offset(fs, i0, fr),
-		beyond = beyond,
-		ok = true,
+	su := field_su(fs, i0, fr)
+	// Past the end of a leg the road usually just carries on as the next edge,
+	// whose first samples sit on top of this one's last. The nearest sample cannot
+	// tell that apart from a dead end, so ask the other legs: the corridor is the
+	// union of all of them, and only a real dead end has nothing carrying on. Left
+	// to one leg, every node of a branched road opens a gap in its own corridor —
+	// wide enough to plant a tree in the middle of the road.
+	if fr.out > 0 && near_other[i0] {
+		i1, _ := hash_nearest(h, fs, p, limit, fs[i0].arc, fs[i0].p, true, fs[i0].run)
+		if i1 >= 0 {
+			su = min(su, field_su(fs, i1, field_project(fs, i1, p)))
+		}
 	}
+	return {su = su, ok = true}
 }
 
 // One leg's contribution at world point `p`.
@@ -446,8 +497,7 @@ field_leg_at :: proc(fs: []Field_Sample, i: int, p: [2]f32) -> (leg: Terrain_Leg
 
 	leg.side = fr.side
 	leg.seam_y = s.seam_y[fr.side] + (sj.seam_y[fr.side] - s.seam_y[fr.side]) * fr.tt
-	leg.s_frac = s.s_frac + (sj.s_frac - s.s_frac) * fr.tt
-	leg.u = max(0, abs(fr.lateral) - field_seam_offset(fs, i, fr))
+	leg.u = max(0, field_su(fs, i, fr))
 	return
 }
 
@@ -475,7 +525,7 @@ field_legs :: proc(
 		return
 	}
 
-	i1, d1 := hash_nearest(h, fs, p, d0 * TERRAIN_LEG_CUTOFF, fs[i0].arc, fs[i0].p, true)
+	i1, d1 := hash_nearest(h, fs, p, d0 * TERRAIN_LEG_CUTOFF, fs[i0].arc, fs[i0].p, true, fs[i0].run)
 	if i1 < 0 {
 		return
 	}
@@ -698,8 +748,8 @@ terrain_field_build :: proc(
 		p: [2]f32,
 		reach, margin, limit: f32,
 	) {
-		pr := field_probe(hash, fs, p, limit)
-		if !pr.ok || pr.beyond || pr.su < margin || pr.su > reach {
+		pr := field_probe(hash, fs, near_other, p, limit)
+		if !pr.ok || pr.su < margin || pr.su > reach {
 			return
 		}
 		if !dedupe_add(seen, p[0], p[1]) {
@@ -795,14 +845,15 @@ terrain_field_build :: proc(
 		max_edge2: f32,
 		hash: Sample_Hash,
 		fs: []Field_Sample,
+		near_other: []bool,
 		limit, reach: f32,
 	) -> bool {
 		if dist2(a, b) <= max_edge2 {
 			return true
 		}
 		mid := [2]f32{(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5}
-		pr := field_probe(hash, fs, mid, limit)
-		return pr.ok && !pr.beyond && pr.su > -TERRAIN_SU_EPS && pr.su <= reach
+		pr := field_probe(hash, fs, near_other, mid, limit)
+		return pr.ok && pr.su > -TERRAIN_SU_EPS && pr.su <= reach
 	}
 	for tri in tris {
 		a := f.pts[tri[0]]
@@ -812,14 +863,14 @@ terrain_field_build :: proc(
 		pa := [2]f32{a.x, a.z}
 		pb := [2]f32{b.x, b.z}
 		pc := [2]f32{cp.x, cp.z}
-		if !long_edge_valid(pa, pb, max_edge2, hash, fs, limit, t.reach_m) ||
-		   !long_edge_valid(pb, pc, max_edge2, hash, fs, limit, t.reach_m) ||
-		   !long_edge_valid(pc, pa, max_edge2, hash, fs, limit, t.reach_m) {
+		if !long_edge_valid(pa, pb, max_edge2, hash, fs, near_other, limit, t.reach_m) ||
+		   !long_edge_valid(pb, pc, max_edge2, hash, fs, near_other, limit, t.reach_m) ||
+		   !long_edge_valid(pc, pa, max_edge2, hash, fs, near_other, limit, t.reach_m) {
 			continue
 		}
 		centroid := [2]f32{(a.x + b.x + cp.x) / 3, (a.z + b.z + cp.z) / 3}
-		pr := field_probe(hash, fs, centroid, limit)
-		if !pr.ok || pr.beyond || pr.su <= -TERRAIN_SU_EPS || pr.su > t.reach_m {
+		pr := field_probe(hash, fs, near_other, centroid, limit)
+		if !pr.ok || pr.su <= -TERRAIN_SU_EPS || pr.su > t.reach_m {
 			continue
 		}
 		append(&f.tris, tri)

@@ -197,15 +197,15 @@ veg_field_make :: proc(
 
 // Ground Y at world XZ, and whether that point lies on the terrain at all. Mirrors
 // field_y (terrain.odin) but for a point built on the fly rather than a stored
-// vertex. `inside` is false in the road corridor, past `reach`, or off the ends —
-// exactly where a tree would float, so the caller drops those candidates. With no
+// vertex. `inside` is false in the road corridor and past `reach` — exactly where
+// a tree would float, so the caller drops those candidates. With no
 // field (terrain off) it reports inside=true and leaves Y to the caller's fallback.
 veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 	if !vf.ok {
 		return 0, true
 	}
-	pr := field_probe(vf.hash, vf.fs, p, vf.limit)
-	if !pr.ok || pr.beyond || pr.su <= 0 || pr.su > vf.t.reach_m {
+	pr := field_probe(vf.hash, vf.fs, vf.near_other, p, vf.limit)
+	if !pr.ok || pr.su <= 0 || pr.su > vf.t.reach_m {
 		return 0, false
 	}
 	legs, n := field_legs(vf.hash, vf.fs, vf.near_other, p, vf.limit)

@@ -284,15 +284,6 @@ rebuild_geometry :: proc(ed: ^Editor) {
 		ed.dirty_road = false
 	}
 	if ed.dirty_terrain && !(ed.gizmo_active && ed.sel.kind == .Point) {
-		// Terrain, vegetation and pace notes become stage products once a path
-		// through the venue graph is chosen. Do not join independent branches
-		// into an accidental mega-ribbon in the meantime.
-		if !geo.is_linear(ed.spline) {
-			geo.gpu_mesh_unload(&ed.terrain_mesh)
-			delete(ed.veg_cache)
-			ed.dirty_terrain = false
-			return
-		}
 		old_node_count := geo.terrain_node_count(&ed.terrain)
 		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
 		if ed.sel.kind == .Node && geo.terrain_node_count(&ed.terrain) != old_node_count {
@@ -310,13 +301,14 @@ rebuild_geometry :: proc(ed: ^Editor) {
 // the ribbon rebuilt under it (`veg_gen` behind `ribbon_gen`). A no-op otherwise,
 // so it is safe to call every frame. Generating rebuilds the terrain field, which
 // is why the result is cached rather than produced live.
+// Clearing, not just freeing: the slice outlives the memory otherwise, and the
+// next delete frees it a second time.
+veg_cache_clear :: proc(ed: ^Editor) {
+	delete(ed.veg_cache)
+	ed.veg_cache = nil
+}
+
 veg_refresh :: proc(ed: ^Editor) {
-	if !geo.is_linear(ed.spline) {
-		delete(ed.veg_cache)
-		ed.veg_gen = ed.ribbon_gen
-		ed.veg_dirty = false
-		return
-	}
 	if !ed.veg_dirty && ed.veg_gen == ed.ribbon_gen {
 		return
 	}
@@ -327,7 +319,7 @@ veg_refresh :: proc(ed: ^Editor) {
 	if ed.gizmo_active {
 		return
 	}
-	delete(ed.veg_cache)
+	veg_cache_clear(ed)
 	ed.veg_cache = geo.veg_generate(ed.ribbon, &ed.terrain, ed.veg, ed.topo, ed.roughness)
 	ed.veg_gen = ed.ribbon_gen
 	ed.veg_dirty = false
@@ -664,7 +656,7 @@ main :: proc() {
 	defer geo.terrain_delete(&ed.terrain)
 	defer geo.terrain_field_delete(&ed.terrain_field)
 	defer delete(ed.ribbon)
-	defer delete(ed.veg_cache)
+	defer veg_cache_clear(&ed)
 	defer delete(ed.terrain_brush_mask)
 	defer delete(ed.terrain_brush_offsets)
 	mark_dirty(&ed)
