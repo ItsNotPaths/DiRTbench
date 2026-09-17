@@ -587,7 +587,7 @@ string_clone :: proc(b: []u8, allocator := context.temp_allocator) -> string {
 // The generator above is pure. This half loads the extracted OGG snippets and
 // drives an automated ride: a cursor advances along the ribbon by arc, and each
 // note fires its clips (tiled longest-match against the manifest) as the cursor
-// passes the note's trigger station. raylib decodes OGG natively, so a clip is
+// passes the note's trigger station. The audio backend decodes OGG, so a clip is
 // just an rl.Sound.
 
 // The clip names use spoken words ("one".."six"); the display uses digits.

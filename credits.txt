@@ -4,10 +4,11 @@ https://www.youtube.com/@DeuteriumtheSentientMattress/videos
 Third-party code, fetched by download-deps.sh:
   Dear ImGui + cimgui                 MIT
   ImGuizmo + cimguizmo                MIT
-  rlImGui                             zlib
   delaunator-cpp                      MIT
+  SDL                                 zlib
 
-raylib comes from the Odin distribution's own vendor/raylib.
+raylib's rlgl and stb_vorbis come from the Odin distribution. rlgl remains as
+the low-level OpenGL shim; windowing, input and audio are SDL.
 
 Third-party data, checked in:
   assets/d3/schemaDirt3.xml           Ego-Engine-Modding

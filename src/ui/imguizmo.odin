@@ -1,6 +1,6 @@
 package ui
 
-// Odin bindings for ImGuizmo, via cimguizmo's flat C API, plus the raylib glue
+// Odin bindings for ImGuizmo, via cimguizmo's flat C API, plus the gfx glue
 // that feeds it. Vendored into vendor/imgui/libimgui.a alongside Dear ImGui
 // itself — ImGuizmo draws through ImGui's draw list and reads ImGui's input, so
 // the two are one dependency, not two. See imgui.odin.
@@ -42,7 +42,7 @@ foreign imgui_lib {
 	@(link_name = "ImGuizmo_BeginFrame")
 	gizmo_begin_frame :: proc() ---
 
-	// The screen rect the gizmo projects into; must match the raylib viewport.
+	// The screen rect the gizmo projects into; must match the OpenGL viewport.
 	@(link_name = "ImGuizmo_SetRect")
 	gizmo_set_rect :: proc(x, y, width, height: f32) ---
 
@@ -71,7 +71,7 @@ foreign imgui_lib {
 	gizmo_is_over :: proc() -> bool ---
 }
 
-// --- raylib glue ------------------------------------------------------------
+// --- gfx glue ---------------------------------------------------------------
 
 // A column-major float[16], the layout ImGuizmo reads and writes.
 Gizmo_Matrix :: [16]f32

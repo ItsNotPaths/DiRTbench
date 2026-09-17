@@ -10,9 +10,9 @@ package geo
 // vertices per triangle, each carrying that face's normal. Two reasons:
 //   - the game exporters we target are flat-shaded, with no smooth-vertex
 //     sharing, so an indexed smooth mesh would have to be exploded anyway;
-//   - raylib's Mesh.indices is u16, which would cap us at 65k vertices.
+//   - an indexed u16 mesh would cap us at 65k vertices.
 //
-// Nothing here is lit by a shader: the default raylib material is unlit, so a
+// Nothing here is lit by a shader: the default material is unlit, so a
 // fixed key light is baked into the vertex colours at build time.
 
 import "core:c"
@@ -525,8 +525,8 @@ gpu_mesh_unload :: proc(rm: ^Gpu_Mesh) {
 	rm^ = {}
 }
 
-// Copy the soup into raylib-owned buffers and upload. The arrays must come from
-// rl.MemAlloc, because rl.UnloadMesh releases them with RL_FREE.
+// Copy the soup into backend-owned buffers and upload. The arrays must come
+// from rl.MemAlloc because rl.UnloadMesh releases them with the matching free.
 gpu_mesh_upload :: proc(m: Tri_Mesh) -> Gpu_Mesh {
 	n := len(m.pos)
 	if n == 0 {

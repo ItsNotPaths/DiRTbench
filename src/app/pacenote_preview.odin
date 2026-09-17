@@ -2,9 +2,8 @@ package main
 
 // Pace-note playback: loading the recorded clips, and riding the stage with the
 // co-driver calling. Split from geo/pacenote.odin, which generates the notes and
-// knows nothing about the editor, the filesystem or raylib audio.
+// knows nothing about the editor, the filesystem or SDL audio.
 
-import "core:c"
 import "core:math"
 import "core:path/filepath"
 import "core:strings"
@@ -24,12 +23,8 @@ pace_audio_load :: proc() -> map[string]rl.Sound {
 		if filepath.ext(file.name) != ".ogg" {
 			continue
 		}
-		// raylib needs the extension to pick a decoder, and the data pointer is
-		// into our own read-only image, which it copies out of.
-		wave := rl.LoadWaveFromMemory(".ogg", raw_data(file.data), c.int(len(file.data)))
-		defer rl.UnloadWave(wave)
 		stem := strings.trim_suffix(file.name, ".ogg")
-		clips[strings.clone(stem)] = rl.LoadSoundFromWave(wave)
+		clips[strings.clone(stem)] = rl.LoadSoundFromMemory(file.data)
 	}
 	return clips
 }

@@ -3,7 +3,7 @@ package geo
 // Road spline model + geometry.
 //
 // A spline is an ordered chain of *oriented control points* (parent -> child ==
-// array order). Each control point carries a full raylib Transform: its
+// array order). Each control point carries a full graphics Transform: its
 // translation is the road centre (Y is free, so roads can climb/dip), and its
 // rotation is the road frame at that point — local +Z is travel direction,
 // +X is "right" across the road, +Y is the road-surface normal. Rotating a
