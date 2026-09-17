@@ -41,6 +41,10 @@ App :: struct {
 	status:  Status,
 	show_demo: bool,
 	quit:    bool,
+	// Crash recovery (recovery.odin): when the next snapshot is due, and what
+	// the last run left behind.
+	recovery_at:  f64,
+	recovery:     []Recovery_Set,
 	// One audio device per process, so one clip bank and one playback queue.
 	// Whichever window starts a ride preview owns them until it stops.
 	clips:        map[string]gfx.Sound, // basename -> decoded OGG
@@ -192,6 +196,12 @@ main :: proc() {
 	app.play_q = make([dynamic]gfx.Sound)
 	defer delete(app.play_q)
 
+	// Anything the last run left behind is claimed before the first frame, so
+	// the project manager's first draw already shows it.
+	recovery_promote(recovery_root())
+	app.recovery = recovery_pending(recovery_root())
+	defer recovery_pending_delete(app.recovery)
+
 	install_scan_init(&app.install)
 	defer install_scan_delete(&app.install)
 	venues_screen_init(&app.screen)
@@ -214,8 +224,31 @@ main :: proc() {
 		for ed in app.editors {
 			editor_frame(ed)
 		}
+		app_recovery_tick(&app)
 		free_all(context.temp_allocator)
 	}
+	// A run that ends on its own clears its snapshots. A folder left behind is
+	// therefore a run that did not.
+	recovery_clear_live(recovery_root())
+	free_all(context.temp_allocator)
+}
+
+// The crash snapshot on its timer. The clock and the document list belong to the
+// loop; recovery.odin knows documents and folders, not the app that holds them.
+app_recovery_tick :: proc(app: ^App) {
+	now := gfx.GetTime()
+	if now < app.recovery_at {
+		return
+	}
+	app.recovery_at = now + RECOVERY_INTERVAL
+	recovery_snapshot(recovery_root(), app.docs[:])
+}
+
+// Re-read what is set aside. Every answer to a recovery row goes through this,
+// so the rows are never a memory of what the folder used to hold.
+app_recovery_reload :: proc(app: ^App) {
+	recovery_pending_delete(app.recovery)
+	app.recovery = recovery_pending(recovery_root())
 }
 
 // Whether any window onto this document is mid-drag, and whether any of those

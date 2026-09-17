@@ -60,6 +60,12 @@ Venue_Doc :: struct {
 	// Two flags, not one: the road is cheap to rebuild and the terrain is not.
 	dirty_road:    bool,
 	dirty_terrain: bool,
+	// Every change to a saved field ticks this. The dirty flags above cannot
+	// stand in for it: a rebuild clears them every frame. An edit that does not
+	// call mark_dirty must call mark_edited.
+	edits:         u64,
+	saved_edits:   u64, // `edits` when this was last written home
+	snapshot_edits: u64, // `edits` when the crash snapshot was last written
 	topo:          c.int, // ribbon samples per spline segment
 	roughness:     f32,   // global roughness: road vertical jitter + cliff jitter, 0..1
 
@@ -102,6 +108,38 @@ mark_dirty :: proc(doc: ^Venue_Doc) {
 	doc.dirty_road = true
 	doc.dirty_terrain = true
 	doc.veg_dirty = true
+	doc.edits += 1
+}
+
+// A vegetation knob: the scatter is regenerated, the road is not.
+mark_veg_dirty :: proc(doc: ^Venue_Doc) {
+	doc.veg_dirty = true
+	doc.edits += 1
+}
+
+// An edit with nothing to rebuild: a marker, a pin, a stage name, a timing
+// number. Nothing in the viewport changes, but the file on disk is now behind.
+mark_edited :: proc(doc: ^Venue_Doc) {
+	doc.edits += 1
+}
+
+// Whether anything has changed since the last save home.
+doc_unsaved :: proc(doc: ^Venue_Doc) -> bool {
+	return doc.edits != doc.saved_edits
+}
+
+// The document came off disk, so nothing in it is unsaved yet. Loading ticks
+// `edits` on its way through mark_dirty, which is why this is not simply zero.
+doc_loaded :: proc(doc: ^Venue_Doc) {
+	doc.saved_edits = doc.edits
+	doc.snapshot_edits = 0
+}
+
+// The document is on disk again. Its crash snapshot is stale from here, which
+// recovery_doc_saved acts on — nothing in this file knows that folder exists.
+doc_saved :: proc(doc: ^Venue_Doc) {
+	doc.saved_edits = doc.edits
+	doc.snapshot_edits = 0
 }
 
 // For edits that leave the ribbon alone: sculpt controls, terrain sliders. These
@@ -110,6 +148,7 @@ mark_dirty :: proc(doc: ^Venue_Doc) {
 mark_terrain_dirty :: proc(doc: ^Venue_Doc) {
 	doc.dirty_terrain = true
 	doc.veg_dirty = true
+	doc.edits += 1
 }
 
 geometry_stale :: proc(doc: ^Venue_Doc) -> bool {

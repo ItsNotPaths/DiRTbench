@@ -114,6 +114,8 @@ draw_venues_screen :: proc(app: ^App) {
 	}
 	defer ui.igEnd()
 
+	draw_recovery_rows(app)
+
 	if !vs.found {
 		draw_no_install(vs)
 		return
@@ -165,6 +167,77 @@ draw_venues_screen :: proc(app: ^App) {
 		}
 		draw_stock_row(ps, venue)
 	}
+}
+
+// What answering a recovery row asks for.
+@(private = "file")
+Recovery_Answer :: enum {
+	None,
+	Swap, // Restore, or Undo: the same operation from either side
+	Drop, // Discard, or Keep: throw the set-aside copy away
+}
+
+// What the last run left behind, and the two buttons that deal with it. Drawn
+// from what is on disk (`app.recovery`), so it survives quitting and reappears
+// until it is answered. Nothing here is destructive: until Discard or Keep,
+// both versions exist.
+@(private = "file")
+draw_recovery_rows :: proc(app: ^App) {
+	answer := Recovery_Answer.None
+	at := -1
+	for set, i in app.recovery {
+		if row := draw_recovery_row(app, set, i); row != .None {
+			answer, at = row, i
+		}
+	}
+	// After the loop: either answer rewrites the list being walked.
+	switch answer {
+	case .None:
+	case .Swap:
+		msg, ok := recovery_swap(&app.recovery[at])
+		set_status(&app.status, ok ? "swapped" : msg, ok)
+		app_recovery_reload(app)
+	case .Drop:
+		recovery_discard(&app.recovery[at])
+		set_status(&app.status, "the set-aside copy is gone", true)
+		app_recovery_reload(app)
+	}
+}
+
+@(private = "file")
+draw_recovery_row :: proc(app: ^App, set: Recovery_Set, i: int) -> Recovery_Answer {
+	recovered := set.state == .Recovered
+	defer ui.igSeparator()
+
+	clock := recovery_clock_text(set.at)
+	headline := fmt.ctprintf(
+		"dirtbench closed without saving. %d documents from %s can be brought back.",
+		len(set.docs), clock,
+	)
+	if !recovered {
+		headline = fmt.ctprintf(
+			"%d documents recovered from %s are the ones on disk now.", len(set.docs), clock,
+		)
+	}
+	ui.im_text_colored(recovered ? WARN_COL : MINE_COL, headline)
+	for doc in set.docs {
+		ui.im_text_colored(
+			DIM_COL, fmt.ctprintf("    %s %s", doc.kind == .Venue ? "venue" : "stage", doc.id),
+		)
+	}
+
+	if held, blocked := recovery_blocked_by(app.docs[:], set); blocked {
+		ui.im_text_colored(WARN_COL, fmt.ctprintf("close the %s window first", held))
+		return .None
+	}
+	if ui.im_button(fmt.ctprintf("%s###rec_swap_%d", recovered ? "Restore" : "Undo recovery", i)) {
+		return .Swap
+	}
+	ui.im_same_line()
+	if ui.im_button(fmt.ctprintf("%s###rec_drop_%d", recovered ? "Discard" : "Keep", i)) {
+		return .Drop
+	}
+	return .None
 }
 
 @(private = "file")
@@ -592,6 +665,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	doc.open_venue = strings.clone(p.id)
 	set_stage_name(doc, p.id)
 	mark_dirty(doc)
+	doc_loaded(doc)
 	return "", true
 }
 

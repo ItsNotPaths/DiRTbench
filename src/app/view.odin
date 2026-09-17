@@ -541,10 +541,12 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	// they were placed, so a new one goes on the end.
 	if pin {
 		append(&route.pins, at)
+		mark_edited(ed.doc)
 		set_status(&ed.status, fmt.tprintf("pin %d placed", len(route.pins)), true)
 		return
 	}
 	line^ = at
+	mark_edited(ed.doc)
 	set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
 }
 

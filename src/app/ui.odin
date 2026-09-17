@@ -38,6 +38,7 @@ do_save :: proc(ed: ^Editor) {
 		}
 		if ok {
 			msg = fmt.tprintf("saved %s", ed.doc.open_venue)
+			recovery_doc_saved(recovery_root(), ed.doc)
 		}
 		set_status(&ed.status, msg, ok)
 		return
@@ -45,6 +46,9 @@ do_save :: proc(ed: ^Editor) {
 	name := sanitise_stage_name(stage_name_text(ed.doc))
 	set_stage_name(ed.doc, name)
 	msg, ok := save_road_named(ed.doc, name)
+	if ok {
+		recovery_doc_saved(recovery_root(), ed.doc)
+	}
 	set_status(&ed.status, msg, ok)
 }
 
@@ -69,6 +73,7 @@ do_load :: proc(ed: ^Editor, name: string) {
 		set_stage_name(ed.doc, name)
 		ed.sel = {} // indices from the old spline mean nothing now
 		mark_dirty(ed.doc)
+		doc_loaded(ed.doc)
 	}
 	set_status(&ed.status, msg, ok)
 }
@@ -324,6 +329,7 @@ draw_pins_section :: proc(ed: ^Editor, route: ^Venue_Route) {
 	// After the loop: removing inside it would walk a list that just moved.
 	if remove >= 0 {
 		ordered_remove(&route.pins, remove)
+		mark_edited(ed.doc)
 		set_status(&ed.status, "pin removed", true)
 	}
 }
@@ -341,7 +347,9 @@ draw_inspector :: proc(ed: ^Editor) {
 	if ed.doc.open_venue != "" {
 		ui.im_text(fmt.ctprint(ed.doc.open_venue))
 	} else {
-		ui.igInputText("name", raw_data(ed.doc.stage_name[:]), len(ed.doc.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
+		if ui.igInputText("name", raw_data(ed.doc.stage_name[:]), len(ed.doc.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil) {
+			mark_edited(ed.doc)
+		}
 	}
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
@@ -392,8 +400,12 @@ draw_inspector :: proc(ed: ^Editor) {
 // The numbers behind it are the venue's, in road.json.
 draw_timing_section :: proc(ed:^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Timing gates",ui.IM_TREE_NODE_DEFAULT_OPEN) { return }
-	ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE)
-	ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE)
+	if ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE) {
+		mark_edited(ed.doc)
+	}
+	if ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE) {
+		mark_edited(ed.doc)
+	}
 }
 
 // Global mesh settings. Every control here changes geometry, so each marks the
@@ -597,7 +609,7 @@ draw_veg_section :: proc(ed: ^Editor) {
 	}
 	v := &ed.doc.veg
 	if ui.igCheckbox("vegetation", &v.enabled) {
-		ed.doc.veg_dirty = true
+		mark_veg_dirty(ed.doc)
 	}
 	if !v.enabled {
 		return
@@ -607,7 +619,7 @@ draw_veg_section :: proc(ed: ^Editor) {
 	for p in geo.Veg_Preset {
 		if ui.igRadioButton_Bool(geo.VEG_PRESET_NAMES[p], v.preset == p) {
 			v.preset = p
-			ed.doc.veg_dirty = true
+			mark_veg_dirty(ed.doc)
 		}
 		if p != max(geo.Veg_Preset) {
 			ui.im_same_line()
@@ -615,15 +627,15 @@ draw_veg_section :: proc(ed: ^Editor) {
 	}
 
 	if ui.igSliderFloat("density", &v.density, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		ed.doc.veg_dirty = true
+		mark_veg_dirty(ed.doc)
 	}
 	// "Prioritise near the road, only slightly": at 0 the scatter is even; at 1 the
 	// far tree line is thinned by up to that fraction. The default is deliberately low.
 	if ui.igSliderFloat("road bias", &v.road_bias, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		ed.doc.veg_dirty = true
+		mark_veg_dirty(ed.doc)
 	}
 	if ui.igSliderInt("seed", &v.seed, 1, 999, "%d", ui.IM_SLIDER_NONE) {
-		ed.doc.veg_dirty = true
+		mark_veg_dirty(ed.doc)
 	}
 
 	ui.igSpacing()
