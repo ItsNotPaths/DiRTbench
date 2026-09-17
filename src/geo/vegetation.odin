@@ -136,6 +136,10 @@ VEG_SPACING_DENSE :: f32(7)
 // How far off the verge seam the nearest tree may stand, so trunks never crowd the
 // road edge or clip the verge geometry.
 VEG_U_NEAR :: f32(4)
+// The same clearance, enforced against *every* leg of the route rather than the
+// one a candidate was cast from. A cast knows only its own verge, so on a branched
+// route it can put a trunk hard against the kerb of a road it never looked at.
+VEG_CLEAR :: f32(2)
 // When the terrain is off there is no reach to read; scatter out this far instead.
 VEG_REACH_NO_TERRAIN :: f32(60)
 // A hard cap so a huge stage at max density cannot emit an unbounded item list.
@@ -164,14 +168,21 @@ Veg_Instance :: struct {
 // whole Terrain_Field. Rebuilt from the ribbon each generate; cheap beside the
 // mesh build, and it keeps vegetation from depending on the mesh cache's lifetime.
 Veg_Field :: struct {
-	ok:         bool,
+	ok:         bool, // there is a road to test candidates against
+	heights:    bool, // and a terrain field to read ground height from
 	t:          ^Terrain,
 	fs:         []Field_Sample,
 	hash:       Sample_Hash,
 	near_other: []bool,
+	reach:      f32, // how far out from a verge a tree may stand
 	limit:      f32,
 }
 
+// Built whenever there is a road, terrain or no terrain. Keeping a tree out of a
+// road corridor is a property of the road, and a branched route puts one leg's
+// verge within candidate range of another leg's carriageway — so the corridor
+// test cannot be something the terrain toggle switches off. Only the ground
+// height needs the sculpted field.
 veg_field_make :: proc(
 	t: ^Terrain,
 	ribbon: []Cross_Section,
@@ -180,7 +191,7 @@ veg_field_make :: proc(
 	topo: c.int,
 	roughness: f32,
 ) -> Veg_Field {
-	if t == nil || !t.enabled || len(ribbon) < 2 {
+	if t == nil || len(ribbon) < 2 {
 		return {}
 	}
 	fs := field_samples(ribbon, arc, ds, topo, roughness)
@@ -192,21 +203,36 @@ veg_field_make :: proc(
 	}
 	hash := hash_build(fs, lo, hi, max(t.cell_m * 2, 8))
 	near := terrain_near_other(t, fs, hash)
-	return {ok = true, t = t, fs = fs, hash = hash, near_other = near, limit = t.reach_m + 64}
+	reach := t.enabled ? t.reach_m : VEG_REACH_NO_TERRAIN
+	return {
+		ok = true,
+		heights = t.enabled,
+		t = t,
+		fs = fs,
+		hash = hash,
+		near_other = near,
+		reach = reach,
+		limit = reach + 64,
+	}
 }
 
 // Ground Y at world XZ, and whether that point lies on the terrain at all. Mirrors
 // field_y (terrain.odin) but for a point built on the fly rather than a stored
-// vertex. `inside` is false in the road corridor and past `reach` — exactly where
-// a tree would float, so the caller drops those candidates. With no
-// field (terrain off) it reports inside=true and leaves Y to the caller's fallback.
+// vertex. `inside` is false in any leg's road corridor and past `reach` — exactly
+// where a tree would float or block the road, so the caller drops those
+// candidates, and it keeps VEG_CLEAR back from every corridor rather than merely
+// outside it. With the terrain off the test still runs; only Y falls back to the
+// caller's own.
 veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 	if !vf.ok {
 		return 0, true
 	}
 	pr := field_probe(vf.hash, vf.fs, vf.near_other, p, vf.limit)
-	if !pr.ok || pr.su <= 0 || pr.su > vf.t.reach_m {
+	if !pr.ok || pr.su <= VEG_CLEAR || pr.su > vf.reach {
 		return 0, false
+	}
+	if !vf.heights {
+		return 0, true
 	}
 	legs, n := field_legs(vf.hash, vf.fs, vf.near_other, p, vf.limit)
 	return terrain_world_height(vf.t, p, legs, n), true
@@ -265,7 +291,7 @@ veg_generate :: proc(
 	}
 
 	vf := veg_field_make(terrain, ribbon, arc, ds, topo, roughness)
-	reach := vf.ok ? terrain.reach_m : VEG_REACH_NO_TERRAIN
+	reach := vf.ok ? vf.reach : VEG_REACH_NO_TERRAIN
 	if reach <= VEG_U_NEAR {
 		return nil // no room outside the verge to plant anything
 	}
@@ -326,7 +352,7 @@ veg_generate :: proc(
 				if !inside {
 					continue
 				}
-				if !vf.ok {
+				if !vf.heights {
 					y = seam.y // no terrain: ride the verge-seam height
 				}
 
