@@ -20,10 +20,6 @@ Pssg_Types :: struct {
 	attr_id: map[Pssg_Attr_Key]u32,
 }
 
-pssg_types_delete :: proc(t: ^Pssg_Types) {
-	delete(t.node_id); delete(t.attr_id); t^ = {}
-}
-
 pssg_types_scan :: proc(file: ^Pssg_File, node: ^Pssg_Node, t: ^Pssg_Types) {
 	t.node_id[node.name] = node.type_id
 	for attr in node.attrs {

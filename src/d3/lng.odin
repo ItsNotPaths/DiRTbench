@@ -4,7 +4,6 @@ package d3
 // rebuilds the buckets, so verification is semantic rather than byte-exact.
 
 import "base:runtime"
-import "core:fmt"
 import "core:strings"
 
 Lng_Entry :: struct {

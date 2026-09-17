@@ -34,11 +34,6 @@ Registration_Source :: struct {
 	model_row:      Row,
 }
 
-registration_ids_delete :: proc(ids: ^Registration_Ids, allocator := context.allocator) {
-	delete(ids.models, allocator)
-	ids^ = {}
-}
-
 registration_output_delete :: proc(
 	out: ^Registration_Output,
 	allocator := context.allocator,

@@ -17,27 +17,15 @@ package d3
 // triangle fields are big-endian, which is why they are spelled out by byte.
 
 import "core:fmt"
-import "core:os"
-import "core:path/filepath"
 import "core:slice"
 import "core:strings"
 
 // --- byte access -------------------------------------------------------------
-// Thin, file-scoped names over binary_read.odin's shared loads, kept because
-// this file's own reader code reads far more naturally as `le_u32` than
-// `binary_load_u32` at every one of its call sites.
-
-@(private = "file")
-le_u32 :: proc(b: []u8, at: int) -> u32 {
-	return binary_load_u32(b, at)
-}
-
 @(private = "file")
 le_i32 :: proc(b: []u8, at: int) -> int {
 	return binary_load_i32(b, at)
 }
 
-@(private = "file")
 le_f32 :: proc(b: []u8, at: int) -> f32 {
 	return binary_load_f32(b, at)
 }
@@ -319,7 +307,6 @@ QT_COLOURS := [][2]string {
 	{"WDS", "0.502 0.251 0.000"}, // wooden slat
 }
 
-@(private = "file")
 qt_colour :: proc(code: string) -> string {
 	for c in QT_COLOURS {
 		if len(code) >= 3 && code[:3] == c[0] {
@@ -332,195 +319,3 @@ qt_colour :: proc(code: string) -> string {
 // One OBJ plus its MTL, grouped by surface code so a parse can be judged by
 // looking at it. Materials are what make it readable: the road has to come out
 // as one continuous ribbon of `GLD`, or the parse is wrong.
-qt_write_obj :: proc(chunks: []Qt_Chunk, path: string) -> (msg: string, ok: bool) {
-	stem := strings.trim_suffix(path, filepath.ext(path))
-	mtl_path := fmt.tprintf("%s.mtl", stem)
-
-	b := strings.builder_make(context.temp_allocator)
-	fmt.sbprintfln(&b, "mtllib %s", filepath.base(mtl_path))
-
-	// Positions first, one flat list; faces then index into it per chunk.
-	bases := make([]int, len(chunks), context.temp_allocator)
-	total := 1 // OBJ indices are 1-based
-	for c, i in chunks {
-		bases[i] = total
-		for v in c.verts {
-			fmt.sbprintfln(&b, "v %f %f %f", v[0], v[1], v[2])
-		}
-		total += len(c.verts)
-	}
-
-	// Group faces by code so each surface is one object. Sorted, so two runs of
-	// the same input give the same file.
-	codes := make([dynamic]string, context.temp_allocator)
-	for c in chunks {
-		for t in c.tris {
-			code := c.mats[t.mat]
-			if !slice.contains(codes[:], code) {
-				append(&codes, code)
-			}
-		}
-	}
-	slice.sort(codes[:])
-
-	faces := 0
-	for code in codes {
-		fmt.sbprintfln(&b, "o %s", code)
-		fmt.sbprintfln(&b, "usemtl %s", code)
-		for c, ci in chunks {
-			base := bases[ci]
-			for t in c.tris {
-				if c.mats[t.mat] != code {
-					continue
-				}
-				fmt.sbprintfln(&b, "f %d %d %d", base + t.v[0], base + t.v[1], base + t.v[2])
-				faces += 1
-			}
-		}
-	}
-
-	m := strings.builder_make(context.temp_allocator)
-	for code in codes {
-		fmt.sbprintfln(&m, "newmtl %s", code)
-		fmt.sbprintfln(&m, "Kd %s", qt_colour(code))
-		fmt.sbprintln(&m, "Ka 0 0 0")
-	}
-
-	if werr := os.write_entire_file(path, b.buf[:]); werr != nil {
-		return fmt.tprintf("could not write %s: %v", path, werr), false
-	}
-	if werr := os.write_entire_file(mtl_path, m.buf[:]); werr != nil {
-		return fmt.tprintf("could not write %s: %v", mtl_path, werr), false
-	}
-	return fmt.tprintf("%s: %d verts, %d faces, %d surfaces", path, total - 1, faces, len(codes)), true
-}
-
-// --- headless ----------------------------------------------------------------
-
-// `--dirt3-dump <track.jpk|x.vcqtc> [-o out.obj]`: parse a stock collision file
-// and write it out as an OBJ. This is milestone 0 — it checks the format notes
-// against the game's own files before anything tries to write one.
-// A `.vcqtc` on its own is one chunk; a `track.jpk` is an archive of them plus
-// a `qt.info` holding the route's bounding box. Chunk material codes slice the
-// archive, so `raw` is kept alive alongside them.
-D3_Collision_File :: struct {
-	raw:     []u8,
-	chunks:  [dynamic]Qt_Chunk,
-	skipped: int,
-}
-
-d3_collision_delete :: proc(file: ^D3_Collision_File, allocator := context.allocator) {
-	for &chunk in file.chunks { qt_chunk_delete(&chunk, allocator) }
-	delete(file.chunks)
-	delete(file.raw, allocator)
-	file^ = {}
-}
-
-d3_collision_read :: proc(path: string, allocator := context.allocator) -> (file: D3_Collision_File, msg: string, ok: bool) {
-	raw, rerr := os.read_entire_file(path, allocator)
-	if rerr != nil { return file, fmt.tprintf("could not read %s: %v", path, rerr), false }
-	file.raw = raw
-	file.chunks = make([dynamic]Qt_Chunk, allocator)
-
-	members: []Jpak_Entry
-	if len(raw) >= 4 && string(raw[:4]) == "JPAK" {
-		entries, jok := jpak_read(raw, context.temp_allocator)
-		if !jok { d3_collision_delete(&file, allocator); return file, fmt.tprintf("%s is not a readable JPAK", path), false }
-		members = entries
-	} else {
-		members = slice.clone([]Jpak_Entry{{name = filepath.base(path), data = raw}}, context.temp_allocator)
-	}
-
-	for m in members {
-		if !strings.has_suffix(m.name, ".vcqtc") { file.skipped += 1; continue }
-		chunk, cmsg, cok := qt_read(m.data, allocator)
-		if !cok { d3_collision_delete(&file, allocator); return file, fmt.tprintf("%s: %s", m.name, cmsg), false }
-		if vmsg, vok := qt_validate(&chunk); !vok {
-			qt_chunk_delete(&chunk, allocator); d3_collision_delete(&file, allocator)
-			return file, fmt.tprintf("%s: %s", m.name, vmsg), false
-		}
-		append(&file.chunks, chunk)
-	}
-	if len(file.chunks) == 0 {
-		first := "(none)"
-		if len(members) > 0 { first = members[0].name }
-		count := len(members)
-		d3_collision_delete(&file, allocator)
-		return file, fmt.tprintf("%s holds no .vcqtc chunks (%d entries; first name %q)", path, count, first), false
-	}
-	return file, "", true
-}
-
-dirt3_dump_headless :: proc(path: string, out: string) -> (msg: string, ok: bool) {
-	file, read_msg, read_ok := d3_collision_read(path, context.allocator)
-	if !read_ok { return read_msg, false }
-	defer d3_collision_delete(&file)
-
-	tris, verts := 0, 0
-	for chunk in file.chunks { tris += len(chunk.tris); verts += len(chunk.verts) }
-	fmt.printfln(
-		"%s: %d chunks, %d verts, %d tris, %d non-chunk entries",
-		filepath.base(path), len(file.chunks), verts, tris, file.skipped,
-	)
-	return qt_write_obj(file.chunks[:], out)
-}
-
-// --- surgery -----------------------------------------------------------------
-
-@(private = "file")
-le_put_f32 :: proc(b: []u8, at: int, v: f32) {
-	binary_store_f32(b, at, v)
-}
-
-// Shift every collision surface up by `dy` metres, in place, touching 8 bytes per
-// chunk and re-encoding nothing.
-//
-// A position is quantized against the chunk's own bounding box:
-//
-//	pos = quantized * (max - min) * QT_SCALE + min
-//
-// Add `dy` to `min.y` and `max.y` together and the span is unchanged, so every
-// packed vertex byte stays exactly as it was and only those two floats move. The
-// quadtree is indexed on X and Z, so it does not notice.
-//
-// This is the end-to-end test that does not need the writer: the game either
-// loads the file and drives that far above its own scenery, or it refuses it.
-qt_raise :: proc(raw: []u8, dy: f32) -> (chunks: int, ok: bool) {
-	entries := jpak_read(raw, context.temp_allocator) or_return
-	for e in entries {
-		// qt.info is the route's bounding box, 6 floats, same layout as a chunk
-		// header's first 24 bytes. Both move or the route stops containing itself.
-		is_chunk := strings.has_suffix(e.name, ".vcqtc")
-		if !is_chunk && e.name != "qt.info" {
-			continue
-		}
-		if len(e.data) < 24 {
-			return chunks, false
-		}
-		le_put_f32(e.data, 4, le_f32(e.data, 4) + dy)
-		le_put_f32(e.data, 16, le_f32(e.data, 16) + dy)
-		if is_chunk {
-			chunks += 1
-		}
-	}
-	return chunks, chunks > 0
-}
-
-// `--dirt3-raise <track.jpk> <metres> [-o out.jpk]`: write a copy of a collision
-// archive with every surface lifted. The input is never modified.
-dirt3_raise_headless :: proc(path: string, dy: f32, out: string) -> (msg: string, ok: bool) {
-	raw, rerr := os.read_entire_file(path, context.allocator)
-	if rerr != nil {
-		return fmt.tprintf("could not read %s: %v", path, rerr), false
-	}
-	defer delete(raw)
-
-	chunks := qt_raise(raw, dy) or_else 0
-	if chunks == 0 {
-		return fmt.tprintf("%s is not a readable JPAK of .vcqtc chunks", path), false
-	}
-	if werr := os.write_entire_file(out, raw); werr != nil {
-		return fmt.tprintf("could not write %s: %v", out, werr), false
-	}
-	return fmt.tprintf("%s: %d chunks raised %.2f m -> %s", filepath.base(path), chunks, dy, out), true
-}

@@ -2,8 +2,6 @@ package d3
 
 import "core:fmt"
 import "core:math"
-import "core:os"
-import "core:path/filepath"
 
 D3_PROGRESS_GATE_STEP :: f32(70)
 D3_PROGRESS_MIN_GATES :: 15

@@ -81,7 +81,6 @@ placement_layout_detects_both_formats :: proc(t: ^testing.T) {
 @(test)
 placement_relocate_with_unchanged_instances_is_identity :: proc(t: ^testing.T) {
 	original := d3_test_placement_file(context.temp_allocator)
-	layout := D3_TREES_LAYOUT
 	instances := make([]D3_Placement_Instance, 3, context.temp_allocator)
 	for i in 0 ..< 3 {
 		instances[i] = {reference_id = u32(i % 2), instance_id=u32(i), instance_tag=u32(i+1), basis = D3_BASIS_IDENTITY, position = {f32(i)*10, 1, 0}}
@@ -94,7 +93,6 @@ placement_relocate_with_unchanged_instances_is_identity :: proc(t: ^testing.T) {
 @(test)
 placement_relocate_shrinks_and_keeps_references_findable :: proc(t: ^testing.T) {
 	original := d3_test_placement_file(context.temp_allocator)
-	layout := D3_TREES_LAYOUT
 
 	// Fewer instances than the original, referencing only "omega" (index 1).
 	instances := []D3_Placement_Instance{

@@ -21,7 +21,6 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
-import "core:os"
 
 // No stock render node has a box that is flat on any axis, and a flat one draws
 // nothing at all. Keep every axis at least this thick, centred on the extent.
@@ -589,47 +588,4 @@ d3_write_tracksplit :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile, templa
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "tracksplit.pssg", data); !written { return write_msg, false }
 	return msg, true
-}
-
-// The profile maps a material to a collision code; going back the other way
-// gives a stock or exported track.jpk the visual surface that matches it.
-d3_material_of :: proc(profile: ^D3_Venue_Profile, code: string) -> Collision_Material {
-	for material in Collision_Material {
-		if profile.collision[material] == code { return material }
-	}
-	return .Terrain
-}
-
-// A debug converter: a stock track.jpk in, a routesplit out. It runs with no
-// venue open, so it draws with the fixture shaders rather than a venue's own.
-dirt3_routesplit_headless :: proc(path, out_path: string) -> (msg: string, ok: bool) {
-	profile, profile_msg, profile_ok := d3_profile_fixture()
-	if !profile_ok { return profile_msg, false }
-	collision, read_msg, read_ok := d3_collision_read(path, context.allocator)
-	if !read_ok { return read_msg, false }
-	defer d3_collision_delete(&collision)
-
-	total := 0
-	for chunk in collision.chunks { total += len(chunk.tris) }
-	tris := make([]Collision_Triangle, total, context.allocator)
-	defer delete(tris)
-	at := 0
-	for chunk in collision.chunks {
-		for tri in chunk.tris {
-			code := chunk.mats[tri.mat] if tri.mat >= 0 && tri.mat < len(chunk.mats) else ""
-			tris[at] = {
-				Points = {chunk.verts[tri.v[0]], chunk.verts[tri.v[1]], chunk.verts[tri.v[2]]},
-				Material = d3_material_of(&profile, code),
-			}
-			at += 1
-		}
-	}
-
-	data, build_msg, built := d3_routesplit_build(tris, &profile, context.allocator)
-	if !built { return build_msg, false }
-	defer delete(data)
-	if err := os.write_entire_file(out_path, data); err != nil {
-		return fmt.tprintf("could not write %s: %v", out_path, err), false
-	}
-	return fmt.tprintf("%s: %d chunks, %s", out_path, len(collision.chunks), build_msg), true
 }
