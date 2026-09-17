@@ -144,26 +144,6 @@ find_target :: proc(id: string) -> (^Export_Target, bool) {
 	return nil, false
 }
 
-// --- paths -------------------------------------------------------------------
-
-// The directory holding our own executable. `maps/`, `out/`
-// and the per-target config are all resolved against it, so a dev build and a
-// release build each keep their own.
-exe_dir :: proc(allocator := context.temp_allocator) -> string {
-	exe, err := os.get_executable_path(context.temp_allocator)
-	if err != nil {
-		return strings.clone(".", allocator) // cwd is the only sensible fallback
-	}
-	return strings.clone(filepath.dir(exe), allocator)
-}
-
-out_dir :: proc(allocator := context.temp_allocator) -> string {
-	joined, _ := filepath.join({exe_dir(), "out"}, allocator)
-	return joined
-}
-
-
-
 // --- shelling out ------------------------------------------------------------
 
 // Run a command to completion and capture its output. Returns the tool's own

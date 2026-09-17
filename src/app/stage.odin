@@ -103,26 +103,7 @@ Stage_File :: struct {
 
 // --- paths ------------------------------------------------------------------
 
-// `maps/` sits next to the executable, so a release build and a dev build each
-// see their own stages. release.sh seeds the release copy with the demo stage.
-maps_dir :: proc(allocator := context.temp_allocator) -> string {
-	joined, _ := filepath.join({exe_dir(), "maps"}, allocator)
-	return joined
-}
-
-// Create maps/ if it is not there yet. An already-existing directory is the
-// expected case, not an error.
-ensure_maps_dir :: proc() -> (dir: string, ok: bool) {
-	dir = maps_dir()
-	if os.exists(dir) {
-		return dir, true
-	}
-	if err := os.make_directory(dir); err != nil && err != os.General_Error.Exist {
-		return dir, false
-	}
-	return dir, true
-}
-
+// One loose road document in maps/. A venue's road is venue_road_path.
 stage_path :: proc(name: string, allocator := context.temp_allocator) -> string {
 	file := strings.concatenate({name, STAGE_EXT}, context.temp_allocator)
 	joined, _ := filepath.join({maps_dir(), file}, allocator)

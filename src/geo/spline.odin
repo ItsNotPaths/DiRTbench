@@ -17,7 +17,6 @@ package geo
 
 import "core:fmt"
 import "core:math"
-import "core:slice"
 import "../gfx"
 
 DEFAULT_WIDTH :: 8.0    // metres — plausible rally road width

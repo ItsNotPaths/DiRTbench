@@ -50,7 +50,7 @@ config_next :: proc(it: ^Config_Iter) -> (key, val: string, ok: bool) {
 // `dirtbench.conf` beside the executable, falling back to the current directory
 // so a tool run out of a checkout still finds one.
 conf_path :: proc(allocator := context.temp_allocator) -> string {
-	beside, _ := filepath.join({exe_dir(), CONF_NAME}, allocator)
+	beside, _ := filepath.join({data_dir(context.temp_allocator), CONF_NAME}, allocator)
 	if os.exists(beside) {
 		return beside
 	}
