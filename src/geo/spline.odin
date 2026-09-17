@@ -691,6 +691,12 @@ marker_point :: proc(sp: Spline, m: Road_Marker) -> Point {
 // the finish edge leaves to the node the start edge enters. That walk is over
 // the tree only, so it terminates even when the road loops: a weld can be the
 // finish edge but never a step in the walk.
+//
+// It only ever goes one way. The finish must be a descendant of the node the
+// start edge enters, so two markers on different branches of a fork never
+// compile even though the road joins at their common ancestor: the walk cannot
+// come back out of one branch and down another. The refusal then says no road
+// runs between them, which is not what the road looks like.
 compile_stage :: proc(
 	sp: Spline,
 	start, finish: Road_Marker,
