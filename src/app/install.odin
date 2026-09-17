@@ -39,6 +39,10 @@ install_scan_delete :: proc(vs: ^Install_Scan) {
 // Re-read the install from disk. Safe to call at any time; the previous scan is
 // released first, and the selection is dropped because its indices no longer
 // mean anything.
+//
+// Every window shares this one scan, so any of them can call this at any time.
+// That is the rule for anything derived from it elsewhere: hold an id, never an
+// index into `install.venues` or into a venue's routes, and look it up again.
 install_scan_rescan :: proc(vs: ^Install_Scan) {
 	if vs.found {
 		d3.install_delete(&vs.install)

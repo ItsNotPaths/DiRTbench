@@ -57,7 +57,7 @@ do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 	name := sanitise_stage_name(stage_name_text(ed.doc))
 	set_stage_name(ed.doc, name)
 	rebuild_geometry(ed.doc)
-	msg, ok := export_stage(ed.doc, name, target)
+	msg, ok := export_stage(ed.doc, name, ed.stage_id, target)
 	set_status(&ed.status, msg, ok)
 }
 
@@ -634,7 +634,7 @@ draw_targets :: proc(ed: ^Editor) {
 	for &t in EXPORT_TARGETS {
 		ui.igSeparatorText(fmt.ctprint(t.label))
 		ui.im_text(fmt.ctprint(t.blurb))
-		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, stage_name_text(ed.doc), &t)
+		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, stage_name_text(ed.doc), ed.stage_id, &t)
 		if !dest_ok {
 			ui.im_text_colored(DIM_COL, fmt.ctprint(dest_msg))
 		} else if installing {

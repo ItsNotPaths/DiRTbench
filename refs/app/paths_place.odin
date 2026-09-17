@@ -2,6 +2,7 @@ package main
 
 // Reference only — see refs/README.md. Not part of any package that builds.
 // To run it again, move it to src/app/ and restore its command in cli.odin.
+// It needs flat_venue.odin and d3/scratch.odin back as well.
 
 // `--dirt3-paths-place <venue_id> [<route_id>]`: the full custom-level debug
 // emit: route core, ground, decorations, venue tracksplit, all-visible VIS,

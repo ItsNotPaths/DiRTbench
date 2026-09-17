@@ -2,6 +2,7 @@ package main
 
 // Reference only — see refs/README.md. Not part of any package that builds.
 // To run it again, move it to src/app/ and restore its command in cli.odin.
+// It needs flat_venue.odin and d3/scratch.odin back as well.
 
 // `--dirt3-bisect-1 <venue_id> [<route_id>]`: stage 1 of the AI-finalise-hang
 // bisection. Resets `route_id` back to the donor's own real files everywhere

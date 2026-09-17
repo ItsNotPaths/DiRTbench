@@ -1,5 +1,9 @@
 package main
 
+// Reference only — see refs/README.md. Not part of any package that builds.
+// It tests paths_place.odin, so that file, flat_venue.odin and d3/scratch.odin
+// all have to come back with it.
+
 import "core:testing"
 import "../geo"
 

@@ -42,8 +42,11 @@ Venues_Screen :: struct {
 	adding:       bool,
 	name_buf:     [64]u8, // ImGui edits these in place, so they are fixed buffers
 	display_buf:  [64]u8,
-	base_venue:   int, // index into install.venues, -1 for none picked
-	base_route:   int,
+	// The vanilla venue the new one clones its art from, by **id**, not by index
+	// into `install.venues`: any deploy, revert or Rescan install rebuilds that
+	// array, and an index would then name a different venue. "" for none picked.
+	base_venue:   string,
+	base_route:   string,
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
 	delete_ready: string, // second click confirms project deletion
@@ -56,12 +59,13 @@ Venues_Screen :: struct {
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
-	ps.base_venue, ps.base_route = -1, -1
 	venues_screen_reload(ps)
 }
 
 venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	venues_free(ps.venues)
+	delete(ps.base_venue)
+	delete(ps.base_route)
 	delete(ps.error)
 	delete(ps.deploy_ready)
 	delete(ps.delete_ready)
@@ -486,19 +490,18 @@ draw_new_venue :: proc(app: ^App) {
 	ui.im_text_colored(DIM_COL, fmt.ctprintf("directory and file_string: %s", id))
 
 	ui.im_text("Art comes from:")
-	for venue, vi in vs.install.venues {
+	for venue in vs.install.venues {
 		if !venue_is_base(venue) {
 			continue
 		}
 		if _, ours := venue_for(ps, venue.id); ours {
 			continue
 		}
-		if ui.igRadioButton_Bool(
-			fmt.ctprintf("%s###base_%d", venue.id, vi),
-			ps.base_venue == vi,
-		) {
-			ps.base_venue = vi
-			ps.base_route = first_playable_route(venue)
+		if ui.igRadioButton_Bool(fmt.ctprint(venue.id), ps.base_venue == venue.id) {
+			delete(ps.base_venue)
+			delete(ps.base_route)
+			ps.base_venue = strings.clone(venue.id)
+			ps.base_route = strings.clone(first_playable_route(venue))
 		}
 	}
 
@@ -506,17 +509,18 @@ draw_new_venue :: proc(app: ^App) {
 		ui.im_text_colored(WARN_COL, fmt.ctprint(ps.error))
 	}
 
-	ready := ps.base_venue >= 0 && ps.base_route >= 0
-	ui.igBeginDisabled(!ready)
+	// Looked up every frame rather than held: a rescan between the pick and the
+	// click can take the base away, and then there is nothing to clone.
+	base, have_base := install_venue_by_id(vs, ps.base_venue)
+	ui.igBeginDisabled(!have_base || ps.base_route == "")
 	if ui.im_button("Create") {
-		base := vs.install.venues[ps.base_venue]
 		spec := fmt.tprintf("%s/%s", base.location, base.id)
 		p, msg, ok := venue_create(
 			vs,
 			id,
 			buf_text(ps.display_buf[:]),
 			spec,
-			base.routes[ps.base_route].id,
+			ps.base_route,
 		)
 		delete(ps.error)
 		ps.error = ""
@@ -535,13 +539,28 @@ draw_new_venue :: proc(app: ^App) {
 }
 
 @(private = "file")
-first_playable_route :: proc(venue: d3.Venue) -> int {
-	for route, i in venue.routes {
+first_playable_route :: proc(venue: d3.Venue) -> string {
+	for route in venue.routes {
 		if d3.route_playable(route) {
-			return i
+			return route.id
 		}
 	}
-	return -1
+	return ""
+}
+
+// A vanilla venue by id. Ids are unique across an install, so the location is
+// not part of the lookup.
+@(private = "file")
+install_venue_by_id :: proc(vs: ^Install_Scan, id: string) -> (venue: d3.Venue, found: bool) {
+	if !vs.found || id == "" {
+		return
+	}
+	for v in vs.install.venues {
+		if v.id == id {
+			return v, true
+		}
+	}
+	return
 }
 
 // --- opening -----------------------------------------------------------------
@@ -570,9 +589,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 		}
 	}
 	delete(doc.open_venue)
-	delete(doc.open_stage)
 	doc.open_venue = strings.clone(p.id)
-	doc.open_stage = ""
 	set_stage_name(doc, p.id)
 	mark_dirty(doc)
 	return "", true

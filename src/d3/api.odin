@@ -51,9 +51,9 @@ Export_Job :: struct {
 // Public entry points used by the editor's headless CLI. The implementation
 // stays package-private; these names are the deliberately small package seam.
 //
-// The probe entry points that scratch.odin backed are not here: that file is
-// reference only and is not compiled (`#+build ignore`). Reinstating one means
-// dropping the directive and adding its alias back.
+// The probe entry points that scratch.odin backed are not here: that file lives
+// in `refs/` and is not compiled. Reinstating one means moving the file back and
+// adding its alias here — see refs/README.md, which lists the eleven names.
 Export :: export_dirt3
 Export_Geometry :: export_dirt3_geometry
 Export_Venue_Geometry :: export_dirt3_venue_geometry

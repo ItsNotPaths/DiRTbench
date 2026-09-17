@@ -28,9 +28,10 @@ TOPO_MAX :: 48
 // up in the others with nothing to synchronise.
 Venue_Doc :: struct {
 	// Which venue is open, "" when it is a loose stage out of maps/. Saving
-	// writes back to the venue.
+	// writes back to the venue. Which *stage* is not here: a document is the
+	// whole road graph, and the window (or the headless command) says which
+	// stage of it is being looked at or exported.
 	open_venue:    string,
-	open_stage:    string,
 	// The venue's stage list. It belongs to venue.json and is written back when
 	// the road is saved. The project manager edits it here while a window has
 	// the venue open; a stage window's `route_sel` indexes it.

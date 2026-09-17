@@ -19,23 +19,46 @@ and none of them is safe to run without reading it first.
 
 ## To bring one back
 
-1. Move the file into `src/app/` or `src/d3/`, whichever its `package` line says.
-2. **Move `d3/scratch.odin` back too**, unless the file you want is
-   `paths_place_test.odin`. All three app probes call into it:
+Checked 2026-09-17 by doing it: each set below was moved into `src/` in a copy
+of the tree and built.
 
-   | probe | needs from `scratch.odin` |
-   | --- | --- |
-   | `paths_place.odin` | `d3_stock_route_all_visible_vis` |
-   | `flat_venue.odin` | `d3_stock_route_all_visible_vis` |
-   | `finland_bisect.odin` | `d3_stock_route_all_visible_vis`, `d3_collision_read`, `d3_collision_delete`, `d3_material_of` |
+Move the files into `src/app/` or `src/d3/`, whichever each `package` line says.
+The set is never one file:
 
-3. Add each symbol the CLI reaches back to `src/d3/api.odin`. The probe aliases
-   were removed from it; `src/app/cli.odin` calls `d3.Name`, not the
-   package-private name.
-4. Restore the command block in `src/app/cli.odin`.
+| you want | move back |
+| --- | --- |
+| `--dirt3-flat-venue` | `app/flat_venue.odin`, `d3/scratch.odin` |
+| `--dirt3-paths-place` | the above **plus** `app/paths_place.odin` |
+| `--dirt3-bisect-1`, `-1-flat`, `-short` | `app/flat_venue.odin`, `d3/scratch.odin`, `app/finland_bisect.odin` |
+| the probe tests | every app probe above plus `app/paths_place_test.odin` |
 
-A file compiles as soon as it is back under `src/` — there is no build flag to
-unset — but it will not link until steps 2 and 3 are done.
+`flat_venue.odin` is the one the table above kept repeating: `paths_place.odin`
+calls `flat_venue_ens_ref` and `finland_bisect.odin` calls
+`flat_venue_tiled_plane`, so neither compiles without it. `paths_place_test.odin`
+alone does not compile either — it tests procedures in `paths_place.odin`.
+
+What each app probe needs from `scratch.odin`:
+
+| probe | needs |
+| --- | --- |
+| `paths_place.odin` | `d3_stock_route_all_visible_vis` |
+| `flat_venue.odin` | `d3_stock_route_all_visible_vis` |
+| `finland_bisect.odin` | `d3_stock_route_all_visible_vis`, `d3_collision_read`, `d3_collision_delete`, `d3_material_of` |
+
+Then restore the command block in `src/app/cli.odin`. It was cut in `57bbfa0`,
+so the text is `git show 57bbfa0^:src/app/cli.odin` (the `--dirt3-*` blocks) —
+do not check the whole file out, because that commit also split `main.odin`.
+
+**`src/d3/api.odin` only matters for the scratch commands.** `Dump`, `Raise`,
+`Ramp`, `Partition_Strip`, `Flat`, `Partition_Strip_On_Stock`, `Ramp_On_Stock`,
+`Bridge_Bump`, `Rewrite`, `Routesplit` and `Vis_All_Visible` were the aliases
+`cli.odin` called, and they were dropped in the same commit
+(`git show 57bbfa0 -- src/d3/api.odin`). The three app probes need none of them:
+they call the package names directly (`d3.d3_collision_read`), which compiles
+because nothing in `scratch.odin` is marked `@(private)`.
+
+A file compiles as soon as its set is back under `src/` — there is no build flag
+to unset.
 
 ## What did not come here
 

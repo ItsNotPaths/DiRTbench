@@ -2,6 +2,7 @@ package main
 
 // Reference only — see refs/README.md. Not part of any package that builds.
 // To run it again, move it to src/app/ and restore its command in cli.odin.
+// It needs d3/scratch.odin back as well.
 
 // Build route and venue files directly from the complete road.json. Reading
 // the whole road preserves the grid lead-in that compiled stages trim away.

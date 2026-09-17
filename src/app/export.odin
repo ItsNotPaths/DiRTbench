@@ -283,6 +283,7 @@ build_export_job :: proc(doc: ^Venue_Doc, name: string) -> (job: Export_Job, msg
 export_dest :: proc(
 	doc: ^Venue_Doc,
 	name: string,
+	stage_id: string,
 	target: ^Export_Target,
 ) -> (
 	dir: string,
@@ -296,7 +297,7 @@ export_dest :: proc(
 		// has been deployed, which is a separate step and does not exist yet —
 		// so say so, rather than creating a directory the game never reads.
 		if doc.open_venue != "" {
-			route, deployed := venue_deploy_dir(doc, doc.open_venue, doc.open_stage)
+			route, deployed := venue_deploy_dir(doc, doc.open_venue, stage_id)
 			if !deployed {
 				return "", false, fmt.tprintf(
 					"%s is not in the game yet; tick Write to out/ until deploying exists",
@@ -322,12 +323,18 @@ export_dest :: proc(
 }
 
 // Build the job and hand it to one target. Returns a status-line message.
-export_stage :: proc(doc: ^Venue_Doc, name: string, target: ^Export_Target) -> (msg: string, ok: bool) {
+//
+// `stage_id` names which of the venue's stages this is, and is what picks the
+// route directory inside the game. It is empty for a loose stage out of maps/,
+// which has no venue and lands in the selected install route instead.
+export_stage :: proc(
+	doc: ^Venue_Doc, name, stage_id: string, target: ^Export_Target,
+) -> (msg: string, ok: bool) {
 	job, jmsg, jok := build_export_job(doc, name)
 	if !jok {
 		return jmsg, false
 	}
-	dest, installing, dmsg, dok := export_dest(doc, name, target)
+	dest, installing, dmsg, dok := export_dest(doc, name, stage_id, target)
 	if !dok {
 		return dmsg, false
 	}
@@ -419,7 +426,7 @@ export_headless :: proc(
 	// <venue>/<route_n>` names a route already in the game. They are the two
 	// destinations an install can have, and only one applies at a time.
 	if venue != "" {
-		doc.open_venue, doc.open_stage = venue, stage
+		doc.open_venue = venue
 	} else if route != "" {
 		if m, sok := install_scan_select(doc.install, route); !sok {
 			return m, false
@@ -435,10 +442,10 @@ export_headless :: proc(
 			if !pok { return pmsg, false }
 			// A venue stage is compiled out of the road graph, not read from a
 			// document of its own.
-			stage, cmsg, cok := venue_compile_route(p, doc.open_stage, doc, context.allocator)
+			compiled, cmsg, cok := venue_compile_route(p, stage, doc, context.allocator)
 			if !cok { return cmsg, false }
 			delete(doc.spline.points)
-			doc.spline = stage
+			doc.spline = compiled
 			return cmsg, true
 		}
 		return load_road_named(doc, stage)
@@ -468,5 +475,6 @@ export_headless :: proc(
 			doc.ribbon_gen,
 		)
 	}
-	return export_stage(&doc, stage, target)
+	// A `--venue` export names its stage; a loose one out of maps/ has none.
+	return export_stage(&doc, stage, venue != "" ? stage : "", target)
 }
