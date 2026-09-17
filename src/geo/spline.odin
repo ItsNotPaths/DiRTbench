@@ -18,7 +18,7 @@ package geo
 import "core:fmt"
 import "core:math"
 import "core:slice"
-import rl "../gfx"
+import "../gfx"
 
 DEFAULT_WIDTH :: 8.0    // metres — plausible rally road width
 SAMPLES_PER_SEG :: 14   // curve subdivisions between two control points
@@ -41,7 +41,7 @@ Point :: struct {
 	// road close a loop while every walk over the graph still terminates, with
 	// no cycle detection anywhere. Unlike a parent, a weld may point forward.
 	weld:        int,
-	xform:       rl.Transform, // translation = centre, rotation = road frame
+	xform:       gfx.Transform, // translation = centre, rotation = road frame
 	width:       f32,          // road width, metres
 
 	// Cliffs rise from the road's edges, centred on this control point.
@@ -133,10 +133,10 @@ Cross_Section :: struct {
 	// True when this starts another graph edge rather than continuing from the
 	// previous sampled section. Consumers must not bridge across this boundary.
 	break_before: bool,
-	pos:     rl.Vector3,
-	right:   rl.Vector3, // across the road, unit
-	up:      rl.Vector3, // surface normal, unit
-	fwd:     rl.Vector3, // travel direction, unit
+	pos:     gfx.Vector3,
+	right:   gfx.Vector3, // across the road, unit
+	up:      gfx.Vector3, // surface normal, unit
+	fwd:     gfx.Vector3, // travel direction, unit
 	width:   f32,
 	seg:     int,
 	// The graph edge this sample lies on, and where along it. `seg` alone
@@ -161,48 +161,48 @@ Cross_Section :: struct {
 
 // --- frame helpers ----------------------------------------------------------
 
-point_forward :: proc(p: Point) -> rl.Vector3 {
-	return rl.Vector3Normalize(rl.Vector3RotateByQuaternion({0, 0, 1}, p.xform.rotation))
+point_forward :: proc(p: Point) -> gfx.Vector3 {
+	return gfx.Vector3Normalize(gfx.Vector3RotateByQuaternion({0, 0, 1}, p.xform.rotation))
 }
-point_right :: proc(p: Point) -> rl.Vector3 {
-	return rl.Vector3Normalize(rl.Vector3RotateByQuaternion({1, 0, 0}, p.xform.rotation))
+point_right :: proc(p: Point) -> gfx.Vector3 {
+	return gfx.Vector3Normalize(gfx.Vector3RotateByQuaternion({1, 0, 0}, p.xform.rotation))
 }
-point_up :: proc(p: Point) -> rl.Vector3 {
-	return rl.Vector3Normalize(rl.Vector3RotateByQuaternion({0, 1, 0}, p.xform.rotation))
+point_up :: proc(p: Point) -> gfx.Vector3 {
+	return gfx.Vector3Normalize(gfx.Vector3RotateByQuaternion({0, 1, 0}, p.xform.rotation))
 }
 
 // the two rung endpoints of a control point (left, right), honouring bank
-point_ends :: proc(p: Point) -> (left: rl.Vector3, right: rl.Vector3) {
+point_ends :: proc(p: Point) -> (left: gfx.Vector3, right: gfx.Vector3) {
 	r := point_right(p)
 	half := r * (p.width * 0.5)
 	return p.xform.translation + half, p.xform.translation - half
 }
 
 // a quaternion whose local +Z == fwd and +Y == up (orthonormalised)
-quat_from_frame :: proc(fwd, up: rl.Vector3) -> rl.Quaternion {
-	f := rl.Vector3Normalize(fwd)
-	r := rl.Vector3Normalize(rl.Vector3CrossProduct(up, f))
-	u := rl.Vector3CrossProduct(f, r)
+quat_from_frame :: proc(fwd, up: gfx.Vector3) -> gfx.Quaternion {
+	f := gfx.Vector3Normalize(fwd)
+	r := gfx.Vector3Normalize(gfx.Vector3CrossProduct(up, f))
+	u := gfx.Vector3CrossProduct(f, r)
 	// column-major basis (right, up, forward) as a rotation matrix
-	m := rl.Matrix{
+	m := gfx.Matrix{
 		r.x, u.x, f.x, 0,
 		r.y, u.y, f.y, 0,
 		r.z, u.z, f.z, 0,
 		0,   0,   0,   1,
 	}
-	return rl.QuaternionFromMatrix(m)
+	return gfx.QuaternionFromMatrix(m)
 }
 
 // level heading (yaw about +Y) pointing from `from` toward `to`
-heading_quat :: proc(from, to: rl.Vector3) -> rl.Quaternion {
+heading_quat :: proc(from, to: gfx.Vector3) -> gfx.Quaternion {
 	d := to - from
 	yaw := math.atan2(d.x, d.z)
-	return rl.QuaternionFromAxisAngle({0, 1, 0}, yaw)
+	return gfx.QuaternionFromAxisAngle({0, 1, 0}, yaw)
 }
 
 make_point :: proc(
-	pos: rl.Vector3,
-	rot: rl.Quaternion,
+	pos: gfx.Vector3,
+	rot: gfx.Quaternion,
 	width: f32,
 	cliff_l: f32 = 0,
 	cliff_r: f32 = 0,
@@ -231,10 +231,10 @@ make_point :: proc(
 // --- cubic Hermite ----------------------------------------------------------
 
 // position on the Hermite segment p0->p1 at t in [0,1]
-hermite_pos :: proc(p0, p1: Point, t: f32) -> rl.Vector3 {
+hermite_pos :: proc(p0, p1: Point, t: f32) -> gfx.Vector3 {
 	P0 := p0.xform.translation
 	P1 := p1.xform.translation
-	L := rl.Vector3Length(P1 - P0) * HERMITE_TENSION
+	L := gfx.Vector3Length(P1 - P0) * HERMITE_TENSION
 	T0 := point_forward(p0) * L
 	T1 := point_forward(p1) * L
 	t2 := t * t
@@ -247,10 +247,10 @@ hermite_pos :: proc(p0, p1: Point, t: f32) -> rl.Vector3 {
 }
 
 // tangent (unnormalised travel direction) on the segment at t
-hermite_tangent :: proc(p0, p1: Point, t: f32) -> rl.Vector3 {
+hermite_tangent :: proc(p0, p1: Point, t: f32) -> gfx.Vector3 {
 	P0 := p0.xform.translation
 	P1 := p1.xform.translation
-	L := rl.Vector3Length(P1 - P0) * HERMITE_TENSION
+	L := gfx.Vector3Length(P1 - P0) * HERMITE_TENSION
 	T0 := point_forward(p0) * L
 	T1 := point_forward(p1) * L
 	t2 := t * t
@@ -270,15 +270,15 @@ sample_at :: proc(sp: Spline, seg: int, t: f32) -> Cross_Section {
 	// Test the raw tangent, not the normalised one: a near-zero tangent
 	// normalises to a unit vector pointing anywhere.
 	tangent := hermite_tangent(p0, p1, t)
-	fwd := rl.Vector3Normalize(tangent)
-	if rl.Vector3Length(tangent) < 1e-5 {
+	fwd := gfx.Vector3Normalize(tangent)
+	if gfx.Vector3Length(tangent) < 1e-5 {
 		fwd = point_forward(p0)
 	}
 	// interpolate the surface normal (banking / slope) via the control rotations
-	q := rl.QuaternionSlerp(p0.xform.rotation, p1.xform.rotation, t)
-	up_ref := rl.Vector3Normalize(rl.Vector3RotateByQuaternion({0, 1, 0}, q))
-	right := rl.Vector3Normalize(rl.Vector3CrossProduct(up_ref, fwd))
-	up := rl.Vector3Normalize(rl.Vector3CrossProduct(fwd, right))
+	q := gfx.QuaternionSlerp(p0.xform.rotation, p1.xform.rotation, t)
+	up_ref := gfx.Vector3Normalize(gfx.Vector3RotateByQuaternion({0, 1, 0}, q))
+	right := gfx.Vector3Normalize(gfx.Vector3CrossProduct(up_ref, fwd))
+	up := gfx.Vector3Normalize(gfx.Vector3CrossProduct(fwd, right))
 	width := p0.width + (p1.width - p0.width) * t
 	angle := p0.cliff_angle + (p1.cliff_angle - p0.cliff_angle) * t
 	rough := p0.roughness + (p1.roughness - p0.roughness) * t
@@ -292,12 +292,12 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 	p0, p1 := sp.points[parent], sp.points[child]
 	pos := hermite_pos(p0, p1, t)
 	tangent := hermite_tangent(p0, p1, t)
-	fwd := rl.Vector3Normalize(tangent)
-	if rl.Vector3Length(tangent) < 1e-5 { fwd = point_forward(p0) }
-	q := rl.QuaternionSlerp(p0.xform.rotation, p1.xform.rotation, t)
-	up_ref := rl.Vector3Normalize(rl.Vector3RotateByQuaternion({0, 1, 0}, q))
-	right := rl.Vector3Normalize(rl.Vector3CrossProduct(up_ref, fwd))
-	up := rl.Vector3Normalize(rl.Vector3CrossProduct(fwd, right))
+	fwd := gfx.Vector3Normalize(tangent)
+	if gfx.Vector3Length(tangent) < 1e-5 { fwd = point_forward(p0) }
+	q := gfx.QuaternionSlerp(p0.xform.rotation, p1.xform.rotation, t)
+	up_ref := gfx.Vector3Normalize(gfx.Vector3RotateByQuaternion({0, 1, 0}, q))
+	right := gfx.Vector3Normalize(gfx.Vector3CrossProduct(up_ref, fwd))
+	up := gfx.Vector3Normalize(gfx.Vector3CrossProduct(fwd, right))
 	return Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
 		width = p0.width + (p1.width-p0.width)*t,
@@ -382,7 +382,7 @@ build_ribbon :: proc(
 ribbon_arc :: proc(ribbon: []Cross_Section, allocator := context.temp_allocator) -> []f32 {
 	arc := make([]f32, len(ribbon), allocator)
 	for i in 1 ..< len(ribbon) {
-		arc[i] = arc[i - 1] + rl.Vector3Distance(ribbon[i - 1].pos, ribbon[i].pos)
+		arc[i] = arc[i - 1] + gfx.Vector3Distance(ribbon[i - 1].pos, ribbon[i].pos)
 	}
 	return arc
 }
@@ -413,7 +413,7 @@ ribbon_curvature :: proc(
 			continue
 		}
 		dfwd := ribbon[i + 1].fwd - ribbon[i - 1].fwd
-		k[i] = rl.Vector3DotProduct(dfwd, ribbon[i].right) / ds
+		k[i] = gfx.Vector3DotProduct(dfwd, ribbon[i].right) / ds
 	}
 	k[0] = k[1]
 	k[n - 1] = k[n - 2]
@@ -485,7 +485,7 @@ resolve_cliffs :: proc(sp: Spline, ribbon: []Cross_Section, spp: int) {
 }
 
 // rung endpoints of a cross-section (left, right)
-xsec_ends :: proc(cs: Cross_Section) -> (left: rl.Vector3, right: rl.Vector3) {
+xsec_ends :: proc(cs: Cross_Section) -> (left: gfx.Vector3, right: gfx.Vector3) {
 	half := cs.right * (cs.width * 0.5)
 	return cs.pos + half, cs.pos - half
 }
@@ -499,7 +499,7 @@ handle_radius :: proc(width: f32) -> f32 {
 
 // insert a control point on segment (seg, seg+1) at world point `at`, framed by
 // the interpolated road frame there. Returns the new point's index.
-insert_point :: proc(sp: ^Spline, seg: int, at: rl.Vector3, frame: Cross_Section) -> int {
+insert_point :: proc(sp: ^Spline, seg: int, at: gfx.Vector3, frame: Cross_Section) -> int {
 	if !is_linear(sp^) {
 		child := seg
 		if child <= 0 || child >= len(sp.points) { return -1 }
@@ -625,8 +625,8 @@ reverse_spline :: proc(sp: ^Spline) {
 }
 
 // append a control point at world point `at`, level, aimed there from the last
-append_point :: proc(sp: ^Spline, at: rl.Vector3) -> int {
-	rot := rl.Quaternion(1)
+append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
+	rot := gfx.Quaternion(1)
 	width := f32(DEFAULT_WIDTH)
 	cliff_l, cliff_r: f32
 	span_l := f32(DEFAULT_CLIFF_SPAN)

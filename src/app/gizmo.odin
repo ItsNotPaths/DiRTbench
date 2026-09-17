@@ -6,7 +6,7 @@ package main
 
 import "../geo"
 import "../ui"
-import rl "../gfx"
+import "../gfx"
 
 // Draw the gizmo on `p` and, while it is dragged, fold the result back into the
 // point's transform. Returns true while dragging.
@@ -14,7 +14,7 @@ import rl "../gfx"
 // Translation is world-aligned (drag along world X/Y/Z), rotation is
 // object-aligned so the rings match the road frame: yaw steers, pitch slopes,
 // roll banks. Scale is never offered — road width is a separate scalar.
-gizmo_manipulate :: proc(p: ^geo.Point, cam: rl.Camera3D, mode: Gizmo_Mode) -> bool {
+gizmo_manipulate :: proc(p: ^geo.Point, cam: gfx.Camera3D, mode: Gizmo_Mode) -> bool {
 	op: ui.Gizmo_Operation = mode == .Move ? .Translate : .Rotate
 	space: ui.Gizmo_Space = mode == .Move ? .World : .Local
 

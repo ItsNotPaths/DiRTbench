@@ -195,10 +195,10 @@ run_tool :: proc(exe: string, args: ..string) -> (out: string, ok: bool) {
 // The terrain is included as a *driveable* surface, not scenery — a target that
 // makes the mesh its own collision must not let a car that leaves the road fall
 // through the void.
-build_export_mesh :: proc(ed: ^Editor, allocator := context.allocator) -> geo.Tri_Mesh {
-	m := geo.build_tri_mesh(ed.ribbon, ed.topo, ed.roughness, allocator)
-	if ed.terrain.enabled && len(ed.terrain_field.tris) > 0 {
-		geo.build_terrain_mesh(&m, &ed.terrain, &ed.terrain_field)
+build_export_mesh :: proc(doc: ^Venue_Doc, allocator := context.allocator) -> geo.Tri_Mesh {
+	m := geo.build_tri_mesh(doc.ribbon, doc.topo, doc.roughness, allocator)
+	if doc.terrain.enabled && len(doc.terrain_field.tris) > 0 {
+		geo.build_terrain_mesh(&m, &doc.terrain, &doc.terrain_field)
 	}
 	return m
 }
@@ -235,36 +235,36 @@ sort_faces_by_material :: proc(
 
 // Everything the editor holds, flattened for a target. Temp-allocated: valid for
 // the duration of one export.
-build_export_job :: proc(ed: ^Editor, name: string) -> (job: Export_Job, msg: string, ok: bool) {
-	if len(ed.spline.points) < 2 {
+build_export_job :: proc(doc: ^Venue_Doc, name: string) -> (job: Export_Job, msg: string, ok: bool) {
+	if len(doc.spline.points) < 2 {
 		return job, "nothing to export: a stage needs at least 2 points", false
 	}
 
 	job.name = name
-	job.mesh = build_export_mesh(ed, context.temp_allocator)
+	job.mesh = build_export_mesh(doc, context.temp_allocator)
 	job.order, job.counts = sort_faces_by_material(job.mesh)
 	if len(job.order) == 0 {
 		return job, "nothing to export: the mesh has no triangles", false
 	}
-	job.ribbon = ed.ribbon
-	job.timing = ed.timing
+	job.ribbon = doc.ribbon
+	job.timing = doc.timing
 	// glTF needs no shaders, so a missing profile is only fatal for the target
 	// that names them.
-	job.profile, job.profile_msg, _ = export_profile(ed.install, ed.open_venue, context.temp_allocator)
+	job.profile, job.profile_msg, _ = export_profile(doc.install, doc.open_venue, context.temp_allocator)
 	job.props = geo.veg_generate(
-		ed.ribbon,
-		&ed.terrain,
-		ed.veg,
-		ed.topo,
-		ed.roughness,
+		doc.ribbon,
+		&doc.terrain,
+		doc.veg,
+		doc.topo,
+		doc.roughness,
 		context.temp_allocator,
 	)
 
-	// The headless path leaves ed.pace zero-valued, which would read as "every
+	// The headless path leaves doc.pace zero-valued, which would read as "every
 	// knob at zero" rather than "unset".
-	job.pace = ed.pace.smooth_m != 0 ? ed.pace : geo.PACE_DEFAULTS
+	job.pace = doc.pace.smooth_m != 0 ? doc.pace : geo.PACE_DEFAULTS
 	notes := make([dynamic]geo.Pace_Note, context.temp_allocator)
-	geo.pace_generate(ed.ribbon, job.pace, &notes)
+	geo.pace_generate(doc.ribbon, job.pace, &notes)
 	job.notes = notes[:]
 
 	return job, "", true
@@ -281,7 +281,7 @@ build_export_job :: proc(ed: ^Editor, name: string) -> (job: Export_Job, msg: st
 // there unconditionally, since the game could not open its output anyway.
 // Pure: it creates nothing, so the Export targets panel can ask every frame.
 export_dest :: proc(
-	ed: ^Editor,
+	doc: ^Venue_Doc,
 	name: string,
 	target: ^Export_Target,
 ) -> (
@@ -290,22 +290,22 @@ export_dest :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	if target.installs && !ed.debug_export {
+	if target.installs && !doc.debug_export {
 		// A stage opened from one of our venues goes to that venue's own route
 		// directory inside the game. That directory only exists once the venue
 		// has been deployed, which is a separate step and does not exist yet —
 		// so say so, rather than creating a directory the game never reads.
-		if ed.open_venue != "" {
-			route, deployed := venue_deploy_dir(ed, ed.open_venue, ed.open_stage)
+		if doc.open_venue != "" {
+			route, deployed := venue_deploy_dir(doc, doc.open_venue, doc.open_stage)
 			if !deployed {
 				return "", false, fmt.tprintf(
 					"%s is not in the game yet; tick Write to out/ until deploying exists",
-					ed.open_venue,
+					doc.open_venue,
 				), false
 			}
 			return route, true, "", true
 		}
-		route := install_scan_route_dir(ed.install)
+		route := install_scan_route_dir(doc.install)
 		if route == "" {
 			return "", false, "no route selected: open one from Dirt 3 > Install_Scan, or tick Write to out/", false
 		}
@@ -313,8 +313,8 @@ export_dest :: proc(
 	}
 	// Two venues can both hold a `route_0`, so the debug detour keeps them
 	// apart by venue.
-	if ed.open_venue != "" {
-		dir, _ = filepath.join({out_dir(), ed.open_venue, name}, context.temp_allocator)
+	if doc.open_venue != "" {
+		dir, _ = filepath.join({out_dir(), doc.open_venue, name}, context.temp_allocator)
 	} else {
 		dir, _ = filepath.join({out_dir(), name}, context.temp_allocator)
 	}
@@ -322,12 +322,12 @@ export_dest :: proc(
 }
 
 // Build the job and hand it to one target. Returns a status-line message.
-export_stage :: proc(ed: ^Editor, name: string, target: ^Export_Target) -> (msg: string, ok: bool) {
-	job, jmsg, jok := build_export_job(ed, name)
+export_stage :: proc(doc: ^Venue_Doc, name: string, target: ^Export_Target) -> (msg: string, ok: bool) {
+	job, jmsg, jok := build_export_job(doc, name)
 	if !jok {
 		return jmsg, false
 	}
-	dest, installing, dmsg, dok := export_dest(ed, name, target)
+	dest, installing, dmsg, dok := export_dest(doc, name, target)
 	if !dok {
 		return dmsg, false
 	}
@@ -404,7 +404,7 @@ export_headless :: proc(
 	// The install scan is the only thing that knows where the game is, so a
 	// headless export into it needs the scan too.
 	scan: Install_Scan
-	ed := Editor {
+	doc := Venue_Doc {
 		install   = &scan,
 		topo      = geo.SAMPLES_PER_SEG,
 		roughness = roughness,
@@ -412,63 +412,61 @@ export_headless :: proc(
 		pace      = geo.PACE_DEFAULTS,
 		veg       = geo.VEG_DEFAULTS,
 	}
-	ed.debug_export = debug_out
-	install_scan_init(ed.install)
-	defer install_scan_delete(ed.install)
+	doc.debug_export = debug_out
+	install_scan_init(doc.install)
+	defer install_scan_delete(doc.install)
 	// `--venue <id>` names one of ours and `stage` is its stage; `--route
 	// <venue>/<route_n>` names a route already in the game. They are the two
 	// destinations an install can have, and only one applies at a time.
 	if venue != "" {
-		ed.open_venue, ed.open_stage = venue, stage
+		doc.open_venue, doc.open_stage = venue, stage
 	} else if route != "" {
-		if m, sok := install_scan_select(ed.install, route); !sok {
+		if m, sok := install_scan_select(doc.install, route); !sok {
 			return m, false
 		}
 	}
-	defer delete(ed.spline.points)
-	defer geo.terrain_delete(&ed.terrain)
-	defer geo.terrain_field_delete(&ed.terrain_field)
+	defer delete(doc.spline.points)
+	defer geo.terrain_delete(&doc.terrain)
+	defer geo.terrain_field_delete(&doc.terrain_field)
 
-	load :: proc(ed: ^Editor, stage: string) -> (msg: string, ok: bool) {
-		if ed.open_venue != "" {
-			p, pmsg, pok := venue_load(ed.open_venue, context.temp_allocator)
+	load :: proc(doc: ^Venue_Doc, stage: string) -> (msg: string, ok: bool) {
+		if doc.open_venue != "" {
+			p, pmsg, pok := venue_load(doc.open_venue, context.temp_allocator)
 			if !pok { return pmsg, false }
 			// A venue stage is compiled out of the road graph, not read from a
 			// document of its own.
-			stage, cmsg, cok := venue_compile_route(
-				p, ed.open_stage, &ed.veg, &ed.timing, &ed.terrain, context.allocator,
-			)
+			stage, cmsg, cok := venue_compile_route(p, doc.open_stage, doc, context.allocator)
 			if !cok { return cmsg, false }
-			delete(ed.spline.points)
-			ed.spline = stage
+			delete(doc.spline.points)
+			doc.spline = stage
 			return cmsg, true
 		}
-		return load_stage(&ed.spline, stage, &ed.veg, &ed.timing, &ed.terrain)
+		return load_road_named(doc, stage)
 	}
-	if m, lok := load(&ed, stage); !lok {
+	if m, lok := load(&doc, stage); !lok {
 		return m, false
 	}
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a stage that has none.
-	ed.terrain.enabled = ed.terrain.enabled || terrain
-	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), context.allocator)
-	defer delete(ed.ribbon)
-	ed.ribbon_gen = 1
+	doc.terrain.enabled = doc.terrain.enabled || terrain
+	doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), context.allocator)
+	defer delete(doc.ribbon)
+	doc.ribbon_gen = 1
 
-	if ed.terrain.enabled {
-		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
-		arc := geo.ribbon_arc(ed.ribbon)
-		ds := geo.sample_spacing(ed.ribbon)
+	if doc.terrain.enabled {
+		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.topo, doc.roughness)
+		arc := geo.ribbon_arc(doc.ribbon)
+		ds := geo.sample_spacing(doc.ribbon)
 		geo.terrain_field_ensure(
-			&ed.terrain_field,
-			&ed.terrain,
-			ed.ribbon,
+			&doc.terrain_field,
+			&doc.terrain,
+			doc.ribbon,
 			arc,
 			ds,
-			ed.topo,
-			ed.roughness,
-			ed.ribbon_gen,
+			doc.topo,
+			doc.roughness,
+			doc.ribbon_gen,
 		)
 	}
-	return export_stage(&ed, stage, target)
+	return export_stage(&doc, stage, target)
 }

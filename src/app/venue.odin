@@ -371,10 +371,10 @@ venue_create :: proc(
 		venue_free(p, allocator)
 		return Venue{}, msg, false
 	}
-	sp: geo.Spline
-	defer delete(sp.points)
-	seed_spline(&sp)
-	if msg, ok = save_stage_to(sp, venue_road_path(p.id)); !ok {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
+	if msg, ok = save_road(&doc, venue_road_path(p.id)); !ok {
 		venue_free(p, allocator)
 		_ = os.remove_all(venue_dir(id))
 		return Venue{}, msg, false
@@ -475,12 +475,13 @@ venue_routes_save :: proc(id: string, routes: []Venue_Route) -> (msg: string, ok
 // `veg` and `timing` come off the road document, because they describe the whole
 // venue rather than one stage. Skipping them once cost every compiled stage its
 // checkpoints.
+// `doc` receives the venue's road document, because a compiled stage needs the
+// venue's vegetation, timing and terrain as well as its points. Skipping them
+// once cost every compiled stage its checkpoints.
 venue_compile_route :: proc(
 	p: Venue,
 	route_id: string,
-	veg: ^geo.Veg_Params = nil,
-	timing: ^Timing_Params = nil,
-	terrain: ^geo.Terrain = nil,
+	doc: ^Venue_Doc,
 	allocator := context.allocator,
 ) -> (out: geo.Spline, msg: string, ok: bool) {
 	for route in p.routes {
@@ -488,12 +489,10 @@ venue_compile_route :: proc(
 		if !route_has_markers(route) {
 			return out, fmt.tprintf("%s has no start and finish line yet", route.id), false
 		}
-		road: geo.Spline
-		defer delete(road.points)
-		if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), veg, timing, terrain); !loaded {
+		if load_msg, loaded := load_road(doc, venue_road_path(p.id)); !loaded {
 			return out, load_msg, false
 		}
-		return geo.compile_stage(road, route.start, route.finish, allocator)
+		return geo.compile_stage(doc.spline, route.start, route.finish, allocator)
 	}
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
 }
@@ -552,9 +551,9 @@ venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.S
 	if len(p.routes) == 0 {
 		return nil, fmt.tprintf("%s has no stages to compile", p.id), false
 	}
-	road: geo.Spline
-	defer delete(road.points)
-	if load_msg, loaded := load_stage_from(&road, venue_road_path(p.id), nil, nil); !loaded {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	if load_msg, loaded := load_road(&doc, venue_road_path(p.id)); !loaded {
 		return nil, load_msg, false
 	}
 
@@ -564,7 +563,7 @@ venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.S
 			venue_compiled_delete(stages[:], allocator)
 			return nil, fmt.tprintf("%s has no start and finish line yet", route.id), false
 		}
-		stage, stage_msg, stage_ok := geo.compile_stage(road, route.start, route.finish, allocator)
+		stage, stage_msg, stage_ok := geo.compile_stage(doc.spline, route.start, route.finish, allocator)
 		if !stage_ok {
 			venue_compiled_delete(stages[:], allocator)
 			return nil, fmt.tprintf("%s: %s", route.id, stage_msg), false
@@ -704,35 +703,33 @@ venue_tracksplit_collision :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	ed := Editor{
+	doc := Venue_Doc{
 		topo      = geo.SAMPLES_PER_SEG,
 		roughness = 0,
 		terrain   = geo.TERRAIN_DEFAULTS,
 	}
-	defer geo.terrain_delete(&ed.terrain)
+	defer geo.terrain_delete(&doc.terrain)
 
-	road: geo.Spline
-	defer delete(road.points)
-	if load_msg, loaded := load_stage_from(&road, venue_road_path(id), nil, nil, &ed.terrain); !loaded {
+	if load_msg, loaded := load_road(&doc, venue_road_path(id)); !loaded {
 		return nil, nil, nil, load_msg, false
 	}
+	defer delete(doc.spline.points)
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a venue that has none.
-	ed.terrain.enabled = ed.terrain.enabled || terrain
+	doc.terrain.enabled = doc.terrain.enabled || terrain
 
-	defer geo.terrain_field_delete(&ed.terrain_field)
-	ed.spline = road
-	ed.ribbon = geo.build_ribbon(ed.spline, int(ed.topo), allocator)
-	ed.ribbon_gen = 1
+	defer geo.terrain_field_delete(&doc.terrain_field)
+	doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), allocator)
+	doc.ribbon_gen = 1
 
-	if ed.terrain.enabled {
-		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
-		arc := geo.ribbon_arc(ed.ribbon)
-		ds := geo.sample_spacing(ed.ribbon)
-		geo.terrain_field_ensure(&ed.terrain_field, &ed.terrain, ed.ribbon, arc, ds, ed.topo, ed.roughness, ed.ribbon_gen)
+	if doc.terrain.enabled {
+		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.topo, doc.roughness)
+		arc := geo.ribbon_arc(doc.ribbon)
+		ds := geo.sample_spacing(doc.ribbon)
+		geo.terrain_field_ensure(&doc.terrain_field, &doc.terrain, doc.ribbon, arc, ds, doc.topo, doc.roughness, doc.ribbon_gen)
 	}
 
-	mesh := build_export_mesh(&ed, context.temp_allocator)
+	mesh := build_export_mesh(&doc, context.temp_allocator)
 	order, _ := sort_faces_by_material(mesh)
 	if len(order) == 0 {
 		return nil, nil, nil, "nothing to export: the road network has no triangles", false
@@ -743,7 +740,7 @@ venue_tracksplit_collision :: proc(
 	if !ok {
 		return nil, nil, nil, msg, false
 	}
-	return collision, ed.ribbon, profile, "", true
+	return collision, doc.ribbon, profile, "", true
 }
 
 // `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
@@ -826,14 +823,14 @@ find_base :: proc(vs: ^Install_Scan, id: string) -> (venue: d3.Venue, route: str
 // deployment, which clones the base's registration and hardlinks its art. Until
 // that exists, nothing here writes into the install.
 venue_deploy_dir :: proc(
-	ed: ^Editor,
+	doc: ^Venue_Doc,
 	id, route: string,
 	allocator := context.temp_allocator,
 ) -> (
 	dir: string,
 	deployed: bool,
 ) {
-	vs := ed.install
+	vs := doc.install
 	if !vs.found {
 		return "", false
 	}

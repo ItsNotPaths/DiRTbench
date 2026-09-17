@@ -31,7 +31,7 @@ import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 GLTF_F32 :: 5126 // accessor componentType
@@ -40,7 +40,7 @@ GLTF_TRIANGLES :: 4 // primitive mode
 
 // Base colour per material, straight off the viewport palette so an import looks
 // like the editor. Alpha is always 1: the soup's own alpha is a preview device.
-gltf_material_colour :: proc(m: geo.Mat_Id) -> rl.Color {
+gltf_material_colour :: proc(m: geo.Mat_Id) -> gfx.Color {
 	switch m {
 	case .Road:     return geo.ROAD_COL
 	case .RoadSand: return geo.ROAD_COL_SAND

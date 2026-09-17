@@ -25,7 +25,7 @@ import "core:fmt"
 import "core:math"
 import "core:slice"
 import "core:strings"
-import rl "../gfx"
+import "../gfx"
 
 Pace_Kind :: enum u8 {
 	Corner,
@@ -588,7 +588,7 @@ string_clone :: proc(b: []u8, allocator := context.temp_allocator) -> string {
 // drives an automated ride: a cursor advances along the ribbon by arc, and each
 // note fires its clips (tiled longest-match against the manifest) as the cursor
 // passes the note's trigger station. The audio backend decodes OGG, so a clip is
-// just an rl.Sound.
+// just an gfx.Sound.
 
 // The clip names use spoken words ("one".."six"); the display uses digits.
 @(private = "file")

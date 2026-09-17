@@ -4,7 +4,7 @@ import "core:math"
 import "core:os"
 import "core:strings"
 import "core:testing"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 @(test)
@@ -25,14 +25,14 @@ terrain_world_control_is_exact_at_its_handle :: proc(t: ^testing.T) {
 branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
-	seeds := [?]struct{pos: rl.Vector3, parent: int}{
+	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 200}, 0},
 		{{0, 30, 400}, 1}, // main road, climbing to a dead end
 		{{200, 0, 200}, 1}, // branch, level, leaving the junction sideways
 	}
 	for s in seeds {
-		rot := rl.Quaternion(1)
+		rot := gfx.Quaternion(1)
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
@@ -99,7 +99,7 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 	// Segment lengths and sampling as the editor uses them: the rim must come out
 	// denser than the corridor is wide, or Delaunay bridges the road instead of
 	// running its edges along the rim, and no centroid test can tell the two apart.
-	seeds := [?]struct{pos: rl.Vector3, parent: int}{
+	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},
 		{{0, 12, 160}, 1},  // main road climbs to a dead end
@@ -107,7 +107,7 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 		{{140, 8, 130}, 3}, // and climbs to its own dead end
 	}
 	for s in seeds {
-		rot := rl.Quaternion(1)
+		rot := gfx.Quaternion(1)
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
@@ -173,7 +173,7 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
-	seeds := [?]struct{pos: rl.Vector3, parent: int}{
+	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},
 		{{0, 0, 160}, 1},
@@ -181,7 +181,7 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 		{{40, 0, 40}, 3},
 	}
 	for s in seeds {
-		rot := rl.Quaternion(1)
+		rot := gfx.Quaternion(1)
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
@@ -254,14 +254,14 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
-	seeds := [?]struct{pos: rl.Vector3, parent: int}{
+	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},  // the junction
 		{{0, 0, 160}, 1}, // straight on
 		{{80, 0, 80}, 1}, // and off to the side
 	}
 	for s in seeds {
-		rot := rl.Quaternion(1)
+		rot := gfx.Quaternion(1)
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
@@ -297,53 +297,56 @@ a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 
 // --- sculpt persistence -------------------------------------------------------
 
+// A seeded road with its terrain controls derived, which is the state a sculpt
+// starts from. The caller frees the returned ribbon.
 @(private = "file")
-build_sculpted_terrain :: proc(
-	sp: ^geo.Spline, terrain: ^geo.Terrain, field: ^geo.Terrain_Field,
-) -> []geo.Cross_Section {
-	ribbon := geo.build_ribbon(sp^, 8, context.allocator)
+build_sculpted_terrain :: proc(doc: ^Venue_Doc, field: ^geo.Terrain_Field) -> []geo.Cross_Section {
+	ribbon := geo.build_ribbon(doc.spline, 8, context.allocator)
 	arc := geo.ribbon_arc(ribbon, context.allocator)
 	defer delete(arc)
 	geo.terrain_field_ensure(
-		field, terrain, ribbon, arc, geo.sample_spacing(ribbon), 8, 0, 1,
+		field, &doc.terrain, ribbon, arc, geo.sample_spacing(ribbon), 8, 0, 1,
 	)
 	return ribbon
+}
+
+// A document with terrain on and its controls derived from a seeded road.
+@(private = "file")
+sculpt_doc :: proc(field: ^geo.Terrain_Field) -> (doc: Venue_Doc, ribbon: []geo.Cross_Section) {
+	doc = doc_defaults()
+	doc.terrain.enabled = true
+	seed_spline(&doc.spline)
+	return doc, build_sculpted_terrain(&doc, field)
 }
 
 // The sculpt is a set of world offsets, not a list of node indices, so the road
 // document has to round-trip it through a whole regeneration of the control set.
 @(test)
 road_file_round_trips_the_terrain_sculpt :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	seed_spline(&sp)
-
-	terrain := geo.TERRAIN_DEFAULTS
-	terrain.enabled = true
-	defer geo.terrain_delete(&terrain)
 	field: geo.Terrain_Field
 	defer geo.terrain_field_delete(&field)
-	ribbon := build_sculpted_terrain(&sp, &terrain, &field)
+	doc, ribbon := sculpt_doc(&field)
+	defer doc_delete(&doc)
 	defer delete(ribbon)
+	terrain := &doc.terrain
 
-	n := geo.terrain_node_count(&terrain)
+	n := geo.terrain_node_count(terrain)
 	testing.expect(t, n > 4, "the seed road produced no terrain controls"); if n <= 4 { return }
 	moved := n / 2
-	geo.terrain_set_node(&terrain, moved, terrain.controls[moved].base_y + 7)
+	geo.terrain_set_node(terrain, moved, terrain.controls[moved].base_y + 7)
 	at := [2]f32{terrain.controls[moved].x, terrain.controls[moved].z}
 	testing.expect_value(t, terrain.controls[moved].offset, f32(7))
 
 	path := "/tmp/claude-1000/dirtbench-terrain-roundtrip.json"
-	msg, ok := save_stage_to(sp, path, geo.VEG_DEFAULTS, TIMING_DEFAULTS, &terrain)
+	msg, ok := save_road(&doc, path)
 	testing.expect(t, ok, msg); if !ok { return }
 	defer os.remove(path)
 
-	back_sp: geo.Spline
-	defer delete(back_sp.points)
-	back := geo.Terrain{}
-	defer geo.terrain_delete(&back)
-	load_msg, loaded := load_stage_from(&back_sp, path, nil, nil, &back)
+	back_doc := doc_defaults()
+	defer doc_delete(&back_doc)
+	load_msg, loaded := load_road(&back_doc, path)
 	testing.expect(t, loaded, load_msg); if !loaded { return }
+	back := &back_doc.terrain
 	testing.expect(t, back.enabled, "terrain came back disabled")
 	testing.expect_value(t, back.reach_m, terrain.reach_m)
 	testing.expect_value(t, back.row_m, terrain.row_m)
@@ -352,66 +355,58 @@ road_file_round_trips_the_terrain_sculpt :: proc(t: ^testing.T) {
 	// and the live set is derived from the ribbon again on this call.
 	back_field: geo.Terrain_Field
 	defer geo.terrain_field_delete(&back_field)
-	back_ribbon := build_sculpted_terrain(&back_sp, &back, &back_field)
+	back_ribbon := build_sculpted_terrain(&back_doc, &back_field)
 	defer delete(back_ribbon)
 
-	testing.expect_value(t, geo.terrain_node_count(&back), n)
+	testing.expect_value(t, geo.terrain_node_count(back), n)
 	for c, i in back.controls {
 		want := terrain.controls[i].offset
 		testing.expectf(t, c.offset == want,
 			"control %d at (%.1f, %.1f) came back at %.2f, not %.2f", i, c.x, c.z, c.offset, want)
 	}
-	testing.expect_value(t, geo.terrain_control_offset(&back, at), f32(7))
+	testing.expect_value(t, geo.terrain_control_offset(back, at), f32(7))
 }
 
 // An untouched terrain writes no controls at all, so an unsculpted venue does
 // not carry thousands of zeroes.
 @(test)
 unsculpted_terrain_writes_no_controls :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	seed_spline(&sp)
-
-	terrain := geo.TERRAIN_DEFAULTS
-	terrain.enabled = true
-	defer geo.terrain_delete(&terrain)
 	field: geo.Terrain_Field
 	defer geo.terrain_field_delete(&field)
-	ribbon := build_sculpted_terrain(&sp, &terrain, &field)
+	doc, ribbon := sculpt_doc(&field)
+	defer doc_delete(&doc)
 	defer delete(ribbon)
-	testing.expect(t, geo.terrain_node_count(&terrain) > 0, "no controls to begin with")
-	testing.expect_value(t, len(geo.terrain_sculpt(&terrain)), 0)
+	testing.expect(t, geo.terrain_node_count(&doc.terrain) > 0, "no controls to begin with")
+	testing.expect_value(t, len(geo.terrain_sculpt(&doc.terrain)), 0)
 
 	// The sliders still have to come back, or turning terrain on and saving
 	// without sculpting would reset reach and cell on the next load.
 	path := "/tmp/claude-1000/dirtbench-terrain-unsculpted.json"
-	terrain.reach_m, terrain.cell_m = 140, 12
-	msg, ok := save_stage_to(sp, path, geo.VEG_DEFAULTS, TIMING_DEFAULTS, &terrain)
+	doc.terrain.reach_m, doc.terrain.cell_m = 140, 12
+	msg, ok := save_road(&doc, path)
 	testing.expect(t, ok, msg); if !ok { return }
 	defer os.remove(path)
 
-	back_sp: geo.Spline
-	defer delete(back_sp.points)
-	back := geo.Terrain{}
-	defer geo.terrain_delete(&back)
-	load_msg, loaded := load_stage_from(&back_sp, path, nil, nil, &back)
+	back := doc_defaults()
+	defer doc_delete(&back)
+	load_msg, loaded := load_road(&back, path)
 	testing.expect(t, loaded, load_msg); if !loaded { return }
-	testing.expect(t, back.enabled, "terrain came back disabled")
-	testing.expect_value(t, back.reach_m, f32(140))
-	testing.expect_value(t, back.cell_m, f32(12))
-	testing.expect_value(t, geo.terrain_node_count(&back), 0)
+	testing.expect(t, back.terrain.enabled, "terrain came back disabled")
+	testing.expect_value(t, back.terrain.reach_m, f32(140))
+	testing.expect_value(t, back.terrain.cell_m, f32(12))
+	testing.expect_value(t, geo.terrain_node_count(&back.terrain), 0)
 }
 
 // A road written before v8 has no terrain block. It must load with the ground
 // off and the sliders at their defaults, not at whatever the caller held.
 @(test)
 pre_v8_road_loads_with_terrain_off :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	seed_spline(&sp)
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
 
 	path := "/tmp/claude-1000/dirtbench-terrain-v7.json"
-	msg, ok := save_stage_to(sp, path)
+	msg, ok := save_road(&doc, path)
 	testing.expect(t, ok, msg); if !ok { return }
 	defer os.remove(path)
 	data, rerr := os.read_entire_file(path, context.temp_allocator)
@@ -419,17 +414,17 @@ pre_v8_road_loads_with_terrain_off :: proc(t: ^testing.T) {
 	aged, _ := strings.replace(string(data), `"version": 8`, `"version": 7`, 1, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(path, transmute([]u8)aged) == nil, "could not age the file")
 
-	back_sp: geo.Spline
-	defer delete(back_sp.points)
-	stale := geo.TERRAIN_DEFAULTS
-	stale.enabled = true
-	stale.reach_m = 123
-	defer geo.terrain_delete(&stale)
-	append(&stale.controls, geo.Terrain_Control{x = 1, z = 2, offset = 5})
+	// A document already carrying a sculpt: the v7 load must clear it, not
+	// leave the previous venue's ground behind.
+	stale := doc_defaults()
+	defer doc_delete(&stale)
+	stale.terrain.enabled = true
+	stale.terrain.reach_m = 123
+	append(&stale.terrain.controls, geo.Terrain_Control{x = 1, z = 2, offset = 5})
 
-	load_msg, loaded := load_stage_from(&back_sp, path, nil, nil, &stale)
+	load_msg, loaded := load_road(&stale, path)
 	testing.expect(t, loaded, load_msg); if !loaded { return }
-	testing.expect(t, !stale.enabled, "a v7 road turned terrain on")
-	testing.expect_value(t, stale.reach_m, geo.TERRAIN_DEFAULTS.reach_m)
-	testing.expect_value(t, geo.terrain_node_count(&stale), 0)
+	testing.expect(t, !stale.terrain.enabled, "a v7 road turned terrain on")
+	testing.expect_value(t, stale.terrain.reach_m, geo.TERRAIN_DEFAULTS.reach_m)
+	testing.expect_value(t, geo.terrain_node_count(&stale.terrain), 0)
 }

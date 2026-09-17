@@ -154,7 +154,7 @@ foreign imgui {
 	igButton :: proc(label: cstring, size: Im_Vec2) -> bool ---
 	igRadioButton_Bool :: proc(label: cstring, active: bool) -> bool ---
 	igCheckbox :: proc(label: cstring, v: ^bool) -> bool ---
-	// `v` is C `float[3]`; rl.Vector3 is a distinct [3]f32, so cast into it.
+	// `v` is C `float[3]`; gfx.Vector3 is a distinct [3]f32, so cast into it.
 	igDragFloat3 :: proc(label: cstring, v: ^[3]f32, v_speed, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
 	igSliderFloat :: proc(label: cstring, v: ^f32, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
 	igSliderInt :: proc(label: cstring, v: ^c.int, v_min, v_max: c.int, format: cstring, flags: Im_Slider_Flags) -> bool ---

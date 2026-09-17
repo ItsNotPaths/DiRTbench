@@ -16,7 +16,7 @@ package main
 import "core:c"
 import "core:fmt"
 import "core:math"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 GEN_DS :: 0.25         // integration step, metres of horizontal arc
@@ -234,7 +234,7 @@ box_filter :: proc(xs: []f32, width_m: f32) {
 }
 
 Gen_Sample :: struct {
-	pos:   rl.Vector3,
+	pos:   gfx.Vector3,
 	yaw:   f32,
 	grade: f32,
 	bank:  f32,
@@ -271,7 +271,7 @@ gen_centreline :: proc(segs: []Gen_Seg, allocator := context.temp_allocator) -> 
 	}
 
 	out := make([]Gen_Sample, steps, allocator)
-	pos := rl.Vector3{}
+	pos := gfx.Vector3{}
 	yaw: f32 = 0
 	for j in 0 ..< steps {
 		out[j] = Gen_Sample{pos = pos, yaw = yaw, grade = grade[j], bank = bank[j], width = width[j]}
@@ -303,9 +303,9 @@ generate_stage :: proc(sp: ^geo.Spline, p: Gen_Params) -> (msg: string, ok: bool
 
 	clear(&sp.points)
 	add_sample :: proc(sp: ^geo.Spline, s: Gen_Sample, lift: f32) {
-		fwd := rl.Vector3Normalize({math.sin(s.yaw), s.grade, math.cos(s.yaw)})
+		fwd := gfx.Vector3Normalize({math.sin(s.yaw), s.grade, math.cos(s.yaw)})
 		// Bank rolls the surface normal about the travel direction.
-		up := rl.Vector3RotateByAxisAngle({0, 1, 0}, fwd, s.bank)
+		up := gfx.Vector3RotateByAxisAngle({0, 1, 0}, fwd, s.bank)
 		pos := s.pos + {0, lift, 0}
 		append(&sp.points, geo.make_point(pos, geo.quat_from_frame(fwd, up), s.width, parent = len(sp.points) - 1))
 	}
@@ -334,6 +334,6 @@ frame_spline :: proc(oc: ^Orbit_Camera, sp: geo.Spline) {
 		hi = {max(hi.x, t.x), max(hi.y, t.y), max(hi.z, t.z)}
 	}
 	oc.target = (lo + hi) * 0.5
-	extent := rl.Vector3Length(hi - lo)
+	extent := gfx.Vector3Length(hi - lo)
 	oc.distance = clamp(extent * 0.75, 5, 800)
 }

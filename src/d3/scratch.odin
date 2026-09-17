@@ -1,10 +1,16 @@
+#+build ignore
 package d3
 
-// Reference-only DiRT 3 probes.
+// Reference-only DiRT 3 probes. **Not compiled** — see the build directive above.
 //
 // These commands record the destructive experiments and format surgery used to
-// establish the production codecs. They remain callable from the headless CLI,
-// like app/paths_place.odin, but production export code must not depend on them.
+// establish the production codecs. They are kept for the method, not for use:
+// nothing in the shipping tool may depend on them, and the CLI no longer
+// exposes them.
+//
+// To run one again: drop the `#+build ignore`, add its alias back to api.odin,
+// and add its command back to app/cli.odin. Its siblings are
+// app/paths_place.odin, app/flat_venue.odin and app/finland_bisect.odin.
 
 import "core:fmt"
 import "core:math"
@@ -746,39 +752,6 @@ d3_append_placement_objects :: proc(
 		added += 1
 	}
 	return added, "", true
-}
-
-// Every `<instance ...>` tag's `instance_id` attribute in `ornaments.xml`, in
-// file order. This plain-text sibling of `ornaments.bin` carries the same
-// per-route tag-2 id as the cooked record's +4 field, independently confirmed
-// against stock `track.vis` for every instance present there. The
-// `instance_tag` at +76 is a different identity. File order matches the BIN
-// order exactly (same positions, cross-checked), so index i here names the
-// same placement as `ornaments.bin` instance i. See
-// docs/dirt3-vis-format.md, "The ornaments crash".
-d3_ornaments_xml_instance_ids :: proc(data: []u8, allocator := context.allocator) -> (ids: []u32, ok: bool) {
-	text := string(data)
-	out := make([dynamic]u32, allocator)
-	pos := 0
-	for {
-		start := strings.index(text[pos:], "<instance ")
-		if start < 0 { break }
-		start += pos
-		end := strings.index(text[start:], "/>")
-		if end < 0 { return nil, false }
-		end += start
-		tag := text[start:end]
-		attr_at := strings.index(tag, `instance_id="`)
-		if attr_at < 0 { return nil, false }
-		attr_at += len(`instance_id="`)
-		close_quote := strings.index_byte(tag[attr_at:], '"')
-		if close_quote < 0 { return nil, false }
-		id, id_ok := strconv.parse_int(tag[attr_at:attr_at+close_quote])
-		if !id_ok { return nil, false }
-		append(&out, u32(id))
-		pos = end + 2
-	}
-	return out[:], true
 }
 
 // `ornaments.bin`'s own instances, tag 2, with their real id read straight

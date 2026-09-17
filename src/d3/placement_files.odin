@@ -1,6 +1,7 @@
 package d3
 
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 
 // Dirt 3 "instance placement" files: `trees.bin` and `ornaments.bin` share
@@ -534,4 +535,37 @@ d3_placement_relocate :: proc(
 		"%d -> %d instances, %d references kept",
 		old_instance_num, len(instances), reference_num,
 	), true
+}
+
+// --- ornaments.xml ------------------------------------------------------------
+
+// Every `instance_id` in an `ornaments.xml`, in file order.
+//
+// This is the id the visibility system looks an ornament up by, and
+// `ornaments.bin` does not carry it — the XML sibling is the only place it
+// exists. A file whose instances lack the attribute fails closed rather than
+// returning a short list, because a missing id reads as a valid one.
+d3_ornaments_xml_instance_ids :: proc(data: []u8, allocator := context.allocator) -> (ids: []u32, ok: bool) {
+	text := string(data)
+	out := make([dynamic]u32, allocator)
+	pos := 0
+	for {
+		start := strings.index(text[pos:], "<instance ")
+		if start < 0 { break }
+		start += pos
+		end := strings.index(text[start:], "/>")
+		if end < 0 { return nil, false }
+		end += start
+		tag := text[start:end]
+		attr_at := strings.index(tag, `instance_id="`)
+		if attr_at < 0 { return nil, false }
+		attr_at += len(`instance_id="`)
+		close_quote := strings.index_byte(tag[attr_at:], '"')
+		if close_quote < 0 { return nil, false }
+		id, id_ok := strconv.parse_int(tag[attr_at:attr_at+close_quote])
+		if !id_ok { return nil, false }
+		append(&out, u32(id))
+		pos = end + 2
+	}
+	return out[:], true
 }

@@ -17,7 +17,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 import "../ui"
 
@@ -28,23 +28,23 @@ import "../ui"
 do_save :: proc(ed: ^Editor) {
 	// A stage opened from one of our venues belongs to it. Saving it into
 	// maps/ under whatever the name field says would quietly fork the document.
-	if ed.open_venue != "" {
-		path := venue_road_path(ed.open_venue)
-		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing, &ed.terrain)
+	if ed.doc.open_venue != "" {
+		path := venue_road_path(ed.doc.open_venue)
+		msg, ok := save_road(ed.doc, path)
 		if ok {
 			// The markers are the stages, and they live in venue.json. Saving the
 			// road without them would drop every start and finish line.
-			msg, ok = venue_routes_save(ed.open_venue, ed.routes[:])
+			msg, ok = venue_routes_save(ed.doc.open_venue, ed.doc.routes[:])
 		}
 		if ok {
-			msg = fmt.tprintf("saved %s road network and stage lines", ed.open_venue)
+			msg = fmt.tprintf("saved %s road network and stage lines", ed.doc.open_venue)
 		}
 		set_status(&ed.status, msg, ok)
 		return
 	}
-	name := sanitise_stage_name(stage_name_text(ed))
-	set_stage_name(ed, name)
-	msg, ok := save_stage(ed.spline, name, ed.veg, ed.timing, &ed.terrain)
+	name := sanitise_stage_name(stage_name_text(ed.doc))
+	set_stage_name(ed.doc, name)
+	msg, ok := save_road_named(ed.doc, name)
 	set_status(&ed.status, msg, ok)
 }
 
@@ -54,45 +54,45 @@ do_save :: proc(ed: ^Editor) {
 // ground. Nothing is dragging when a menu is open, so this is a no-op in
 // practice and a guard against ever calling export from elsewhere.
 do_export :: proc(ed: ^Editor, target: ^Export_Target) {
-	name := sanitise_stage_name(stage_name_text(ed))
-	set_stage_name(ed, name)
-	rebuild_geometry(ed)
-	msg, ok := export_stage(ed, name, target)
+	name := sanitise_stage_name(stage_name_text(ed.doc))
+	set_stage_name(ed.doc, name)
+	rebuild_geometry(ed.doc)
+	msg, ok := export_stage(ed.doc, name, target)
 	set_status(&ed.status, msg, ok)
 }
 
 do_load :: proc(ed: ^Editor, name: string) {
 	// The sculpt comes out of the file, so it must not be invalidated after:
 	// the loaded offsets are what the next rebuild re-attaches by position.
-	msg, ok := load_stage(&ed.spline, name, &ed.veg, &ed.timing, &ed.terrain)
+	msg, ok := load_road_named(ed.doc, name)
 	if ok {
-		set_stage_name(ed, name)
+		set_stage_name(ed.doc, name)
 		ed.sel = {} // indices from the old spline mean nothing now
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	set_status(&ed.status, msg, ok)
 }
 
 do_new :: proc(ed: ^Editor) {
-	seed_spline(&ed.spline)
-	ed.timing = TIMING_DEFAULTS
+	seed_spline(&ed.doc.spline)
+	ed.doc.timing = TIMING_DEFAULTS
 	ed.sel = {}
-	geo.terrain_invalidate(&ed.terrain)
-	set_stage_name(ed, "untitled")
-	mark_dirty(ed)
+	geo.terrain_invalidate(&ed.doc.terrain)
+	set_stage_name(ed.doc, "untitled")
+	mark_dirty(ed.doc)
 	set_status(&ed.status, "new stage", true)
 }
 
 // Regenerating reallocates spline.points, so it must never run while the gizmo
 // holds a pointer into that array — hence the gizmo_active guard at each call.
 do_generate :: proc(ed: ^Editor, frame_camera: bool) {
-	msg, ok := generate_stage(&ed.spline, ed.gen)
+	msg, ok := generate_stage(&ed.doc.spline, ed.doc.gen)
 	if ok {
 		ed.sel = {}
-		geo.terrain_invalidate(&ed.terrain)
-		mark_dirty(ed)
+		geo.terrain_invalidate(&ed.doc.terrain)
+		mark_dirty(ed.doc)
 		if frame_camera {
-			frame_spline(&ed.cam, ed.spline)
+			frame_spline(&ed.cam, ed.doc.spline)
 		}
 	}
 	set_status(&ed.status, msg, ok)
@@ -107,16 +107,16 @@ draw_menubar :: proc(ed: ^Editor) {
 	defer ui.igEndMainMenuBar()
 
 	if ui.igBeginMenu("File", true) {
-		if ed.open_venue != "" && ui.igMenuItem_Bool("Close editor", nil, false, true) {
+		if ed.doc.open_venue != "" && ui.igMenuItem_Bool("Close editor", nil, false, true) {
 			ed.quit = true
 		}
-		if ed.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
+		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
 			do_new(ed)
 		}
-		if ui.igMenuItem_Bool("Save", "Ctrl+S", false, len(ed.spline.points) >= 2) {
+		if ui.igMenuItem_Bool("Save", "Ctrl+S", false, len(ed.doc.spline.points) >= 2) {
 			do_save(ed)
 		}
-		if ed.open_venue == "" && ui.igBeginMenu("Load", true) {
+		if ed.doc.open_venue == "" && ui.igBeginMenu("Load", true) {
 			stages := list_stages()
 			if len(stages) == 0 {
 				ui.igBeginDisabled(true)
@@ -125,14 +125,14 @@ draw_menubar :: proc(ed: ^Editor) {
 			}
 			for name in stages {
 				label := fmt.ctprint(name)
-				if ui.igMenuItem_Bool(label, nil, name == stage_name_text(ed), true) {
+				if ui.igMenuItem_Bool(label, nil, name == stage_name_text(ed.doc), true) {
 					do_load(ed, name)
 				}
 			}
 			ui.igEndMenu()
 		}
 		ui.igSeparator()
-		if ed.open_venue == "" && ui.igBeginMenu("Export to", len(ed.spline.points) >= 2) {
+		if ed.doc.open_venue == "" && ui.igBeginMenu("Export to", len(ed.doc.spline.points) >= 2) {
 			for &t in EXPORT_TARGETS {
 				label := fmt.ctprint(t.label)
 				if ui.igMenuItem_Bool(label, nil, false, true) {
@@ -141,7 +141,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			}
 			ui.igEndMenu()
 		}
-		if ed.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()
@@ -152,8 +152,8 @@ draw_menubar :: proc(ed: ^Editor) {
 	}
 	if ui.igBeginMenu("Dirt 3", true) {
 		if ui.igMenuItem_Bool("Rescan install", nil, false, true) {
-			install_scan_rescan(ed.install)
-			set_status(&ed.status, install_scan_status_text(ed.install), ed.install.found)
+			install_scan_rescan(ed.doc.install)
+			set_status(&ed.status, install_scan_status_text(ed.doc.install), ed.doc.install.found)
 		}
 		ui.igEndMenu()
 	}
@@ -189,10 +189,10 @@ draw_status_text :: proc(s: ^Status) {
 // this needs no cimgui binding that is not already here.
 draw_stages :: proc(ed: ^Editor) {
 	ui.igSeparatorText("Stages")
-	if len(ed.routes) == 0 {
+	if len(ed.doc.routes) == 0 {
 		ui.im_text("no stages yet")
 	}
-	for route, i in ed.routes {
+	for route, i in ed.doc.routes {
 		if ui.igRadioButton_Bool(fmt.ctprintf("%s##route%d", route.name, i), i == ed.route_sel) {
 			select_route(ed, i)
 		}
@@ -253,12 +253,12 @@ draw_generator :: proc(ed: ^Editor) {
 	// `changed` must not short-circuit: every widget has to be drawn every
 	// frame, so collect the results rather than folding with ||=.
 	changed := false
-	g := &ed.gen
+	g := &ed.doc.gen
 
 	if ui.igInputInt("seed", &g.seed, 1, 16, ui.IM_INPUT_TEXT_NONE) {changed = true}
 	ui.im_same_line()
 	if ui.im_button("Randomise") {
-		g.seed = rl.GetRandomValue(0, 999999)
+		g.seed = gfx.GetRandomValue(0, 999999)
 		changed = true
 	}
 
@@ -285,16 +285,16 @@ draw_generator :: proc(ed: ^Editor) {
 	}
 	ui.im_same_line()
 	if ui.im_button("Reset settings") {
-		ed.gen = GEN_DEFAULTS
+		ed.doc.gen = GEN_DEFAULTS
 		changed = true
 	}
 	ui.im_same_line()
-	ui.igCheckbox("live", &ed.gen_live)
+	ui.igCheckbox("live", &ed.doc.gen_live)
 
 	// Live regeneration is what makes the sliders legible, but it rebuilds the
 	// point array; doing that mid-drag would pull the array out from under the
 	// gizmo's pointer.
-	if changed && ed.gen_live && !ed.gizmo_active {
+	if changed && ed.doc.gen_live && !ed.gizmo_active {
 		do_generate(ed, false)
 	}
 }
@@ -308,23 +308,23 @@ draw_inspector :: proc(ed: ^Editor) {
 	}
 	defer ui.igEnd()
 
-	ui.igSeparatorText(ed.open_venue != "" ? "Venue road network" : "Stage")
-	if ed.open_venue != "" {
-		ui.im_text(fmt.ctprint(ed.open_venue))
+	ui.igSeparatorText(ed.doc.open_venue != "" ? "Venue road network" : "Stage")
+	if ed.doc.open_venue != "" {
+		ui.im_text(fmt.ctprint(ed.doc.open_venue))
 	} else {
-		ui.igInputText("name", raw_data(ed.stage_name[:]), len(ed.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
+		ui.igInputText("name", raw_data(ed.doc.stage_name[:]), len(ed.doc.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
 	}
-	ui.igBeginDisabled(len(ed.spline.points) < 2)
+	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)
 	}
 	ui.igEndDisabled()
 	ui.im_same_line()
-	ui.igBeginDisabled(len(ed.spline.points) < 2 || !geo.is_linear(ed.spline))
+	ui.igBeginDisabled(len(ed.doc.spline.points) < 2 || !geo.is_linear(ed.doc.spline))
 	if ui.im_button("Reverse") {
-		geo.reverse_spline(&ed.spline)
+		geo.reverse_spline(&ed.doc.spline)
 		ed.sel = {}
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 		set_status(&ed.status, "reversed driving direction", true)
 	}
 	ui.igEndDisabled()
@@ -333,11 +333,11 @@ draw_inspector :: proc(ed: ^Editor) {
 		ed.show_gen = true
 	}
 	ui.im_same_line()
-	ui.im_text(fmt.ctprintf("%d points", len(ed.spline.points)))
+	ui.im_text(fmt.ctprintf("%d points", len(ed.doc.spline.points)))
 
 	draw_status_text(&ed.status)
 
-	if ed.open_venue != "" {
+	if ed.doc.open_venue != "" {
 		draw_stages(ed)
 	}
 
@@ -367,8 +367,8 @@ draw_inspector :: proc(ed: ^Editor) {
 
 draw_timing_section :: proc(ed:^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Timing gates",ui.IM_TREE_NODE_DEFAULT_OPEN) { return }
-	ui.igSliderInt("checkpoint density",&ed.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE)
-	ui.igSliderFloat("start/end buffer",&ed.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE)
+	ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE)
+	ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE)
 }
 
 // Global mesh settings. Every control here changes geometry, so each marks the
@@ -377,53 +377,53 @@ draw_terrain_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Terrain", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
-	if ui.igSliderInt("topo resolution", &ed.topo, TOPO_MIN, TOPO_MAX, "%d /segment", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+	if ui.igSliderInt("topo resolution", &ed.doc.topo, TOPO_MIN, TOPO_MAX, "%d /segment", ui.IM_SLIDER_NONE) {
+		mark_dirty(ed.doc)
 	}
 	// Global baseline for the road's vertical roughness (and the cliff jitter). Each
 	// control point can offset this locally — see the Selected point section. The
 	// absolute displacement is hard-capped at 7 in (ROUGH_MAX_M); this only scales
 	// up to that.
-	if ui.igSliderFloat("roughness", &ed.roughness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+	if ui.igSliderFloat("roughness", &ed.doc.roughness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
+		mark_dirty(ed.doc)
 	}
 	if ui.im_button(ed.wireframe ? "Wireframe: on" : "Wireframe: off") {
 		ed.wireframe = !ed.wireframe
 	}
 	ui.im_same_line()
-	ui.im_text(fmt.ctprintf("%d tris", ed.road.tris + ed.terrain_mesh.tris))
+	ui.im_text(fmt.ctprintf("%d tris", ed.doc.road.tris + ed.doc.terrain_mesh.tris))
 
 	draw_terrain_mesh_section(ed)
 }
 
 // The out-of-stage mesh. Sculpt controls are spaced directly in world XZ.
 draw_terrain_mesh_section :: proc(ed: ^Editor) {
-	t := &ed.terrain
+	t := &ed.doc.terrain
 	if ui.igCheckbox("terrain", &t.enabled) {
 		if !t.enabled && ed.sel.kind == .Node {
 			ed.sel = {} // its handle just went away
 		}
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 	if !t.enabled {
 		return
 	}
 	ui.im_same_line()
-	ui.im_text(fmt.ctprintf("%d tris", ed.terrain_mesh.tris))
+	ui.im_text(fmt.ctprintf("%d tris", ed.doc.terrain_mesh.tris))
 
 	if ui.igSliderFloat("reach", &t.reach_m, 8, geo.TERRAIN_REACH_MAX, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 	// How far the road pulls the ground with it before sculpt offsets take over.
 	// Must stay inside the reach, or the seam never resolves to the controls at
 	// all. Too narrow and the terrain terraces rather than sloping.
 	if ui.igSliderFloat("blend", &t.blend_m, 1, max(t.reach_m, 2), "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 	t.blend_m = min(t.blend_m, t.reach_m)
 	// Spacing of the interior points the ground is triangulated from.
 	if ui.igSliderFloat("cell", &t.cell_m, 1, 32, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 
 	// These regenerate controls, which the node gizmo is writing into. Same guard,
@@ -432,14 +432,14 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	defer ui.igEndDisabled()
 
 	if ui.igSliderFloat("node spacing", &t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 	ui.im_same_line()
 	ui.im_text(fmt.ctprintf("(%d controls)", geo.terrain_node_count(t)))
 
 	if ui.im_button("Flatten to verge") {
 		geo.terrain_invalidate(t)
-		mark_terrain_dirty(ed)
+		mark_terrain_dirty(ed.doc)
 	}
 }
 
@@ -458,49 +458,49 @@ draw_point_section :: proc(ed: ^Editor) {
 		}
 		return
 	}
-	p := &ed.spline.points[sel]
-	ui.im_text(fmt.ctprintf("point %d of %d", sel, len(ed.spline.points)))
+	p := &ed.doc.spline.points[sel]
+	ui.im_text(fmt.ctprintf("point %d of %d", sel, len(ed.doc.spline.points)))
 
 	if ui.igDragFloat3("position", cast(^[3]f32)&p.xform.translation, 0.1, 0, 0, "%.2f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("width", &p.width, 2, 32, "%.1f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	// Per-node roughness offset, added to the global slider (both clamped to [0,1]
 	// where the road is displaced). Negative smooths this stretch below the stage
 	// baseline; positive roughens it. The 7-inch cap still applies regardless.
 	if ui.igSliderFloat("roughness offset", &p.roughness, -1, 1, "%+.2f", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 
 	ui.igSeparatorText("Cliffs")
 	if ui.igSliderFloat("left height", &p.cliff_l, 0, geo.CLIFF_HEIGHT_MAX, "%.2f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("left span", &p.span_l, 0, 400, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("right height", &p.cliff_r, 0, geo.CLIFF_HEIGHT_MAX, "%.2f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("right span", &p.span_r, 0, 400, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	// Taper and angle are shared by both sides, like the shape of the cliff
 	// rather than the size of it.
 	if ui.igSliderFloat("taper", &p.cliff_taper, 0, 100, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("angle", &p.cliff_angle, geo.CLIFF_ANGLE_MIN, geo.CLIFF_ANGLE_MAX, "%.1f deg", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 
 	ui.igSpacing()
 	if ui.im_button("Delete point") {
-		geo.remove_point(&ed.spline, sel)
+		geo.remove_point(&ed.doc.spline, sel)
 		ed.sel = {}
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 }
 
@@ -510,24 +510,24 @@ draw_pace_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Pace notes", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
-	pp := &ed.pace
+	pp := &ed.doc.pace
 	// Corner sensitivity: the largest radius still called a corner. Bigger = more
 	// gentle bends get a number.
 	if ui.igSliderFloat("call radius", &pp.r_on, 40, 400, "%.0f m", ui.IM_SLIDER_NONE) {
 		pp.r_off = max(pp.r_off, pp.r_on + 20)
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	// How far ahead of the feature the call fires.
 	if ui.igSliderFloat("lead", &pp.lead_m, 0, 120, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	// Straight length that turns "into" into a spoken distance.
 	if ui.igSliderFloat("into gap", &pp.into_m, 4, 120, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed)
+		mark_dirty(ed.doc)
 	}
 	ui.igSpacing()
 	pace_ready := len(ed.app.clips) > 0
-	ui.igBeginDisabled(!pace_ready || len(ed.notes) == 0)
+	ui.igBeginDisabled(!pace_ready || len(ed.doc.notes) == 0)
 	if ui.im_button(ed.previewing ? "Stop ride" : "Preview ride") {
 		preview_toggle(ed)
 	}
@@ -537,29 +537,29 @@ draw_pace_section :: proc(ed: ^Editor) {
 	// here points at the audio device, not our sequencing.
 	if ui.im_button("Test clip") {
 		if snd, ok := ed.app.clips["hairpin-left"]; ok {
-			rl.PlaySound(snd)
+			gfx.PlaySound(snd)
 		}
 	}
 	ui.igSliderFloat("speed", &ed.preview_speed, 5, 80, "%.0f m/s", ui.IM_SLIDER_NONE)
-	ui.im_text(fmt.ctprintf("audio device: %s", rl.IsAudioDeviceReady() ? "ready" : "NOT ready"))
+	ui.im_text(fmt.ctprintf("audio device: %s", gfx.IsAudioDeviceReady() ? "ready" : "NOT ready"))
 	if !pace_ready {
 		ui.im_text("(no clips found in pacenotes/)")
 	} else if ed.previewing {
-		nextm := ed.preview_next < len(ed.notes) ? ed.notes[ed.preview_next].station - ed.preview_s : 0
+		nextm := ed.preview_next < len(ed.doc.notes) ? ed.doc.notes[ed.preview_next].station - ed.preview_s : 0
 		ui.im_text(fmt.ctprintf("riding %.0f m  (next call in %.0f m)", ed.preview_s, max(0, nextm)))
 	} else {
 		ui.im_text(fmt.ctprintf("%d clips loaded", len(ed.app.clips)))
 	}
 	ui.igSpacing()
 
-	ui.im_text(fmt.ctprintf("%d notes", len(ed.notes)))
+	ui.im_text(fmt.ctprintf("%d notes", len(ed.doc.notes)))
 
 	// Auto-resize inspector, so cap the list; the preview is where you live with
 	// the full stream anyway.
 	PACE_LIST_MAX :: 30
-	for nt, i in ed.notes {
+	for nt, i in ed.doc.notes {
 		if i >= PACE_LIST_MAX {
-			ui.im_text(fmt.ctprintf("... +%d more", len(ed.notes) - PACE_LIST_MAX))
+			ui.im_text(fmt.ctprintf("... +%d more", len(ed.doc.notes) - PACE_LIST_MAX))
 			break
 		}
 		ui.im_text(fmt.ctprintf("%6.0fm  %s", nt.station, geo.pace_note_text(nt)))
@@ -573,9 +573,9 @@ draw_veg_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Vegetation", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
-	v := &ed.veg
+	v := &ed.doc.veg
 	if ui.igCheckbox("vegetation", &v.enabled) {
-		ed.veg_dirty = true
+		ed.doc.veg_dirty = true
 	}
 	if !v.enabled {
 		return
@@ -585,7 +585,7 @@ draw_veg_section :: proc(ed: ^Editor) {
 	for p in geo.Veg_Preset {
 		if ui.igRadioButton_Bool(geo.VEG_PRESET_NAMES[p], v.preset == p) {
 			v.preset = p
-			ed.veg_dirty = true
+			ed.doc.veg_dirty = true
 		}
 		if p != max(geo.Veg_Preset) {
 			ui.im_same_line()
@@ -593,25 +593,25 @@ draw_veg_section :: proc(ed: ^Editor) {
 	}
 
 	if ui.igSliderFloat("density", &v.density, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		ed.veg_dirty = true
+		ed.doc.veg_dirty = true
 	}
 	// "Prioritise near the road, only slightly": at 0 the scatter is even; at 1 the
 	// far tree line is thinned by up to that fraction. The default is deliberately low.
 	if ui.igSliderFloat("road bias", &v.road_bias, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		ed.veg_dirty = true
+		ed.doc.veg_dirty = true
 	}
 	if ui.igSliderInt("seed", &v.seed, 1, 999, "%d", ui.IM_SLIDER_NONE) {
-		ed.veg_dirty = true
+		ed.doc.veg_dirty = true
 	}
 
 	ui.igSpacing()
-	ui.im_text(fmt.ctprintf("%d trees", len(ed.veg_cache)))
-	if !ed.terrain.enabled {
+	ui.im_text(fmt.ctprintf("%d trees", len(ed.doc.veg_cache)))
+	if !ed.doc.terrain.enabled {
 		ui.im_text("(terrain off: trees ride the road edge)")
 	}
 	// The overlay batch is a fixed buffer; a stage can outgrow it. Trees are last
 	// in, so they are what goes missing first.
-	if dropped := rl.batch_dropped_verts(); dropped > 0 {
+	if dropped := gfx.batch_dropped_verts(); dropped > 0 {
 		ui.im_text(fmt.ctprintf("overlay batch full: %d verts dropped", dropped))
 	}
 }
@@ -631,13 +631,13 @@ draw_targets :: proc(ed: ^Editor) {
 	}
 	defer ui.igEnd()
 
-	ui.igCheckbox("Write to out/ instead of the game", &ed.debug_export)
+	ui.igCheckbox("Write to out/ instead of the game", &ed.doc.debug_export)
 	ui.igSpacing()
 
 	for &t in EXPORT_TARGETS {
 		ui.igSeparatorText(fmt.ctprint(t.label))
 		ui.im_text(fmt.ctprint(t.blurb))
-		dest, installing, dest_msg, dest_ok := export_dest(ed, stage_name_text(ed), &t)
+		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, stage_name_text(ed.doc), &t)
 		if !dest_ok {
 			ui.im_text_colored(DIM_COL, fmt.ctprint(dest_msg))
 		} else if installing {
@@ -661,10 +661,10 @@ draw_targets :: proc(ed: ^Editor) {
 // Records the finished ImGui frame into the window's swapchain pass: upload
 // outside any pass, then draw inside one. A nil pass (minimized window) draws
 // nothing.
-render_imgui :: proc(window: ^rl.Window) {
-	ui.imgui_backend_prepare(rl.ImGuiCommandBuffer())
-	if pass := rl.BeginImGuiPass(); pass != nil {
-		ui.imgui_backend_draw(rl.ImGuiCommandBuffer(), pass)
-		rl.EndImGuiPass(pass)
+render_imgui :: proc(window: ^gfx.Window) {
+	ui.imgui_backend_prepare(gfx.ImGuiCommandBuffer())
+	if pass := gfx.BeginImGuiPass(); pass != nil {
+		ui.imgui_backend_draw(gfx.ImGuiCommandBuffer(), pass)
+		gfx.EndImGuiPass(pass)
 	}
 }

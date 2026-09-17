@@ -1,4 +1,9 @@
+#+build ignore
 package main
+
+// Reference-only DiRT 3 probe. **Not compiled** — see the build directive
+// above. Kept for the method, not for use; the CLI no longer exposes it.
+// To run it again, drop the directive and restore its command in cli.odin.
 
 // `--dirt3-paths-place <venue_id> [<route_id>]`: the full custom-level debug
 // emit: route core, ground, decorations, venue tracksplit, all-visible VIS,
@@ -157,20 +162,20 @@ Paths_Place_Target :: enum {
 
 paths_place_headless :: proc(venue_id, route_id: string, target: Paths_Place_Target) -> (msg: string, ok: bool) {
 	scan: Install_Scan
-	ed := Editor{install = &scan}
-	install_scan_init(ed.install)
-	defer install_scan_delete(ed.install)
-	if !ed.install.found {
-		return install_scan_status_text(ed.install), false
+	doc := Venue_Doc{install = &scan}
+	install_scan_init(doc.install)
+	defer install_scan_delete(doc.install)
+	if !doc.install.found {
+		return install_scan_status_text(doc.install), false
 	}
 	if target == .Installed {
-		dir, deployed := venue_deploy_dir(&ed, venue_id, route_id)
+		dir, deployed := venue_deploy_dir(&doc, venue_id, route_id)
 		if !deployed {
 			return fmt.tprintf("%s/%s is not deployed; run --venue-deploy --apply first", venue_id, route_id), false
 		}
-		return paths_place_emit_into(&ed, venue_id, route_id, dir, filepath.dir(dir), filepath.dir(dir))
+		return paths_place_emit_into(&doc, venue_id, route_id, dir, filepath.dir(dir), filepath.dir(dir))
 	}
-	return paths_place_debug_out(&ed, venue_id, route_id)
+	return paths_place_debug_out(&doc, venue_id, route_id)
 }
 
 paths_place_emit_placements :: proc(dir: string) -> (msg: string, ok: bool) {
@@ -231,11 +236,11 @@ paths_place_seed_route :: proc(src, dst: string) -> (msg: string, ok: bool) {
 	return "", true
 }
 
-paths_place_debug_out :: proc(ed: ^Editor, venue_id, route_id: string) -> (msg: string, ok: bool) {
+paths_place_debug_out :: proc(doc: ^Venue_Doc, venue_id, route_id: string) -> (msg: string, ok: bool) {
 	p, load_msg, loaded := venue_load(venue_id)
 	if !loaded { return load_msg, false }
 	defer venue_free(p)
-	src, _ := filepath.join({ed.install.install.root, "tracks", "locations", p.base, p.base_route}, context.temp_allocator)
+	src, _ := filepath.join({doc.install.install.root, "tracks", "locations", p.base, p.base_route}, context.temp_allocator)
 	dst, _ := filepath.join({out_dir(), venue_id, route_id}, context.temp_allocator)
 	if err := os.make_directory_all(dst); err != nil && err != os.General_Error.Exist {
 		return fmt.tprintf("could not create %s: %v", dst, err), false
@@ -243,7 +248,7 @@ paths_place_debug_out :: proc(ed: ^Editor, venue_id, route_id: string) -> (msg: 
 	if seed_msg, seeded := paths_place_seed_route(src, dst); !seeded { return seed_msg, false }
 	// Keep the generated venue-scope tracksplit beside this scratch route. VIS
 	// must census that file, not the base venue's donor tracksplit.
-	return paths_place_emit_into(ed, venue_id, route_id, dst, filepath.dir(dst), filepath.dir(src))
+	return paths_place_emit_into(doc, venue_id, route_id, dst, filepath.dir(dst), filepath.dir(src))
 }
 
 paths_place_read_tracksplit_template :: proc(venue_dir, donor_venue_dir: string) -> ([]u8, string, bool) {
@@ -262,8 +267,8 @@ paths_place_read_tracksplit_template :: proc(venue_dir, donor_venue_dir: string)
 // Everything below writes only into `dir`, which the caller made: the
 // deployed route in the game, or a scratch copy of the base route for
 // validation while the game disk stays read-only.
-paths_place_emit_into :: proc(ed: ^Editor, venue_id, route_id, dir, venue_dir, donor_venue_dir: string) -> (msg: string, ok: bool) {
-	local_collision, ribbon, profile, build_msg, built := venue_tracksplit_collision(ed.install, venue_id, true, context.temp_allocator)
+paths_place_emit_into :: proc(doc: ^Venue_Doc, venue_id, route_id, dir, venue_dir, donor_venue_dir: string) -> (msg: string, ok: bool) {
+	local_collision, ribbon, profile, build_msg, built := venue_tracksplit_collision(doc.install, venue_id, true, context.temp_allocator)
 	if !built { return fmt.tprintf("road: %s", build_msg), false }
 	if len(ribbon) < 2 { return "road: ribbon has fewer than two sections", false }
 	if deviation := paths_place_curve_deviation(ribbon); deviation < PATHS_PLACE_MIN_BOW_M {

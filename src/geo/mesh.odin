@@ -17,7 +17,7 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "../gfx"
+import "../gfx"
 
 // Cliff shape. Heights, spans, tapers and the face angle are per-point (see
 // spline.odin); these are the constants that give a cliff its character.
@@ -68,7 +68,7 @@ ROAD_COLS :: 6
 ROUGH_MAX_M :: 0.1778 // 7 inches, in metres
 
 // Baked key light. Unlit material, so shading lives in the vertex colours.
-LIGHT_DIR :: rl.Vector3{0.40, 1.00, 0.30}
+LIGHT_DIR :: gfx.Vector3{0.40, 1.00, 0.30}
 AMBIENT :: 0.38
 
 // Metres of surface per tile of a base texture. Every UV below is *metres over
@@ -105,19 +105,19 @@ Mat_Id :: enum u8 {
 // flat-shaded); `mat` is per *triangle*, so `mat[i]` describes
 // `pos[i*3 .. i*3+2]`.
 Tri_Mesh :: struct {
-	pos: [dynamic]rl.Vector3,
-	nrm: [dynamic]rl.Vector3,
+	pos: [dynamic]gfx.Vector3,
+	nrm: [dynamic]gfx.Vector3,
 	uv:  [dynamic][2]f32,
-	col: [dynamic]rl.Color,
+	col: [dynamic]gfx.Color,
 	mat: [dynamic]Mat_Id,
 }
 
 tri_mesh_make :: proc(allocator := context.allocator) -> Tri_Mesh {
 	return Tri_Mesh {
-		pos = make([dynamic]rl.Vector3, allocator),
-		nrm = make([dynamic]rl.Vector3, allocator),
+		pos = make([dynamic]gfx.Vector3, allocator),
+		nrm = make([dynamic]gfx.Vector3, allocator),
 		uv = make([dynamic][2]f32, allocator),
-		col = make([dynamic]rl.Color, allocator),
+		col = make([dynamic]gfx.Color, allocator),
 		mat = make([dynamic]Mat_Id, allocator),
 	}
 }
@@ -135,24 +135,24 @@ tri_count :: proc(m: Tri_Mesh) -> int {
 }
 
 // Shade a colour by the baked light. Flat normals, so this is per-face.
-shade :: proc(col: rl.Color, n: rl.Vector3) -> rl.Color {
-	l := rl.Vector3Normalize(LIGHT_DIR)
-	k := AMBIENT + (1 - AMBIENT) * max(0, rl.Vector3DotProduct(n, l))
-	return rl.Color{u8(f32(col.r) * k), u8(f32(col.g) * k), u8(f32(col.b) * k), col.a}
+shade :: proc(col: gfx.Color, n: gfx.Vector3) -> gfx.Color {
+	l := gfx.Vector3Normalize(LIGHT_DIR)
+	k := AMBIENT + (1 - AMBIENT) * max(0, gfx.Vector3DotProduct(n, l))
+	return gfx.Color{u8(f32(col.r) * k), u8(f32(col.g) * k), u8(f32(col.b) * k), col.a}
 }
 
 // Winding is counter-clockwise seen from the front, so the face normal is
 // cross(b-a, c-a). Callers must order their vertices accordingly.
 // `ua`/`ub`/`uc` are the corners' UVs, in the same order as the positions.
-add_tri :: proc(m: ^Tri_Mesh, a, b, c: rl.Vector3, ua, ub, uc: [2]f32, col: rl.Color, mat: Mat_Id) {
-	n := rl.Vector3CrossProduct(b - a, c - a)
-	if rl.Vector3Length(n) < 1e-9 {
+add_tri :: proc(m: ^Tri_Mesh, a, b, c: gfx.Vector3, ua, ub, uc: [2]f32, col: gfx.Color, mat: Mat_Id) {
+	n := gfx.Vector3CrossProduct(b - a, c - a)
+	if gfx.Vector3Length(n) < 1e-9 {
 		return // degenerate, e.g. a cliff of zero height
 	}
-	n = rl.Vector3Normalize(n)
+	n = gfx.Vector3Normalize(n)
 	sc := shade(col, n)
 	uvs := [3][2]f32{ua, ub, uc}
-	for v, i in ([]rl.Vector3{a, b, c}) {
+	for v, i in ([]gfx.Vector3{a, b, c}) {
 		append(&m.pos, v)
 		append(&m.nrm, n)
 		append(&m.uv, uvs[i])
@@ -164,9 +164,9 @@ add_tri :: proc(m: ^Tri_Mesh, a, b, c: rl.Vector3, ua, ub, uc: [2]f32, col: rl.C
 
 add_quad :: proc(
 	m: ^Tri_Mesh,
-	a, b, c, d: rl.Vector3,
+	a, b, c, d: gfx.Vector3,
 	ua, ub, uc, ud: [2]f32,
-	col: rl.Color,
+	col: gfx.Color,
 	mat: Mat_Id,
 ) {
 	add_tri(m, a, b, c, ua, ub, uc, col, mat)
@@ -201,7 +201,7 @@ hash_u32 :: proc(x: u32) -> u32 {
 }
 
 // A per-vertex offset in [-1,1]^3, keyed on (ribbon sample, row, side).
-verge_jitter :: proc(sample, row, side: int) -> rl.Vector3 {
+verge_jitter :: proc(sample, row, side: int) -> gfx.Vector3 {
 	seed := u32(sample) * 73856093 ~ u32(row) * 19349663 ~ u32(side) * 83492791
 	unit := proc(h: u32) -> f32 {return f32(h) / f32(max(u32)) * 2 - 1}
 	return {
@@ -293,7 +293,7 @@ verge_vertex :: proc(
 	prof: Verge_Profile,
 	side, row, rows, sample: int,
 	roughness, ds: f32,
-) -> rl.Vector3 {
+) -> gfx.Vector3 {
 	outward := side == 0 ? cs.right : -cs.right
 	edge := cs.pos + outward * (cs.width * 0.5)
 	if prof.n < 2 || prof.len <= 0 || row == 0 {
@@ -324,20 +324,20 @@ verge_seam :: proc(
 	cs: Cross_Section,
 	side, rows, sample: int,
 	roughness, ds: f32,
-) -> rl.Vector3 {
+) -> gfx.Vector3 {
 	return verge_vertex(cs, verge_profile(cs, side), side, rows, rows, sample, roughness, ds)
 }
 
 // --- building ---------------------------------------------------------------
 
-ROAD_COL :: rl.Color{104, 108, 120, 255}      // Dirt-grip segments (editor tint)
-ROAD_COL_SAND :: rl.Color{150, 138, 120, 255} // Sand-penalty segments (editor tint)
-CLIFF_TOP :: rl.Color{140, 128, 112, 255}
-CLIFF_BOT :: rl.Color{86, 80, 74, 255}
+ROAD_COL :: gfx.Color{104, 108, 120, 255}      // Dirt-grip segments (editor tint)
+ROAD_COL_SAND :: gfx.Color{150, 138, 120, 255} // Sand-penalty segments (editor tint)
+CLIFF_TOP :: gfx.Color{140, 128, 112, 255}
+CLIFF_BOT :: gfx.Color{86, 80, 74, 255}
 
-lerp_col :: proc(a, b: rl.Color, t: f32) -> rl.Color {
+lerp_col :: proc(a, b: gfx.Color, t: f32) -> gfx.Color {
 	m :: proc(x, y: u8, t: f32) -> u8 {return u8(f32(x) + (f32(y) - f32(x)) * t)}
-	return rl.Color{m(a.r, b.r, t), m(a.g, b.g, t), m(a.b, b.b, t), 255}
+	return gfx.Color{m(a.r, b.r, t), m(a.g, b.g, t), m(a.b, b.b, t), 255}
 }
 
 // Which surface a road segment gets: ~2 in 3 keep Dirt grip, ~1 in 3 are the
@@ -365,7 +365,7 @@ road_vertex :: proc(
 	cs: Cross_Section,
 	s, col, cols: int,
 	global_rough: f32,
-) -> (pos: rl.Vector3, v: f32) {
+) -> (pos: gfx.Vector3, v: f32) {
 	left, right := xsec_ends(cs) // left = +right edge, right = far edge
 	f := f32(col) / f32(cols)
 	pos = left + (right - left) * f
@@ -429,7 +429,7 @@ sample_spacing :: proc(ribbon: []Cross_Section) -> []f32 {
 	n := len(ribbon)
 	ds := make([]f32, n, context.temp_allocator)
 	for i in 0 ..< n - 1 {
-		ds[i] = ribbon[i + 1].break_before ? 0 : rl.Vector3Distance(ribbon[i].pos, ribbon[i + 1].pos)
+		ds[i] = ribbon[i + 1].break_before ? 0 : gfx.Vector3Distance(ribbon[i].pos, ribbon[i + 1].pos)
 	}
 	ds[n - 1] = ds[n - 2]
 	return ds
@@ -514,12 +514,12 @@ build_tri_mesh :: proc(
 // A nil buffer means headless (no GPU device): building still counts the
 // triangles, and drawing skips the mesh.
 Gpu_Mesh :: struct {
-	mesh: rl.Mesh,
+	mesh: gfx.Mesh,
 	tris: int,
 }
 
 gpu_mesh_unload :: proc(rm: ^Gpu_Mesh) {
-	rl.mesh_free(&rm.mesh)
+	gfx.mesh_free(&rm.mesh)
 	rm^ = {}
 }
 
@@ -530,11 +530,11 @@ gpu_mesh_upload :: proc(m: Tri_Mesh) -> Gpu_Mesh {
 	if n == 0 {
 		return {}
 	}
-	verts := make([]rl.Upload_Vertex, n, context.temp_allocator)
+	verts := make([]gfx.Upload_Vertex, n, context.temp_allocator)
 	for i in 0 ..< n {
 		verts[i] = {pos = m.pos[i], col = m.col[i]}
 	}
-	return Gpu_Mesh{mesh = rl.mesh_upload(verts), tris = n / 3}
+	return Gpu_Mesh{mesh = gfx.mesh_upload(verts), tris = n / 3}
 }
 
 // Rebuild the whole thing from the ribbon. The old GPU buffers are released
@@ -545,7 +545,7 @@ road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, topo: c.int, r
 	rm^ = gpu_mesh_upload(m)
 }
 
-gpu_mesh_draw :: proc(rm: Gpu_Mesh, mat: rl.Material, wireframe: bool) {
+gpu_mesh_draw :: proc(rm: Gpu_Mesh, mat: gfx.Material, wireframe: bool) {
 	if rm.mesh.buffer == nil {
 		return
 	}
@@ -553,16 +553,16 @@ gpu_mesh_draw :: proc(rm: Gpu_Mesh, mat: rl.Material, wireframe: bool) {
 	// up, and a cliff faces the road it grew from. In the editor the camera
 	// orbits freely, so culling would make cliffs vanish whenever you look at
 	// their backs. Draw both sides here; the mesh itself is unchanged.
-	rl.DisableBackfaceCulling()
-	defer rl.EnableBackfaceCulling()
+	gfx.DisableBackfaceCulling()
+	defer gfx.EnableBackfaceCulling()
 
 	// Not `defer` inside the if: Odin scopes defer to the enclosing block, so it
 	// would disable wire mode before the draw rather than after.
 	if wireframe {
-		rl.EnableWireMode()
+		gfx.EnableWireMode()
 	}
-	rl.DrawMesh(rm.mesh, mat, rl.Matrix(1))
+	gfx.DrawMesh(rm.mesh, mat, gfx.Matrix(1))
 	if wireframe {
-		rl.DisableWireMode()
+		gfx.DisableWireMode()
 	}
 }

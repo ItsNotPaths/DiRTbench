@@ -7,7 +7,7 @@ package main
 import "core:math"
 import "core:path/filepath"
 import "core:strings"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 // The recorded co-driver clips, baked into the binary. About 1.2 MB of Ogg
@@ -17,21 +17,21 @@ PACE_CLIPS := #load_directory("../../assets/pacenotes")
 
 // Decode every clip into a map keyed by basename. Keys are cloned (persistent);
 // pace_audio_unload frees them.
-pace_audio_load :: proc() -> map[string]rl.Sound {
-	clips := make(map[string]rl.Sound)
+pace_audio_load :: proc() -> map[string]gfx.Sound {
+	clips := make(map[string]gfx.Sound)
 	for file in PACE_CLIPS {
 		if filepath.ext(file.name) != ".ogg" {
 			continue
 		}
 		stem := strings.trim_suffix(file.name, ".ogg")
-		clips[strings.clone(stem)] = rl.LoadSoundFromMemory(file.data)
+		clips[strings.clone(stem)] = gfx.LoadSoundFromMemory(file.data)
 	}
 	return clips
 }
 
-pace_audio_unload :: proc(clips: ^map[string]rl.Sound) {
+pace_audio_unload :: proc(clips: ^map[string]gfx.Sound) {
 	for name, snd in clips {
-		rl.UnloadSound(snd)
+		gfx.UnloadSound(snd)
 		delete(name)
 	}
 	delete(clips^)
@@ -41,7 +41,7 @@ pace_audio_unload :: proc(clips: ^map[string]rl.Sound) {
 // between samples). `fwd` is the segment direction the cursor is on — it drives
 // the chase camera's heading.
 @(private = "file")
-pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, fwd: rl.Vector3) {
+pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, fwd: gfx.Vector3) {
 	n := len(ribbon)
 	if n == 0 {
 		return
@@ -50,23 +50,23 @@ pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, 
 		return ribbon[0].pos, ribbon[0].fwd
 	}
 	if s <= 0 {
-		return ribbon[0].pos, rl.Vector3Normalize(ribbon[1].pos - ribbon[0].pos)
+		return ribbon[0].pos, gfx.Vector3Normalize(ribbon[1].pos - ribbon[0].pos)
 	}
 	for i in 1 ..< n {
 		if arc[i] >= s {
 			seg := ribbon[i].pos - ribbon[i - 1].pos
 			t := (s - arc[i - 1]) / max(arc[i] - arc[i - 1], 1e-6)
-			return ribbon[i - 1].pos + seg * t, rl.Vector3Normalize(seg)
+			return ribbon[i - 1].pos + seg * t, gfx.Vector3Normalize(seg)
 		}
 	}
-	return ribbon[n - 1].pos, rl.Vector3Normalize(ribbon[n - 1].pos - ribbon[n - 2].pos)
+	return ribbon[n - 1].pos, gfx.Vector3Normalize(ribbon[n - 1].pos - ribbon[n - 2].pos)
 }
 
 // Start/stop the ride from the head of the spline.
 preview_toggle :: proc(ed: ^Editor) {
 	ed.previewing = !ed.previewing
 	if ed.app.play_i < len(ed.app.play_q) {
-		rl.StopSound(ed.app.play_q[ed.app.play_i])
+		gfx.StopSound(ed.app.play_q[ed.app.play_i])
 	}
 	clear(&ed.app.play_q)
 	ed.app.play_i = 0
@@ -77,12 +77,12 @@ preview_toggle :: proc(ed: ^Editor) {
 		ed.preview_last = -1
 		// Snap the camera to the start heading so the ride opens looking down the
 		// stage, rather than easing in from the last orbit angle.
-		if len(ed.ribbon) >= 2 {
-			f := rl.Vector3Normalize(ed.ribbon[1].pos - ed.ribbon[0].pos)
+		if len(ed.doc.ribbon) >= 2 {
+			f := gfx.Vector3Normalize(ed.doc.ribbon[1].pos - ed.doc.ribbon[0].pos)
 			if abs(f.x) + abs(f.z) > 1e-5 {
 				ed.cam.yaw = math.atan2(-f.x, -f.z)
 			}
-			ed.cam.target = ed.ribbon[0].pos
+			ed.cam.target = ed.doc.ribbon[0].pos
 		}
 	}
 }
@@ -109,9 +109,9 @@ pace_pump_queue :: proc(ed: ^Editor) {
 	}
 	cur := ed.app.play_q[ed.app.play_i]
 	if !ed.app.play_started {
-		rl.PlaySound(cur)
+		gfx.PlaySound(cur)
 		ed.app.play_started = true
-	} else if !rl.IsSoundPlaying(cur) {
+	} else if !gfx.IsSoundPlaying(cur) {
 		ed.app.play_i += 1
 		ed.app.play_started = false
 	}
@@ -124,32 +124,32 @@ preview_update :: proc(ed: ^Editor) {
 	if !ed.previewing {
 		return
 	}
-	if len(ed.ribbon) < 2 {
+	if len(ed.doc.ribbon) < 2 {
 		ed.previewing = false
 		return
 	}
-	arc := geo.ribbon_arc(ed.ribbon)
+	arc := geo.ribbon_arc(ed.doc.ribbon)
 	total := arc[len(arc) - 1]
-	ed.preview_s += ed.preview_speed * rl.GetFrameTime()
-	for ed.preview_next < len(ed.notes) && ed.notes[ed.preview_next].station <= ed.preview_s {
-		pace_enqueue(ed, ed.notes[ed.preview_next])
+	ed.preview_s += ed.preview_speed * gfx.GetFrameTime()
+	for ed.preview_next < len(ed.doc.notes) && ed.doc.notes[ed.preview_next].station <= ed.preview_s {
+		pace_enqueue(ed, ed.doc.notes[ed.preview_next])
 		ed.preview_last = ed.preview_next
 		ed.preview_next += 1
 	}
-	pos, fwd := pace_ride_pos(ed.ribbon, arc, ed.preview_s)
+	pos, fwd := pace_ride_pos(ed.doc.ribbon, arc, ed.preview_s)
 	ed.preview_pos = pos
 	// Attach the camera to the ride: target rides the car, and the yaw swings to
 	// look down the stage (eye behind the car, facing travel). Pitch and zoom stay
 	// the user's. Yaw is eased toward the heading so corners don't snap. The caller
 	// rebuilds cam3d from this after the update.
 	ed.cam.target = pos
-	fh := rl.Vector3{fwd.x, 0, fwd.z}
-	if rl.Vector3Length(fh) > 1e-5 {
+	fh := gfx.Vector3{fwd.x, 0, fwd.z}
+	if gfx.Vector3Length(fh) > 1e-5 {
 		target_yaw := math.atan2(-fh.x, -fh.z)
 		d := target_yaw - ed.cam.yaw
 		for d > math.PI {d -= 2 * math.PI}
 		for d < -math.PI {d += 2 * math.PI}
-		ed.cam.yaw += d * min(1, 6 * rl.GetFrameTime())
+		ed.cam.yaw += d * min(1, 6 * gfx.GetFrameTime())
 	}
 	if ed.preview_s > total + 5 {
 		ed.previewing = false // ran off the end

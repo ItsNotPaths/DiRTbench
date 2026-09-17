@@ -42,12 +42,12 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "../gfx"
+import "../gfx"
 
 // Vertex colours, since the material is unlit (see mesh.odin). Slope picks
 // between them: flat ground is grass, a steep face is the rock under it.
-TERRAIN_FLAT :: rl.Color{86, 112, 68, 255}
-TERRAIN_STEEP :: rl.Color{112, 104, 92, 255}
+TERRAIN_FLAT :: gfx.Color{86, 112, 68, 255}
+TERRAIN_STEEP :: gfx.Color{112, 104, 92, 255}
 
 // Controls sculpt broad landforms; `cell_m` separately decides how finely the
 // resulting field is triangulated.
@@ -211,21 +211,21 @@ terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughn
 // Heights are world-vertical, so a banked road must not tilt the terrain beside
 // it. Only when the road is banked to vertical does `right` lose its ground
 // component, and then it degenerates to exactly cross(worldUp, fwd).
-terrain_outward :: proc(cs: Cross_Section, side: int) -> rl.Vector3 {
+terrain_outward :: proc(cs: Cross_Section, side: int) -> gfx.Vector3 {
 	r := side == 0 ? cs.right : -cs.right
-	f := rl.Vector3{r.x, 0, r.z}
-	if rl.Vector3Length(f) > 1e-4 {
-		return rl.Vector3Normalize(f)
+	f := gfx.Vector3{r.x, 0, r.z}
+	if gfx.Vector3Length(f) > 1e-4 {
+		return gfx.Vector3Normalize(f)
 	}
-	g := rl.Vector3CrossProduct({0, 1, 0}, cs.fwd)
-	if rl.Vector3Length(g) < 1e-4 {
+	g := gfx.Vector3CrossProduct({0, 1, 0}, cs.fwd)
+	if gfx.Vector3Length(g) < 1e-4 {
 		return {1, 0, 0}
 	}
-	g = rl.Vector3Normalize(g)
+	g = gfx.Vector3Normalize(g)
 	return side == 0 ? g : -g
 }
 
-terrain_tri_colour :: proc(n: rl.Vector3) -> rl.Color {
+terrain_tri_colour :: proc(n: gfx.Vector3) -> gfx.Color {
 	return lerp_col(TERRAIN_FLAT, TERRAIN_STEEP, clamp((1 - abs(n.y)) * 2, 0, 1))
 }
 
@@ -288,9 +288,9 @@ field_samples :: proc(
 
 		r0 := terrain_outward(cs, 0)
 		s.right = {r0.x, r0.z}
-		f := rl.Vector3{cs.fwd.x, 0, cs.fwd.z}
-		if rl.Vector3Length(f) > 1e-4 {
-			f = rl.Vector3Normalize(f)
+		f := gfx.Vector3{cs.fwd.x, 0, cs.fwd.z}
+		if gfx.Vector3Length(f) > 1e-4 {
+			f = gfx.Vector3Normalize(f)
 		}
 		s.fwd = {f.x, f.z}
 
@@ -1019,7 +1019,7 @@ field_y :: proc(t: ^Terrain, v: Terrain_Point) -> f32 {
 	return terrain_world_height(t, {v.x, v.z}, v.legs, v.n)
 }
 
-field_point :: proc(t: ^Terrain, v: Terrain_Point) -> rl.Vector3 {
+field_point :: proc(t: ^Terrain, v: Terrain_Point) -> gfx.Vector3 {
 	return {v.x, field_y(t, v), v.z}
 }
 
@@ -1032,11 +1032,11 @@ build_terrain_mesh :: proc(m: ^Tri_Mesh, t: ^Terrain, f: ^Terrain_Field) {
 		// The terrain is a height field over XZ, so every face points up. Delaunay
 		// gives no orientation guarantee, so read the normal and flip the winding
 		// rather than trusting it — a downward face would shade as unlit ambient.
-		nrm := rl.Vector3CrossProduct(b - a, cp - a)
-		if rl.Vector3Length(nrm) < 1e-9 {
+		nrm := gfx.Vector3CrossProduct(b - a, cp - a)
+		if gfx.Vector3Length(nrm) < 1e-9 {
 			continue
 		}
-		nrm = rl.Vector3Normalize(nrm)
+		nrm = gfx.Vector3Normalize(nrm)
 		if nrm.y < 0 {
 			b, cp = cp, b
 			nrm = -nrm
@@ -1044,7 +1044,7 @@ build_terrain_mesh :: proc(m: ^Tri_Mesh, t: ^Terrain, f: ^Terrain_Field) {
 		// A height field over XZ, so a world-planar XZ UV is the natural
 		// parameterisation — no seams, and it matches across the rim weld.
 		// (Grass is a Lightmap-only material today, so nothing reads this.)
-		uv :: proc(v: rl.Vector3) -> [2]f32 {
+		uv :: proc(v: gfx.Vector3) -> [2]f32 {
 			return {v.x / UV_TILE_M, v.z / UV_TILE_M}
 		}
 		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), terrain_tri_colour(nrm), .Terrain)
@@ -1072,11 +1072,11 @@ terrain_node_world :: proc(
 	topo: c.int,
 	roughness: f32,
 	allocator := context.temp_allocator,
-) -> []rl.Vector3 {
+) -> []gfx.Vector3 {
 	if !t.enabled || len(t.controls) == 0 {
 		return nil
 	}
-	out := make([]rl.Vector3, len(t.controls), allocator)
+	out := make([]gfx.Vector3, len(t.controls), allocator)
 	for c, i in t.controls {
 		out[i] = {c.x, c.base_y + c.offset, c.z}
 	}
@@ -1085,7 +1085,7 @@ terrain_node_world :: proc(
 
 terrain_node_active_mask :: proc(
 	t: ^Terrain,
-	pos: []rl.Vector3,
+	pos: []gfx.Vector3,
 	allocator := context.temp_allocator,
 ) -> []bool {
 	out := make([]bool, len(pos), allocator)
@@ -1096,14 +1096,14 @@ terrain_node_active_mask :: proc(
 }
 
 // Nearest node the ray strikes, as an index into terrain_node_world, or -1.
-pick_terrain_node :: proc(pos: []rl.Vector3, active: []bool, radius: f32, ray: rl.Ray) -> (idx: int, dist: f32) {
+pick_terrain_node :: proc(pos: []gfx.Vector3, active: []bool, radius: f32, ray: gfx.Ray) -> (idx: int, dist: f32) {
 	idx = -1
 	dist = max(f32)
 	for p, i in pos {
 		if len(active) == len(pos) && !active[i] {
 			continue
 		}
-		if hit := rl.GetRayCollisionSphere(ray, p, radius); hit.hit && hit.distance < dist {
+		if hit := gfx.GetRayCollisionSphere(ray, p, radius); hit.hit && hit.distance < dist {
 			dist = hit.distance
 			idx = i
 		}
@@ -1113,7 +1113,7 @@ pick_terrain_node :: proc(pos: []rl.Vector3, active: []bool, radius: f32, ray: r
 
 // World controls have no artificial along-road adjacency, so only handles are
 // drawn; connecting them would reintroduce misleading crossings at hairpins.
-draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, active, affected: []bool, selected: int) {
+draw_terrain_nodes :: proc(t: ^Terrain, pos: []gfx.Vector3, active, affected: []bool, selected: int) {
 	if len(pos) == 0 {
 		return
 	}
@@ -1123,7 +1123,7 @@ draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, active, affected: []b
 		if len(active) == len(pos) && !active[i] {
 			continue
 		}
-		hcol := rl.Color{150, 230, 180, 255}
+		hcol := gfx.Color{150, 230, 180, 255}
 		if i == selected {
 			hcol = {255, 120, 60, 255}
 		} else if i < len(affected) {
@@ -1131,7 +1131,7 @@ draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, active, affected: []b
 				hcol = {255, 190, 80, 255}
 			}
 		}
-		rl.DrawSphereEx(pos[i], radius, 3, 4, hcol)
+		gfx.DrawSphereEx(pos[i], radius, 3, 4, hcol)
 	}
 }
 

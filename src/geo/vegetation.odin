@@ -18,7 +18,7 @@ package geo
 
 import "core:c"
 import "core:math"
-import rl "../gfx"
+import "../gfx"
 
 // The stock species families offered as presets. The enum value is stable — it is
 // persisted in the stage file — so only ever append.
@@ -76,7 +76,7 @@ Veg_Species :: struct {
 
 // Placeholder canopy tint per preset — translucent green, paler for the winter set.
 // Alpha is baked in; the trunk has its own colour in veg_draw.
-veg_canopy_col :: proc(p: Veg_Preset) -> rl.Color {
+veg_canopy_col :: proc(p: Veg_Preset) -> gfx.Color {
 	switch p {
 	case .Firs:  return {46, 104, 58, 150}
 	case .Oaks:  return {84, 148, 66, 150}
@@ -151,14 +151,14 @@ VEG_MAX :: 20000
 // and `scale` is always a real value, never 0.
 Veg_Instance :: struct {
 	kind:   Prop_Kind,
-	pos:    rl.Vector3, // ground anchor
+	pos:    gfx.Vector3, // ground anchor
 	yaw:    f32,        // radians about +Y
 	scale:  f32,
 	shape:  Veg_Shape,
 	h:      f32, // metres, already scaled by `scale`
 	r:      f32,
 	trunk:  f32,
-	canopy: rl.Color,
+	canopy: gfx.Color,
 }
 
 // --- terrain-height probe ----------------------------------------------------
@@ -318,8 +318,8 @@ veg_generate :: proc(
 		cs := ribbon[i]
 
 		// Flattened travel direction, for the along-road jitter.
-		fwd := rl.Vector3{cs.fwd.x, 0, cs.fwd.z}
-		fwd = rl.Vector3Length(fwd) > 1e-4 ? rl.Vector3Normalize(fwd) : rl.Vector3{0, 0, 1}
+		fwd := gfx.Vector3{cs.fwd.x, 0, cs.fwd.z}
+		fwd = gfx.Vector3Length(fwd) > 1e-4 ? gfx.Vector3Normalize(fwd) : gfx.Vector3{0, 0, 1}
 
 		for side in 0 ..< 2 {
 			seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
@@ -385,7 +385,7 @@ veg_generate :: proc(
 
 // --- viewport preview --------------------------------------------------------
 
-VEG_TRUNK_COL :: rl.Color{92, 66, 44, 210} // a muted bark brown, mostly opaque
+VEG_TRUNK_COL :: gfx.Color{92, 66, 44, 210} // a muted bark brown, mostly opaque
 
 // Draw the cached scatter as translucent placeholder shapes. Call inside a 3D
 // pass, after the opaque road/terrain, so the canopies blend over the ground
@@ -399,22 +399,22 @@ veg_draw :: proc(insts: []Veg_Instance) {
 		// A slim trunk, for the "little trunk base" / lifted-canopy read.
 		if it.trunk > 0.05 {
 			tr := max(it.r * 0.12, 0.12)
-			rl.DrawCylinderEx(base, top, tr, tr, 6, VEG_TRUNK_COL)
+			gfx.DrawCylinderEx(base, top, tr, tr, 6, VEG_TRUNK_COL)
 		}
 
 		switch it.shape {
 		case .Conifer:
 			// A tapering cone: wide base at the trunk top, point at the crown.
 			apex := top + {0, it.h, 0}
-			rl.DrawCylinderEx(top, apex, it.r, 0, 8, it.canopy)
+			gfx.DrawCylinderEx(top, apex, it.r, 0, 8, it.canopy)
 		case .Broadleaf:
 			// A round canopy resting on the trunk.
 			c := top + {0, it.r, 0}
-			rl.DrawSphereEx(c, it.r, 6, 8, it.canopy)
+			gfx.DrawSphereEx(c, it.r, 6, 8, it.canopy)
 		case .Bush:
 			// A low ground sphere, squashed so it reads as a shrub, not a ball.
 			c := base + {0, it.r * 0.6, 0}
-			rl.DrawSphereEx(c, it.r, 5, 7, it.canopy)
+			gfx.DrawSphereEx(c, it.r, 5, 7, it.canopy)
 		}
 	}
 }

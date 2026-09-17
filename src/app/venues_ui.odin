@@ -20,7 +20,7 @@ import "core:os"
 import "core:strings"
 import d3 "../d3"
 import "../ui"
-import rl "../gfx"
+import "../gfx"
 
 DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}
@@ -79,7 +79,7 @@ draw_venues_screen :: proc(app: ^App) {
 	vs := &app.install
 
 	ui.igSetNextWindowPos({0, 22}, .Always, {0, 0})
-	ui.igSetNextWindowSize({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight() - 22)}, .Always)
+	ui.igSetNextWindowSize({f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight() - 22)}, .Always)
 	flags := ui.IM_WINDOW_NO_TITLE_BAR | ui.IM_WINDOW_NO_RESIZE |
 	         ui.IM_WINDOW_NO_MOVE | ui.IM_WINDOW_NO_COLLAPSE
 	if !ui.igBegin("Project manager", nil, flags) {
@@ -347,7 +347,7 @@ first_playable_route :: proc(venue: d3.Venue) -> int {
 
 // --- opening -----------------------------------------------------------------
 
-open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
+open_venue_doc :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	path := venue_road_path(p.id)
 	migrating := false
 	// One-time compatibility bridge for projects made before venues owned a
@@ -356,40 +356,34 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 		path = venue_stage_path(p.id, p.stages[0])
 		migrating = true
 	}
-	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing, &ed.terrain); !ok {
-		set_status(&ed.status, msg, false)
-		return false
+	if load_msg, loaded := load_road(doc, path); !loaded {
+		return load_msg, false
 	}
-	routes_free(&ed.routes)
-	ed.routes = venue_routes(p^)
-	ed.route_sel = len(ed.routes) > 0 ? 0 : -1
-	ed.stage_mode = false
+	routes_free(&doc.routes)
+	doc.routes = venue_routes(p^)
 	if migrating {
-		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing, &ed.terrain); !ok {
-			set_status(&ed.status, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
-			return false
+		if save_msg, saved := save_road(doc, venue_road_path(p.id)); !saved {
+			return fmt.tprintf("opened old road but could not migrate it: %s", save_msg), false
 		}
 		p.version = VENUE_VERSION
-		if msg, ok := venue_save(p^); !ok {
-			set_status(&ed.status, fmt.tprintf("migrated road but could not update venue: %s", msg), false)
-			return false
+		if save_msg, saved := venue_save(p^); !saved {
+			return fmt.tprintf("migrated road but could not update venue: %s", save_msg), false
 		}
 	}
-	delete(ed.open_venue)
-	delete(ed.open_stage)
-	ed.open_venue = strings.clone(p.id)
-	ed.open_stage = ""
-	set_stage_name(ed, p.id)
-	mark_dirty(ed)
-	set_status(&ed.status, fmt.tprintf("editing %s road network", p.id), true)
-	return true
+	delete(doc.open_venue)
+	delete(doc.open_stage)
+	doc.open_venue = strings.clone(p.id)
+	doc.open_stage = ""
+	set_stage_name(doc, p.id)
+	mark_dirty(doc)
+	return "", true
 }
 
 // An editor for this venue, or nil. One window per venue: two views of the
 // same road with two caches behind them would disagree the moment either edits.
 venue_editor_open :: proc(app: ^App, venue_id: string) -> ^Editor {
 	for editor in app.editors {
-		if editor.open_venue == venue_id {
+		if editor.doc.open_venue == venue_id {
 			return editor
 		}
 	}
@@ -421,26 +415,26 @@ app_service_open_request :: proc(app: ^App) {
 // is heap-allocated because gfx holds a pointer to the window inside it.
 open_venue_window :: proc(app: ^App, p: ^Venue) {
 	if existing := venue_editor_open(app, p.id); existing != nil {
-		rl.RaiseWindow(&existing.window)
+		gfx.RaiseWindow(&existing.window)
 		return
 	}
 	ed := new(Editor)
-	ed^ = editor_defaults()
+	ed^ = view_defaults()
 	ed.app = app
-	ed.install = &app.install
 	if !editor_window_open(ed, fmt.ctprintf("dirtbench — %s", p.id)) {
 		set_status(&app.status, "could not open an editor window", false)
-		editor_delete(ed)
 		free(ed)
 		return
 	}
-	if !open_venue_editor(ed, p) {
-		msg, _ := status_text(&ed.status)
+	ed.doc = doc_new(app)
+	append(&app.docs, ed.doc)
+	append(&app.editors, ed)
+	if msg, ok := open_venue_doc(ed.doc, p); !ok {
 		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, msg), false)
-		editor_close(ed)
+		editor_close(app, ed)
 		return
 	}
-	append(&app.editors, ed)
+	select_route(ed, len(ed.doc.routes) > 0 ? 0 : -1)
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.id), true)
 }
 
@@ -449,9 +443,8 @@ open_venue_window :: proc(app: ^App, p: ^Venue) {
 venues_editors_reap :: proc(app: ^App) {
 	for i := len(app.editors) - 1; i >= 0; i -= 1 {
 		ed := app.editors[i]
-		if rl.WindowShouldClose(&ed.window) || ed.quit {
-			editor_close(ed)
-			unordered_remove(&app.editors, i)
+		if gfx.WindowShouldClose(&ed.window) || ed.quit {
+			editor_close(app, ed)
 		}
 	}
 }
@@ -460,8 +453,8 @@ venues_editors_reap :: proc(app: ^App) {
 // with panels swapped: there is no camera, no gizmo and no geometry here, and a
 // window that shares a loop with the editor ends up sharing its state too.
 draw_venues_frame :: proc(app: ^App) {
-	rl.BeginWindowFrame(&app.window)
-	rl.ClearBackground({22, 24, 29, 255})
+	gfx.BeginWindowFrame(&app.window)
+	gfx.ClearBackground({22, 24, 29, 255})
 
 	ui.imgui_backend_begin()
 	draw_venues_menubar(app)
@@ -471,7 +464,7 @@ draw_venues_frame :: proc(app: ^App) {
 	}
 	render_imgui(&app.window)
 
-	rl.EndWindowFrame(&app.window)
+	gfx.EndWindowFrame(&app.window)
 }
 
 @(private = "file")

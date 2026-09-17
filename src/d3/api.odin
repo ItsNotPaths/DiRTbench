@@ -50,15 +50,10 @@ Export_Job :: struct {
 
 // Public entry points used by the editor's headless CLI. The implementation
 // stays package-private; these names are the deliberately small package seam.
-Dump :: dirt3_dump_headless
-Raise :: dirt3_raise_headless
-Ramp :: dirt3_ramp_headless
-Partition_Strip :: dirt3_partition_strip_headless
-Flat :: dirt3_flat_headless
-Partition_Strip_On_Stock :: dirt3_partition_strip_on_stock_headless
-Ramp_On_Stock :: dirt3_ramp_on_stock_headless
-Bridge_Bump :: dirt3_bridge_bump_headless
-Rewrite :: dirt3_rewrite_headless
+//
+// The probe entry points that scratch.odin backed are not here: that file is
+// reference only and is not compiled (`#+build ignore`). Reinstating one means
+// dropping the directive and adding its alias back.
 Export :: export_dirt3
 Export_Geometry :: export_dirt3_geometry
 Export_Venue_Geometry :: export_dirt3_venue_geometry
@@ -66,8 +61,6 @@ Atomic_Write :: atomic_write_file
 Prepare_Registration :: prepare_registration
 Registration_Output_Delete :: registration_output_delete
 Database_Bytes_Have_Venue :: database_bytes_have_venue
-Routesplit :: dirt3_routesplit_headless
-Vis_All_Visible :: dirt3_vis_allvisible_headless
 Venue_Profile :: D3_Venue_Profile
 Profile_Load :: d3_profile_load
 Profile_Dir :: D3_PROFILE_DIR

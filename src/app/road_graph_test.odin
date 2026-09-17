@@ -2,7 +2,7 @@ package main
 
 import "core:os"
 import "core:testing"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 @(test)
@@ -70,7 +70,7 @@ weld_closes_a_loop_without_touching_the_parent_tree :: proc(t: ^testing.T) {
 
 	// The closing edge ends on the root, which is what makes the loop seamless.
 	last := looped[len(looped) - 1]
-	testing.expect(t, rl.Vector3Distance(last.pos, sp.points[0].xform.translation) < 0.01)
+	testing.expect(t, gfx.Vector3Distance(last.pos, sp.points[0].xform.translation) < 0.01)
 
 	geo.unweld_point(&sp, tail)
 	testing.expect(t, geo.is_linear(sp), "unweld did not restore the chain")
@@ -104,23 +104,23 @@ weld_indices_survive_every_graph_edit :: proc(t: ^testing.T) {
 
 @(test)
 stage_file_round_trips_a_welded_loop :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	seed_spline(&sp)
-	tail := len(sp.points) - 1
-	testing.expect(t, geo.weld_points(&sp, tail, 0))
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
+	tail := len(doc.spline.points) - 1
+	testing.expect(t, geo.weld_points(&doc.spline, tail, 0))
 
 	path := "/tmp/claude-1000/dirtbench-weld-roundtrip.json"
-	msg, ok := save_stage_to(sp, path)
+	msg, ok := save_road(&doc, path)
 	testing.expect(t, ok, msg); if !ok { return }
 	defer os.remove(path)
 
-	back: geo.Spline
-	defer delete(back.points)
-	load_msg, loaded := load_stage_from(&back, path, nil, nil)
+	back := doc_defaults()
+	defer doc_delete(&back)
+	load_msg, loaded := load_road(&back, path)
 	testing.expect(t, loaded, load_msg); if !loaded { return }
-	testing.expect_value(t, len(back.points), len(sp.points))
-	for p, i in back.points { testing.expect_value(t, p.weld, sp.points[i].weld) }
+	testing.expect_value(t, len(back.spline.points), len(doc.spline.points))
+	for p, i in back.spline.points { testing.expect_value(t, p.weld, doc.spline.points[i].weld) }
 }
 
 // A marker sits on the edge running into `to`, so the seed chain 0->1->2->3
@@ -140,12 +140,12 @@ compile_trims_the_road_to_the_two_markers :: proc(t: ^testing.T) {
 	// The marker on (0,1), then nodes 1 and 2, then the marker on (2,3).
 	testing.expect_value(t, len(stage.points), 4)
 	testing.expect(t, geo.is_linear(stage), "a compiled stage must be a plain chain")
-	testing.expect(t, rl.Vector3Distance(stage.points[1].xform.translation, sp.points[1].xform.translation) < 0.01)
-	testing.expect(t, rl.Vector3Distance(stage.points[2].xform.translation, sp.points[2].xform.translation) < 0.01)
+	testing.expect(t, gfx.Vector3Distance(stage.points[1].xform.translation, sp.points[1].xform.translation) < 0.01)
+	testing.expect(t, gfx.Vector3Distance(stage.points[2].xform.translation, sp.points[2].xform.translation) < 0.01)
 	// Node 0 and node 3 are outside the markers and must not survive.
 	for p in stage.points {
-		testing.expect(t, rl.Vector3Distance(p.xform.translation, sp.points[0].xform.translation) > 0.01)
-		testing.expect(t, rl.Vector3Distance(p.xform.translation, sp.points[3].xform.translation) > 0.01)
+		testing.expect(t, gfx.Vector3Distance(p.xform.translation, sp.points[0].xform.translation) > 0.01)
+		testing.expect(t, gfx.Vector3Distance(p.xform.translation, sp.points[3].xform.translation) > 0.01)
 	}
 }
 
@@ -183,7 +183,7 @@ compile_runs_a_loop_through_its_weld :: proc(t: ^testing.T) {
 	// The loop comes back to where it started.
 	first := stage.points[0].xform.translation
 	last := stage.points[len(stage.points)-1].xform.translation
-	testing.expect(t, rl.Vector3Distance(first, last) < 20, "a closed loop should finish near its start")
+	testing.expect(t, gfx.Vector3Distance(first, last) < 20, "a closed loop should finish near its start")
 }
 
 @(test)
@@ -215,7 +215,7 @@ compile_keeps_markers_clear_of_the_nodes_they_sit_between :: proc(t: ^testing.T)
 	defer delete(stage.points)
 	testing.expect(t, ok, msg); if !ok { return }
 	for i in 1 ..< len(stage.points) {
-		d := rl.Vector3Distance(stage.points[i-1].xform.translation, stage.points[i].xform.translation)
+		d := gfx.Vector3Distance(stage.points[i-1].xform.translation, stage.points[i].xform.translation)
 		testing.expect(t, d > 0.01, "compiled stage has a zero-length segment")
 	}
 }

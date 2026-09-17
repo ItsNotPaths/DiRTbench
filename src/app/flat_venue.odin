@@ -1,4 +1,9 @@
+#+build ignore
 package main
+
+// Reference-only DiRT 3 probe. **Not compiled** — see the build directive
+// above. Kept for the method, not for use; the CLI no longer exposes it.
+// To run it again, drop the directive and restore its command in cli.odin.
 
 // Build route and venue files directly from the complete road.json. Reading
 // the whole road preserves the grid lead-in that compiled stages trim away.
@@ -188,10 +193,10 @@ flat_venue_markers :: proc(length: f32, allocator := context.allocator) -> []d3.
 
 flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: bool) {
 	scan: Install_Scan
-	ed := Editor{install = &scan}
-	install_scan_init(ed.install)
-	defer install_scan_delete(ed.install)
-	dir, deployed := venue_deploy_dir(&ed, venue_id, route_id)
+	doc := Venue_Doc{install = &scan}
+	install_scan_init(doc.install)
+	defer install_scan_delete(doc.install)
+	dir, deployed := venue_deploy_dir(&doc, venue_id, route_id)
 	if !deployed {
 		return fmt.tprintf("%s/%s is not deployed; run --venue-deploy --apply first", venue_id, route_id), false
 	}
@@ -200,7 +205,7 @@ flat_venue_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: boo
 	// One straight, untruncated road for both the venue's tracksplit.pssg and
 	// the route's own track.jpk/routesplit.pssg/grids.pssg -- see the header
 	// comment for why the route can't come from a compiled stage here.
-	local_collision, ribbon, profile, build_msg, built := venue_tracksplit_collision(ed.install, venue_id, true, context.temp_allocator)
+	local_collision, ribbon, profile, build_msg, built := venue_tracksplit_collision(doc.install, venue_id, true, context.temp_allocator)
 	if !built { return fmt.tprintf("road: %s", build_msg), false }
 
 	floor := flat_venue_tiled_plane(FLAT_VENUE_FLOOR_LO, FLAT_VENUE_FLOOR_HI, 0, FLAT_VENUE_FLOOR_CELLS_X, FLAT_VENUE_FLOOR_CELLS_Z, context.temp_allocator)

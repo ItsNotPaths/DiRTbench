@@ -1,14 +1,16 @@
 package main
 
 // Every `--dirt3-*` / `--venue-*` / `--export` / `--pacenotes` /`--hectic`
-// command dirtbench answers with no window: one-shot converters and probes
-// that write into `out/` or into a route directory, never a GUI concern. Each
-// implementation lives beside the thing it tests (install.odin, venue.odin,
-// export.odin); what stays here is the flag dispatch itself, plus the handful
-// of probes with no other home.
+// command dirtbench answers with no window: one-shot converters that write into
+// `out/` or into a route directory, never a GUI concern. Each implementation
+// lives beside the thing it drives (install.odin, venue.odin, export.odin);
+// what stays here is the flag dispatch itself.
+//
+// The format probes are gone from this list. They live in the reference-only
+// files, which are not compiled: app/paths_place.odin, app/flat_venue.odin,
+// app/finland_bisect.odin and d3/scratch.odin. Each says how to reinstate it.
 
 import "core:fmt"
-import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
@@ -90,257 +92,9 @@ run_cli :: proc() -> (handled: bool) {
 	if len(args) == 2 && args[0] == "--venue-revert" {
 		os.exit(venue_revert_headless(args[1])?0:1)
 	}
-	// `--dirt3-dump <track.jpk|x.vcqtc> [-o out.obj]`: read a stock Dirt 3
-	// collision file and write an OBJ. Reads the game, writes nothing into it.
-	if len(args) >= 2 && args[0] == "--dirt3-dump" {
-		out := "out/dirt3-collision.obj"
-		if len(args) >= 4 && args[2] == "-o" {
-			out = args[3]
-		}
-		dir := filepath.dir(out)
-		if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err)
-			os.exit(1)
-		}
-		msg, ok := d3.Dump(args[1], out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-raise <track.jpk> <metres> [-o out.jpk]`: lift a stock collision
-	// archive. The flying-car test — proves the game loads our bytes.
-	if len(args) >= 3 && args[0] == "--dirt3-raise" {
-		dy, _ := strconv.parse_f64(args[2])
-		out := "out/track.jpk"
-		if len(args) >= 5 && args[3] == "-o" {
-			out = args[4]
-		}
-		dir := filepath.dir(out)
-		if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err)
-			os.exit(1)
-		}
-		msg, ok := d3.Raise(args[1], f32(dy), out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-ramp [-o track.jpk]`: writer milestone and first custom-geometry
-	// test. Produces a fresh collision archive; it does not touch the game.
-	if len(args) >= 1 && args[0] == "--dirt3-ramp" {
-		out := "out/dirt3-ramp.jpk"
-		if len(args) >= 3 && args[1] == "-o" { out = args[2] }
-		dir := filepath.dir(out)
-		if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err)
-			os.exit(1)
-		}
-		msg, ok := d3.Ramp(out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// Fresh, multi-chunk collision used to prove archive-level spatial lookup.
-	// It is straight in XZ for an unguided car and wobbles only vertically.
-	if len(args) >= 1 && args[0] == "--dirt3-partition-strip" {
-		out := "out/dirt3-partition-strip.jpk"
-		if len(args) >= 3 && args[1] == "-o" { out = args[2] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Partition_Strip(out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	// `--dirt3-flat <min-x> <max-x> <min-z> <max-z> <y> [-o track.jpk]`:
-	// emit a fresh rectangular collision plane without touching a game install.
-	if len(args) >= 1 && args[0] == "--dirt3-flat" {
-		if len(args)<6 {
-			fmt.println("usage: dirtbench --dirt3-flat <min-x> <max-x> <min-z> <max-z> <y> [-o track.jpk]")
-			os.exit(1)
-		}
-		values:[5]f64
-		for text,i in args[1:6] {
-			value,valid:=strconv.parse_f64(text)
-			if !valid || value!=value || math.abs(value)>3.4028234e38 {
-				fmt.printfln("invalid finite number %q",text); os.exit(1)
-			}
-			values[i]=value
-		}
-		out:="out/dirt3-flat.jpk"
-		if len(args)==8 && args[6]=="-o" { out=args[7] } else if len(args)!=6 {
-			fmt.println("usage: dirtbench --dirt3-flat <min-x> <max-x> <min-z> <max-z> <y> [-o track.jpk]")
-			os.exit(1)
-		}
-		if err:=os.make_directory_all(filepath.dir(out)); err!=nil && err!=os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v",err); os.exit(1)
-		}
-		msg,ok:=d3.Flat(f32(values[0]),f32(values[1]),f32(values[2]),f32(values[3]),f32(values[4]),out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	if len(args) >= 2 && args[0] == "--dirt3-partition-strip-on" {
-		out := "out/dirt3-partition-strip-on-stock.jpk"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Partition_Strip_On_Stock(args[1],out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	if len(args) >= 2 && args[0] == "--dirt3-ramp-on" {
-		out := "out/dirt3-ramp-on-stock.jpk"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Ramp_On_Stock(args[1], out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	if len(args) >= 2 && args[0] == "--dirt3-bridge-bump" {
-		out := "out/dirt3-bridge-bump.jpk"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Bridge_Bump(args[1], out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	// `--dirt3-routesplit <track.jpk> [-o routesplit.pssg]`: the visual surface
-	// that matches a collision archive, tiled the way the stock route files are.
-	if len(args) >= 2 && args[0] == "--dirt3-routesplit" {
-		out := "out/routesplit.pssg"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Routesplit(args[1], out)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	// `--dirt3-vis-allvisible <route_dir> <venue_dir> [--donor track.vis] [--ornaments skip|donor|random] [-o out.vis]`:
-	// build an all-visible track.vis for an existing stock route from its own
-	// files (tracksplit/routesplit tiles, trees, ornaments — see
-	// vis_allvisible.odin for what is and is not covered). `--donor` floors
-	// every tag's header count at that file's own counts, so a tag this
-	// codebase undersells cannot undersize the game's own allocation for it,
-	// and also pulls in `objects.ens`'s real-id static-vis entities.
-	// `--ornaments` picks how `ornaments.bin`'s own instances get a tag-2 id:
-	// `donor` (default, needs `--donor`), `skip` (leave them out), or
-	// `random` (an unclaimed id with no real source — see
-	// D3_Ornaments_Id_Mode). Never touches the route directly.
-	if len(args) >= 3 && args[0] == "--dirt3-vis-allvisible" {
-		out := "out/track.vis"
-		donor := ""
-		ornaments_mode := d3.D3_Ornaments_Id_Mode.Donor
-		for i := 3; i < len(args); i += 1 {
-			switch args[i] {
-			case "-o":
-				if i+1 >= len(args) { fmt.println("-o needs a path"); os.exit(1) }
-				i += 1; out = args[i]
-			case "--donor":
-				if i+1 >= len(args) { fmt.println("--donor needs a path"); os.exit(1) }
-				i += 1; donor = args[i]
-			case "--ornaments":
-				if i+1 >= len(args) { fmt.println("--ornaments needs skip|donor|random"); os.exit(1) }
-				i += 1
-				switch args[i] {
-				case "skip": ornaments_mode = .Skip
-				case "donor": ornaments_mode = .Donor
-				case "random": ornaments_mode = .Random
-				case: fmt.printfln("--ornaments: unknown mode %q", args[i]); os.exit(1)
-				}
-			case:
-				fmt.printfln("unknown flag %q", args[i]); os.exit(1)
-			}
-		}
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Vis_All_Visible(args[1], args[2], donor, out, ornaments_mode)
-		fmt.println(msg); os.exit(0 if ok else 1)
-	}
-	// `--dirt3-rewrite <stock track.jpk> [-o rewritten.jpk]`: rebuild every
-	// stock chunk through our encoder, preserving the spatial archive layout.
-	if len(args) >= 2 && args[0] == "--dirt3-rewrite" {
-		out := "out/dirt3-rewritten.jpk"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		if err := os.make_directory_all(filepath.dir(out)); err != nil && err != os.General_Error.Exist {
-			fmt.printfln("could not create the output directory: %v", err); os.exit(1)
-		}
-		msg, ok := d3.Rewrite(args[1], out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-michigan-treeplace <route dir> [-o outdir]`: exercise
-	// d3.d3_placement_relocate against a real stock route. Empties trees.bin
-	// and ornaments.bin, then places 5 maple trees (reference 12,
-	// "maple_large_01_a") across the road just ahead of Michigan Rally
-	// route_5's start line. Never writes into the route itself — dropping the
-	// result into the game is a manual step.
-	if len(args) >= 2 && args[0] == "--dirt3-michigan-treeplace" {
-		out := "out/michigan-treeplace"
-		if len(args) >= 4 && args[2] == "-o" { out = args[3] }
-		msg, ok := dirt3_michigan_treeplace_headless(args[1], out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// Raise every instance in a trees.bin/ornaments.bin while preserving its
-	// references and all non-position fields. Useful for separating the binary
-	// renderer placement from any independently loaded physics placement.
-	if len(args) >= 3 && args[0] == "--dirt3-placement-raise" {
-		dy, parsed := strconv.parse_f64(args[2])
-		if !parsed { fmt.println("metres must be a number"); os.exit(1) }
-		out := fmt.tprintf("%s.raised", args[1])
-		if len(args) >= 5 && args[3] == "-o" { out = args[4] }
-		msg, ok := dirt3_placement_raise_headless(args[1], f32(dy), out)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
 	if len(args) >= 2 && args[0] == "--venue-tracksplit" {
 		terrain := len(args) >= 3 && args[2] == "--terrain"
 		msg, ok := venue_tracksplit_headless(args[1], terrain)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-flat-venue <venue_id> [<route_id>]`: after `--export ...
-	// --terrain --roughness 0` has written the route's own track files,
-	// decorate it with a tree square, a haybale stack and a house stack, and
-	// rebuild track.vis so the trees draw.
-	if len(args) >= 2 && args[0] == "--dirt3-flat-venue" {
-		route := len(args) >= 3 ? args[2] : "route_0"
-		msg, ok := flat_venue_headless(args[1], route)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-bisect-1 <venue_id> [<route_id>]`: AI-finalise-hang bisection,
-	// stage 1 -- see finland_bisect.odin for what it does and why.
-	// `--dirt3-paths-place <venue_id> [<route_id>]`: the full custom-level
-	// debug emit -- route core, ground, tree plus, haybales, houses, stubs.
-	// See paths_place.odin.
-	if len(args) >= 2 && args[0] == "--dirt3-paths-place" {
-		route := len(args) >= 3 && args[2] != "--debug-out" ? args[2] : "route_0"
-		debug_out := (len(args) >= 3 && args[2] == "--debug-out") || (len(args) >= 4 && args[3] == "--debug-out")
-		target := Paths_Place_Target.Installed
-		if debug_out { target = .Debug_Out }
-		msg, ok := paths_place_headless(args[1], route, target)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	if len(args) >= 2 && args[0] == "--dirt3-bisect-1" {
-		route := len(args) >= 3 ? args[2] : "route_0"
-		msg, ok := finland_bisect_stage1_headless(args[1], route)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// `--dirt3-bisect-1-flat <venue_id> [<route_id>]`: same reset as stage 1,
-	// but track.jpk/routesplit.pssg become a flat tiled plane spanning the
-	// real route's own bounding box instead of a faithful shape rebuild.
-	if len(args) >= 2 && args[0] == "--dirt3-bisect-1-flat" {
-		route := len(args) >= 3 ? args[2] : "route_0"
-		msg, ok := finland_bisect_stage1_flat_headless(args[1], route)
-		fmt.println(msg)
-		os.exit(0 if ok else 1)
-	}
-	// Route-level replacement after the Finland writer bisection: a 90 m grid
-	// runway followed by a 100 m timed straight at the donor's real start.
-	if len(args) >= 2 && args[0] == "--dirt3-bisect-short" {
-		route := "route_0" if len(args) < 3 else args[2]
-		msg, ok := finland_bisect_short_headless(args[1], route)
 		fmt.println(msg)
 		os.exit(0 if ok else 1)
 	}
@@ -508,12 +262,13 @@ dirt3_placement_raise_headless :: proc(path: string, dy: f32, out_path: string) 
 // window, no GL — the generator is pure, so this is the way to eyeball the
 // placement numbers while tuning.
 hectic_headless :: proc(stage: string, s0, s1: f32) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	if msg, ok := load_stage(&sp, stage); !ok {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	if msg, ok := load_road_named(&doc, stage); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}
+	sp := doc.spline
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
 	geo.pace_debug_flips(ribbon, geo.PACE_DEFAULTS, s0, s1)
@@ -521,12 +276,13 @@ hectic_headless :: proc(stage: string, s0, s1: f32) {
 }
 
 pacenotes_headless :: proc(stage: string, reverse: bool) {
-	sp: geo.Spline
-	defer delete(sp.points)
-	if msg, ok := load_stage(&sp, stage); !ok {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	if msg, ok := load_road_named(&doc, stage); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}
+	sp := doc.spline
 	if reverse {
 		geo.reverse_spline(&sp)
 	}

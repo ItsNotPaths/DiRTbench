@@ -17,7 +17,7 @@ import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
-import rl "../gfx"
+import "../gfx"
 import "../geo"
 
 STAGE_FORMAT :: "dirtbench.stage"
@@ -150,36 +150,42 @@ sanitise_stage_name :: proc(raw: string, allocator := context.temp_allocator) ->
 
 // --- conversion -------------------------------------------------------------
 
-quat_to_array :: proc(q: rl.Quaternion) -> [4]f32 {
+quat_to_array :: proc(q: gfx.Quaternion) -> [4]f32 {
 	return {q.x, q.y, q.z, q.w}
 }
 
-quat_from_array :: proc(a: [4]f32) -> rl.Quaternion {
+quat_from_array :: proc(a: [4]f32) -> gfx.Quaternion {
 	q := quaternion(x = a[0], y = a[1], z = a[2], w = a[3])
 	// Guard against a hand-edited or truncated file: a zero/denormal quaternion
 	// would make every derived road frame NaN.
 	if abs(q) < 1e-6 {
-		return rl.Quaternion(1)
+		return gfx.Quaternion(1)
 	}
-	return rl.QuaternionNormalize(q)
+	return gfx.QuaternionNormalize(q)
 }
 
 // --- save / load ------------------------------------------------------------
 
 // Writes maps/<name>.json. Returns a message fit for the status line.
-save_stage :: proc(sp: geo.Spline, name: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
+save_road_named :: proc(doc: ^Venue_Doc, name: string) -> (msg: string, ok: bool) {
 	if _, dir_ok := ensure_maps_dir(); !dir_ok {
 		return fmt.tprintf("could not create %s", maps_dir()), false
 	}
-	if msg, ok = save_stage_to(sp, stage_path(name), veg, timing, terrain); !ok {
+	if msg, ok = save_road(doc, stage_path(name)); !ok {
 		return
 	}
-	return fmt.tprintf("saved %d points to maps/%s%s", len(sp.points), name, STAGE_EXT), true
+	return fmt.tprintf("saved %d points to maps/%s%s", len(doc.spline.points), name, STAGE_EXT), true
 }
 
-// The same document, at a path the caller chose. A venue's stages live under
-// `venues/<id>/stages/`, not in `maps/`.
-save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, timing:=TIMING_DEFAULTS, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
+// The whole road document, at a path the caller chose. A venue's road lives at
+// `venues/<id>/road.json`, not in `maps/`.
+//
+// road.json holds points, vegetation, timing and terrain, and Venue_Doc holds
+// the same four, so this writes all of them. There is deliberately no per-block
+// form: passing the blocks one at a time is how one gets silently dropped, and
+// that has already cost every compiled stage its checkpoints once.
+save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
+	sp, veg, timing, terrain := doc.spline, doc.veg, doc.timing, &doc.terrain
 	if len(sp.points) < 2 {
 		return "nothing to save: a stage needs at least 2 points", false
 	}
@@ -221,7 +227,7 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 		},
 		timing = {checkpoint_count=i32(timing.checkpoint_count),buffer_m=timing.buffer_m},
 	}
-	if terrain != nil {
+	{
 		sculpt := geo.terrain_sculpt(terrain)
 		controls := make([]Stage_Terrain_Control, len(sculpt), context.temp_allocator)
 		for c, i in sculpt {
@@ -247,16 +253,19 @@ save_stage_to :: proc(sp: geo.Spline, path: string, veg := geo.VEG_DEFAULTS, tim
 	return "", true
 }
 
-// Replaces `sp`'s points with the file's on success, and leaves them untouched
-// on any failure — a bad file must not destroy the spline in the editor. When
-// `veg` is non-nil it receives the stage's vegetation block, or VEG_DEFAULTS for a
-// pre-v4 file that predates it.
-load_stage :: proc(sp: ^geo.Spline, name: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
-	return load_stage_from(sp, stage_path(name), veg, timing, terrain)
+// Reads maps/<name>.json into the document.
+load_road_named :: proc(doc: ^Venue_Doc, name: string) -> (msg: string, ok: bool) {
+	return load_road(doc, stage_path(name))
 }
 
-// The same document, from a path the caller chose. See save_stage_to.
-load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = nil, timing:^Timing_Params=nil, terrain: ^geo.Terrain = nil) -> (msg: string, ok: bool) {
+// The whole road document, from a path the caller chose. See save_road.
+//
+// Replaces the document's spline on success and leaves it untouched on any
+// failure — a bad file must not destroy the road in the editor. A block the
+// file predates comes back at its defaults rather than at whatever the document
+// held, so a version 7 road always opens with the ground off.
+load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
+	sp, veg, timing, terrain := &doc.spline, &doc.veg, &doc.timing, &doc.terrain
 	data, rerr := os.read_entire_file(path, context.temp_allocator)
 	if rerr != nil {
 		return fmt.tprintf("could not read %s: %v", path, rerr), false
@@ -330,7 +339,7 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 		sp.points[len(sp.points)-1].weld = p.weld if stage.version >= 7 else -1
 	}
 
-	if veg != nil {
+	{
 		if stage.version < 4 {
 			veg^ = geo.VEG_DEFAULTS // predates the block; start it off, with sane knobs
 		} else {
@@ -344,12 +353,12 @@ load_stage_from :: proc(sp: ^geo.Spline, path: string, veg: ^geo.Veg_Params = ni
 			}
 		}
 	}
-	if timing!=nil {
+	{
 		if stage.version<5 { timing^=TIMING_DEFAULTS } else {
 			timing^={checkpoint_count=c.int(clamp(stage.timing.checkpoint_count,0,20)),buffer_m=clamp(stage.timing.buffer_m,f32(0),f32(500))}
 		}
 	}
-	if terrain != nil {
+	{
 		if stage.version < 8 {
 			geo.terrain_reset(terrain) // predates the block: no ground, sane sliders
 		} else {

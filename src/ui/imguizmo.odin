@@ -10,7 +10,7 @@ package ui
 // screen regardless of camera distance, which is ImGuizmo's native behaviour.
 
 import "core:c"
-import rl "../gfx"
+import "../gfx"
 
 // ImGuizmo lives in the same archive as ImGui. `foreign import` is file-scoped,
 // so this restates the import from imgui.odin rather than sharing it.
@@ -55,7 +55,7 @@ foreign imgui_lib {
 
 	// Draws the gizmo and, while dragged, writes the manipulated transform back
 	// into `xform`. All matrices are column-major float[16], i.e. exactly what
-	// rl.MatrixToFloatV produces. Returns true while the gizmo is being dragged.
+	// gfx.MatrixToFloatV produces. Returns true while the gizmo is being dragged.
 	// The trailing four arguments (delta, snap, bounds, bounds snap) are
 	// optional; pass nil.
 	@(link_name = "ImGuizmo_Manipulate")
@@ -76,27 +76,27 @@ foreign imgui_lib {
 // A column-major float[16], the layout ImGuizmo reads and writes.
 Gizmo_Matrix :: [16]f32
 
-// Inverse of rl.MatrixToFloatV. rl.Matrix is #row_major, so a raw [16]f32 in
+// Inverse of gfx.MatrixToFloatV. gfx.Matrix is #row_major, so a raw [16]f32 in
 // ImGuizmo's column-major order transmutes into its transpose.
-matrix_from_float_v :: proc(v: Gizmo_Matrix) -> rl.Matrix {
-	m := transmute(rl.Matrix)v
-	return rl.MatrixTranspose(m)
+matrix_from_float_v :: proc(v: Gizmo_Matrix) -> gfx.Matrix {
+	m := transmute(gfx.Matrix)v
+	return gfx.MatrixTranspose(m)
 }
 
-// The camera's view and projection matrices, matching what rl.BeginMode3D
+// The camera's view and projection matrices, matching what gfx.BeginMode3D
 // installs — the gizmo must project exactly as the scene does or its handles
 // will not sit on the object.
 //
 // The clip planes are read back from the backend rather than assumed, because
 // main.odin overrides them (SetClipPlanes); baking in a stock 0.01..1000 here
 // would leave the gizmo projecting differently from the scene.
-camera_matrices :: proc(cam: rl.Camera3D) -> (view, proj: Gizmo_Matrix) {
-	w := f32(rl.GetScreenWidth())
-	h := f32(rl.GetScreenHeight())
-	near := f32(rl.GetCullDistanceNear())
-	far := f32(rl.GetCullDistanceFar())
-	view = rl.MatrixToFloatV(rl.GetCameraMatrix(cam))
-	proj = rl.MatrixToFloatV(rl.MatrixPerspective(cam.fovy * rl.DEG2RAD, w / h, near, far))
+camera_matrices :: proc(cam: gfx.Camera3D) -> (view, proj: Gizmo_Matrix) {
+	w := f32(gfx.GetScreenWidth())
+	h := f32(gfx.GetScreenHeight())
+	near := f32(gfx.GetCullDistanceNear())
+	far := f32(gfx.GetCullDistanceFar())
+	view = gfx.MatrixToFloatV(gfx.GetCameraMatrix(cam))
+	proj = gfx.MatrixToFloatV(gfx.MatrixPerspective(cam.fovy * gfx.DEG2RAD, w / h, near, far))
 	return
 }
 
@@ -105,19 +105,19 @@ camera_matrices :: proc(cam: rl.Camera3D) -> (view, proj: Gizmo_Matrix) {
 // knows matrices, not road points. See the editor's gizmo.odin for the wrapper
 // that folds the result back into a spline control point.
 gizmo_manipulate_xform :: proc(
-	pos: rl.Vector3,
-	rot: rl.Quaternion,
-	cam: rl.Camera3D,
+	pos: gfx.Vector3,
+	rot: gfx.Quaternion,
+	cam: gfx.Camera3D,
 	op: Gizmo_Operation,
 	space: Gizmo_Space,
 ) -> (
-	out_pos: rl.Vector3,
-	out_rot: rl.Quaternion,
+	out_pos: gfx.Vector3,
+	out_rot: gfx.Quaternion,
 	used: bool,
 ) {
 	view, proj := camera_matrices(cam)
-	m := rl.MatrixTranslate(pos.x, pos.y, pos.z) * rl.QuaternionToMatrix(rot)
-	xform := rl.MatrixToFloatV(m)
+	m := gfx.MatrixTranslate(pos.x, pos.y, pos.z) * gfx.QuaternionToMatrix(rot)
+	xform := gfx.MatrixToFloatV(m)
 
 	out_pos, out_rot = pos, rot
 	used = gizmo_manipulate_raw(&view[0], &proj[0], op, space, &xform[0], nil, nil, nil, nil)
@@ -126,7 +126,7 @@ gizmo_manipulate_xform :: proc(
 		out_pos = {out[0, 3], out[1, 3], out[2, 3]}
 		// The rotation is read back off the 3x3 basis. Renormalise: the gizmo
 		// composes deltas every frame of a drag, so error accumulates.
-		out_rot = rl.QuaternionNormalize(rl.QuaternionFromMatrix(out))
+		out_rot = gfx.QuaternionNormalize(gfx.QuaternionFromMatrix(out))
 	}
 	return
 }
@@ -135,9 +135,9 @@ gizmo_manipulate_xform :: proc(
 // Only the new height is read back: a node has no rotation, and its XZ is
 // derived from the ribbon, not stored. Nothing here holds a pointer into the
 // lattice, so a resize between frames cannot dangle.
-gizmo_manipulate_height :: proc(pos: rl.Vector3, cam: rl.Camera3D) -> (y: f32, used: bool) {
+gizmo_manipulate_height :: proc(pos: gfx.Vector3, cam: gfx.Camera3D) -> (y: f32, used: bool) {
 	view, proj := camera_matrices(cam)
-	xform := rl.MatrixToFloatV(rl.MatrixTranslate(pos.x, pos.y, pos.z))
+	xform := gfx.MatrixToFloatV(gfx.MatrixTranslate(pos.x, pos.y, pos.z))
 	used = gizmo_manipulate_raw(
 		&view[0], &proj[0],
 		.Translate_Y, .World,
