@@ -1,9 +1,7 @@
-#+build ignore
 package main
 
-// Reference-only DiRT 3 probe. **Not compiled** — see the build directive
-// above. Kept for the method, not for use; the CLI no longer exposes it.
-// To run it again, drop the directive and restore its command in cli.odin.
+// Reference only — see refs/README.md. Not part of any package that builds.
+// To run it again, move it to src/app/ and restore its command in cli.odin.
 
 // Build route and venue files directly from the complete road.json. Reading
 // the whole road preserves the grid lead-in that compiled stages trim away.

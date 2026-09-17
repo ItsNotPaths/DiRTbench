@@ -1,4 +1,3 @@
-#+build ignore
 package main
 
 import "core:testing"

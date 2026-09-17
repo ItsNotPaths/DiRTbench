@@ -1,16 +1,13 @@
-#+build ignore
 package d3
 
-// Reference-only DiRT 3 probes. **Not compiled** — see the build directive above.
+// Reference only — see refs/README.md. Not part of any package that builds.
 //
 // These commands record the destructive experiments and format surgery used to
 // establish the production codecs. They are kept for the method, not for use:
-// nothing in the shipping tool may depend on them, and the CLI no longer
-// exposes them.
+// nothing in the shipping tool may depend on them.
 //
-// To run one again: drop the `#+build ignore`, add its alias back to api.odin,
-// and add its command back to app/cli.odin. Its siblings are
-// app/paths_place.odin, app/flat_venue.odin and app/finland_bisect.odin.
+// To run one again: move this file to src/d3/, add its alias back to
+// src/d3/api.odin, and restore its command in src/app/cli.odin.
 
 import "core:fmt"
 import "core:math"
