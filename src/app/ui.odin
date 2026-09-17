@@ -34,7 +34,7 @@ do_save :: proc(ed: ^Editor) {
 		if ok {
 			// The markers are the stages, and they live in venue.json. Saving the
 			// road without them would drop every start and finish line.
-			msg, ok = venue_routes_save(ed.doc.open_venue, ed.doc.routes[:])
+			msg, ok = venue_routes_save(ed.doc.open_venue, ed.doc.routes[:], ed.doc.next_route)
 		}
 		if ok {
 			msg = fmt.tprintf("saved %s", ed.doc.open_venue)
@@ -360,6 +360,7 @@ draw_inspector :: proc(ed: ^Editor) {
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2 || !geo.is_linear(ed.doc.spline))
 	if ui.im_button("Reverse") {
 		geo.reverse_spline(&ed.doc.spline)
+		routes_reverse(ed.doc.routes[:])
 		ed.sel = {}
 		mark_dirty(ed.doc)
 		set_status(&ed.status, "reversed driving direction", true)

@@ -29,7 +29,8 @@ marker_holds_its_road_through_an_insert_upstream :: proc(t: ^testing.T) {
 	testing.expect(t, placed, "the marker did not resolve where it was placed")
 
 	frame := geo.sample_edge(sp, 0, 1, 0.5)
-	testing.expect_value(t, geo.insert_point(&sp, frame.pos, frame), 1)
+	idx, _ := geo.insert_point(&sp, frame.pos, frame)
+	testing.expect_value(t, idx, 1)
 
 	at, still := geo.marker_resolve(sp, m)
 	testing.expect(t, still, "an insert upstream unhooked the marker")
@@ -65,7 +66,8 @@ an_edit_outside_a_stage_leaves_it_alone :: proc(t: ^testing.T) {
 
 	// Edge (0,1) is upstream of the start line, so the stage never touches it.
 	frame := geo.sample_edge(sp, 0, 1, 0.5)
-	testing.expect(t, geo.insert_point(&sp, frame.pos, frame) >= 0)
+	idx, _ := geo.insert_point(&sp, frame.pos, frame)
+	testing.expect(t, idx >= 0)
 
 	after, amsg, aok := geo.compile_stage(sp, start, finish, nil, context.allocator)
 	defer delete(after.points)
@@ -103,7 +105,11 @@ pins_hold_their_roads_through_an_insert :: proc(t: ^testing.T) {
 	}
 
 	frame := geo.sample_edge(sp, 1, 2, 0.5)
-	testing.expect(t, geo.insert_point(&sp, frame.pos, frame) >= 0)
+	idx, split := geo.insert_point(&sp, frame.pos, frame)
+	testing.expect(t, idx >= 0)
+	for &p in pins {
+		geo.marker_follow(&p, split)
+	}
 
 	after, amsg, aok := geo.compile_stage(sp, start, finish, pins, context.allocator)
 	testing.expect(t, aok, amsg)
@@ -133,19 +139,60 @@ a_removed_point_never_hands_its_id_on :: proc(t: ^testing.T) {
 	testing.expect(t, !geo.marker_valid(sp, m), "a new point took a retired id")
 }
 
-// The one case an id cannot answer: a split edge stops existing, so the
-// marker unhooks rather than guessing which half holds it.
+// An id cannot answer for an edge that was cut in two, so the split says which
+// half each marker landed on.
 @(test)
-an_insert_on_the_marker_edge_unhooks_it :: proc(t: ^testing.T) {
+a_split_edge_carries_its_markers :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
 	seed_spline(&sp)
-	m := geo.marker_of(sp, {from = 1, to = 2, t = 0.7})
-	testing.expect(t, geo.marker_valid(sp, m))
+	early := geo.marker_of(sp, {from = 1, to = 2, t = 0.2})
+	late := geo.marker_of(sp, {from = 1, to = 2, t = 0.7})
+	elsewhere := geo.marker_of(sp, {from = 2, to = 3, t = 0.5})
 
 	frame := geo.sample_edge(sp, 1, 2, 0.4)
-	testing.expect(t, geo.insert_point(&sp, frame.pos, frame) >= 0)
-	testing.expect(t, !geo.marker_valid(sp, m), "a split edge must not still answer")
+	idx, split := geo.insert_point(&sp, frame.pos, frame)
+	testing.expect(t, idx >= 0)
+	testing.expect_value(t, split.mid, sp.points[idx].id)
+	testing.expect(t, !geo.marker_valid(sp, early), "the cut edge must be gone")
+
+	before_elsewhere := elsewhere
+	geo.marker_follow(&early, split)
+	geo.marker_follow(&late, split)
+	geo.marker_follow(&elsewhere, split)
+
+	testing.expect_value(t, early.to, split.mid)
+	testing.expect_value(t, late.from, split.mid)
+	testing.expect_value(t, elsewhere, before_elsewhere)
+	testing.expect(t, geo.marker_valid(sp, early), "the early half lost its marker")
+	testing.expect(t, geo.marker_valid(sp, late), "the late half lost its marker")
+	// The cut fell at 0.4, so 0.2 is halfway along the first half.
+	testing.expect(t, abs(early.t - 0.5) < 0.001)
+	testing.expect(t, abs(late.t - 0.5) < 0.001)
+}
+
+// No rescale is exact: putting a point in changes the shape of the road between
+// the two it sits between. Worst drift over these cuts is 0.11 m on a 31 m
+// segment; the bound below is a regression catch, not the promise.
+@(test)
+a_split_barely_moves_a_marker :: proc(t: ^testing.T) {
+	worst: f32
+	for cut in ([]f32{0.2, 0.4, 0.5, 0.6, 0.8}) {
+		for along in ([]f32{0.1, 0.3, 0.5, 0.7, 0.9}) {
+			sp: geo.Spline
+			defer delete(sp.points)
+			seed_spline(&sp)
+			m := geo.marker_of(sp, {from = 1, to = 2, t = along})
+			was, _ := marker_pos(sp, m)
+			frame := geo.sample_edge(sp, 1, 2, cut)
+			_, split := geo.insert_point(&sp, frame.pos, frame)
+			geo.marker_follow(&m, split)
+			now, followed := marker_pos(sp, m)
+			testing.expect(t, followed, "the marker did not follow the split")
+			worst = max(worst, gfx.Vector3Distance(was, now))
+		}
+	}
+	testing.expectf(t, worst < 0.25, "a split moved a marker %.2f m", worst)
 }
 
 @(test)
@@ -154,7 +201,8 @@ road_file_round_trips_point_ids :: proc(t: ^testing.T) {
 	defer doc_delete(&doc)
 	seed_spline(&doc.spline)
 	frame := geo.sample_edge(doc.spline, 0, 1, 0.5)
-	testing.expect(t, geo.insert_point(&doc.spline, frame.pos, frame) >= 0)
+	idx, _ := geo.insert_point(&doc.spline, frame.pos, frame)
+	testing.expect(t, idx >= 0)
 	m := geo.marker_of(doc.spline, {from = 3, to = 4, t = 0.5})
 
 	path := "/tmp/claude-1000/dirtbench-marker-id-roundtrip.json"
@@ -270,4 +318,68 @@ a_road_with_a_negative_id_is_refused :: proc(t: ^testing.T) {
 	msg, ok := load_road(&doc, path)
 	testing.expect(t, !ok, "a negative point id must not load")
 	testing.expect(t, msg != "", "a refused road gave no reason")
+}
+
+// Reverse rebuilds every parent edge the other way round, so a marker that is
+// not turned with it names nothing. The road is the same road; only the
+// direction it was drawn in changed.
+@(test)
+reverse_turns_the_markers_with_the_road :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+	testing.expect(t, geo.is_linear(sp), "Reverse is only offered on a linear road")
+	m := geo.marker_of(sp, {from = 2, to = 3, t = 0.25})
+	was, _ := marker_pos(sp, m)
+
+	geo.reverse_spline(&sp)
+	testing.expect(t, !geo.marker_valid(sp, m), "an unturned marker must not still resolve")
+
+	m = geo.marker_reversed(m)
+	testing.expect(t, geo.marker_valid(sp, m), "a turned marker lost its road")
+	now, ok := marker_pos(sp, m)
+	testing.expect(t, ok)
+	testing.expect(
+		t, gfx.Vector3Distance(was, now) < 0.01,
+		"the turned marker is not on the same spot of road",
+	)
+}
+
+// The stage itself is unchanged: the road is undirected, so turning the graph
+// round and turning its markers with it compiles the same run.
+@(test)
+reverse_compiles_the_same_stage :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
+	routes_add(&doc.routes, &doc.next_route)
+	r := &doc.routes[0]
+	r.start = geo.marker_of(doc.spline, {from = 0, to = 1, t = 0.4})
+	r.finish = geo.marker_of(doc.spline, {from = 2, to = 3, t = 0.6})
+	append(&r.pins, geo.marker_of(doc.spline, {from = 1, to = 2, t = 0.5}))
+
+	before, bmsg, bok := geo.compile_stage(doc.spline, r.start, r.finish, r.pins[:], context.allocator)
+	defer delete(before.points)
+	testing.expect(t, bok, bmsg)
+	if !bok {
+		return
+	}
+
+	geo.reverse_spline(&doc.spline)
+	routes_reverse(doc.routes[:])
+
+	after, amsg, aok := geo.compile_stage(doc.spline, r.start, r.finish, r.pins[:], context.allocator)
+	testing.expect(t, aok, amsg)
+	if !aok {
+		return
+	}
+	defer delete(after.points)
+	testing.expect_value(t, len(after.points), len(before.points))
+	for p, i in after.points {
+		testing.expect(
+			t,
+			gfx.Vector3Distance(p.xform.translation, before.points[i].xform.translation) < 0.01,
+			"reversing the road moved the stage",
+		)
+	}
 }

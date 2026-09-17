@@ -539,12 +539,20 @@ handle_radius :: proc(width: f32) -> f32 {
 // no child to get in front of: the point goes on the end and takes the weld
 // over, so `from` -> new is a parent edge and new -> `to` is the weld that
 // still closes the loop.
-insert_point :: proc(sp: ^Spline, at: gfx.Vector3, frame: Cross_Section) -> int {
+insert_point :: proc(
+	sp: ^Spline, at: gfx.Vector3, frame: Cross_Section,
+) -> (
+	idx: int, split: Edge_Split,
+) {
+	split.mid = -1
 	from, to := frame.e_from, frame.e_to
 	n := len(sp.points)
 	if from < 0 || from >= n || to < 0 || to >= n || from == to {
-		return -1
+		return -1, split
 	}
+	// Fill around `mid`, never over it: a whole-struct literal here would put
+	// the "nothing was cut" -1 back to 0, which is a live point id.
+	split.a, split.b, split.t = sp.points[from].id, sp.points[to].id, frame.t
 	src := sp.points[from]
 	np := make_point(
 		at, quat_from_frame(frame.fwd, frame.up), frame.width,
@@ -556,17 +564,19 @@ insert_point :: proc(sp: ^Spline, at: gfx.Vector3, frame: Cross_Section) -> int 
 		frame.roughness, from,
 	)
 	if sp.points[to].parent != from {
-		idx := spline_push(sp, np)
-		sp.points[idx].weld = to
+		at_idx := spline_push(sp, np)
+		sp.points[at_idx].weld = to
 		sp.points[from].weld = -1
-		return idx
+		split.mid = sp.points[at_idx].id
+		return at_idx, split
 	}
 	spline_inject(sp, to, np)
 	// Every index the insertion moved, then the one edge it broke: the old
 	// child now hangs off the new point.
 	shift_links(sp, to, to)
 	sp.points[to + 1].parent = to
-	return to
+	split.mid = sp.points[to].id
+	return to, split
 }
 
 // Extrude the point at `idx`: duplicate it and return the index of the copy, which
@@ -724,6 +734,47 @@ marker_of :: proc(sp: Spline, e: Edge_At) -> Road_Marker {
 		return {from = -1, to = -1}
 	}
 	return {from = sp.points[e.from].id, to = sp.points[e.to].id, t = e.t}
+}
+
+// One edge cut in two by an insert: `a` -> `mid` -> `b`, by point id, with `t`
+// saying where along the old edge the cut fell. `mid` is -1 when nothing was
+// cut. Anything holding a marker into the graph has to be told this, because
+// the edge the marker named has stopped existing.
+Edge_Split :: struct {
+	a, mid, b: int,
+	t:         f32,
+}
+
+// Carry a marker across a split: it moves onto whichever half now holds it,
+// with `t` rescaled to that half. A marker on any other edge is left alone.
+//
+// The road between `a` and `b` genuinely moves when a point goes in, so no
+// rescale is exact. This one is in curve parameter; `a_split_barely_moves_a_marker`
+// measures what that costs.
+marker_follow :: proc(m: ^Road_Marker, s: Edge_Split) {
+	if s.mid < 0 || s.t <= 0 || s.t >= 1 {
+		return
+	}
+	if m.from != s.a || m.to != s.b {
+		return
+	}
+	if m.t < s.t {
+		m.to = s.mid
+		m.t = m.t / s.t
+	} else {
+		m.from = s.mid
+		m.t = (m.t - s.t) / (1 - s.t)
+	}
+}
+
+// The same spot on the road after reverse_spline. Every edge is drawn the other
+// way round now, so a marker's ends swap and `t` runs from the other one. Exact,
+// because the ids travel with their points through the reversal.
+marker_reversed :: proc(m: Road_Marker) -> Road_Marker {
+	if m.from < 0 || m.to < 0 {
+		return m
+	}
+	return {from = m.to, to = m.from, t = 1 - m.t}
 }
 
 // The marker's edge as it stands now, or ok=false when that edge is gone —

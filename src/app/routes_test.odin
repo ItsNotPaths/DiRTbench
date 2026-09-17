@@ -1,37 +1,65 @@
 package main
 
 import "core:encoding/json"
+import "core:os"
 import "core:testing"
 import "../geo"
 
 // The stage list belongs to the document. The project manager edits it there
 // when a window has the venue open, and on a temp copy of venue.json when not.
 @(private = "file")
-seed_routes :: proc(routes: ^[dynamic]Venue_Route, n: int) {
+seed_routes :: proc(doc: ^Venue_Doc, n: int) {
 	for _ in 0 ..< n {
-		routes_add(routes)
+		routes_add(&doc.routes, &doc.next_route)
 	}
 }
 
 // A deployed stage has a `track_model` row whose `route_string` is its id and a
-// localization key built from it, so an id must never move to another stage.
-// The gap a removal leaves is the next id handed out, and nothing else shifts.
+// localization key built from it, so an id must never move to another stage —
+// and a retired id must never come back, or the new stage inherits the old
+// one's deployed directory, its database row and any window still open on it.
 @(test)
-route_ids_fill_gaps_and_never_renumber :: proc(t: ^testing.T) {
+route_ids_count_up_and_never_come_back :: proc(t: ^testing.T) {
 	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&doc.routes, 3)
+	seed_routes(&doc, 3)
 	testing.expect_value(t, doc.routes[0].id, "route_0")
 	testing.expect_value(t, doc.routes[1].id, "route_1")
 	testing.expect_value(t, doc.routes[2].id, "route_2")
 
+	// A gap in the middle stays a gap; nothing below it shifts.
 	routes_remove(&doc.routes, 1)
 	testing.expect_value(t, len(doc.routes), 2)
 	testing.expect_value(t, doc.routes[0].id, "route_0")
 	testing.expect_value(t, doc.routes[1].id, "route_2")
+	routes_add(&doc.routes, &doc.next_route)
+	testing.expect_value(t, doc.routes[2].id, "route_3")
 
-	routes_add(&doc.routes)
-	testing.expect_value(t, doc.routes[2].id, "route_1")
+	// Nor does removing the highest hand its id back.
+	routes_remove(&doc.routes, 2)
+	routes_add(&doc.routes, &doc.next_route)
+	testing.expect_value(t, doc.routes[2].id, "route_4")
+
+	// Not even when the list is emptied.
+	for len(doc.routes) > 0 {
+		routes_remove(&doc.routes, 0)
+	}
+	routes_add(&doc.routes, &doc.next_route)
+	testing.expect_value(t, doc.routes[0].id, "route_5")
+}
+
+// A venue written before v6 carries no counter, so it is seeded past every id
+// already in use rather than restarting at zero.
+@(test)
+a_venue_without_a_counter_starts_past_its_stages :: proc(t: ^testing.T) {
+	p := Venue{routes = []Venue_Route{{id = "route_0"}, {id = "route_4"}, {id = "skipfe"}}}
+	venue_route_counter_floor(&p)
+	testing.expect_value(t, p.next_route, 5)
+
+	// And it never drags a live counter backwards.
+	p.next_route = 9
+	venue_route_counter_floor(&p)
+	testing.expect_value(t, p.next_route, 9)
 }
 
 // Every stage-list edit is addressed by id, because the row the button sits in
@@ -40,7 +68,7 @@ route_ids_fill_gaps_and_never_renumber :: proc(t: ^testing.T) {
 stage_edits_land_on_the_stage_they_name :: proc(t: ^testing.T) {
 	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&doc.routes, 3)
+	seed_routes(&doc, 3)
 
 	route_rename(&doc.routes, route_index(doc.routes[:], "route_1"), "MOOSE LOOP")
 	testing.expect_value(t, doc.routes[1].name, "MOOSE LOOP")
@@ -61,7 +89,7 @@ stage_edits_land_on_the_stage_they_name :: proc(t: ^testing.T) {
 a_stage_needs_both_lines_to_read_as_complete :: proc(t: ^testing.T) {
 	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&doc.routes, 1)
+	seed_routes(&doc, 1)
 	testing.expect(t, !route_has_markers(doc.routes[0]), "a fresh stage reads as complete")
 
 	doc.routes[0].start = geo.Road_Marker{from = 1, to = 2, t = 0.25}
@@ -77,7 +105,7 @@ a_stage_needs_both_lines_to_read_as_complete :: proc(t: ^testing.T) {
 venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&doc.routes, 2)
+	seed_routes(&doc, 2)
 	doc.routes[0].start = {from = 1, to = 2, t = 0.25}
 	doc.routes[0].finish = {from = 7, to = 8, t = 0.5}
 	doc.routes[1].start = {from = 3, to = 4, t = 0.125}
@@ -109,4 +137,26 @@ venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 			testing.expect_value(t, pin, doc.routes[i].pins[j])
 		}
 	}
+}
+
+// venue_load keeps the version the file carried, and every save but the first
+// is a re-read plus an edit. A venue created at v3 must not go on calling
+// itself v3 once this build has written ids into it.
+@(test)
+a_saved_venue_claims_this_builds_version :: proc(t: ^testing.T) {
+	path := "/tmp/claude-1000/dirtbench-venue-version.json"
+	defer os.remove(path)
+	p := Venue{format = VENUE_FORMAT, version = 3, id = "vtest", next_route = 2}
+	msg, ok := venue_write(p, path)
+	testing.expect(t, ok, msg)
+	if !ok {
+		return
+	}
+
+	data, rerr := os.read_entire_file(path, context.temp_allocator)
+	testing.expect(t, rerr == nil)
+	back: Venue
+	testing.expect(t, json.unmarshal(data, &back, json.DEFAULT_SPECIFICATION, context.temp_allocator) == nil)
+	testing.expect_value(t, back.version, VENUE_VERSION)
+	testing.expect_value(t, back.next_route, 2)
 }

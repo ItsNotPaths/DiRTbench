@@ -410,8 +410,8 @@ stage_list_copy :: proc(p: ^Venue) -> [dynamic]Venue_Route {
 
 // Persist an edit made on a temp copy, and re-read the screen from disk.
 @(private = "file")
-stage_list_write :: proc(app: ^App, venue_id: string, routes: []Venue_Route) {
-	msg, ok := venue_routes_save(venue_id, routes)
+stage_list_write :: proc(app: ^App, venue_id: string, routes: []Venue_Route, next_route: int) {
+	msg, ok := venue_routes_save(venue_id, routes, next_route)
 	if ok {
 		msg = fmt.tprintf("%s now has %d stages", venue_id, len(routes))
 	}
@@ -422,13 +422,14 @@ stage_list_write :: proc(app: ^App, venue_id: string, routes: []Venue_Route) {
 @(private = "file")
 stage_add :: proc(app: ^App, p: ^Venue) {
 	if doc := venue_doc_for(app, p.id); doc != nil {
-		routes_add(&doc.routes)
+		routes_add(&doc.routes, &doc.next_route)
 		set_status(&app.status, fmt.tprintf("added a stage to %s, not saved yet", p.id), true)
 		return
 	}
 	routes := stage_list_copy(p)
-	routes_add(&routes, context.temp_allocator)
-	stage_list_write(app, p.id, routes[:])
+	next := p.next_route
+	routes_add(&routes, &next, context.temp_allocator)
+	stage_list_write(app, p.id, routes[:], next)
 }
 
 @(private = "file")
@@ -440,7 +441,7 @@ stage_remove :: proc(app: ^App, p: ^Venue, route_id: string) {
 	}
 	routes := stage_list_copy(p)
 	routes_remove(&routes, route_index(routes[:], route_id), context.temp_allocator)
-	stage_list_write(app, p.id, routes[:])
+	stage_list_write(app, p.id, routes[:], p.next_route)
 }
 
 @(private = "file")
@@ -452,7 +453,7 @@ stage_rename :: proc(app: ^App, p: ^Venue, route_id, name: string) {
 	}
 	routes := stage_list_copy(p)
 	route_rename(&routes, route_index(routes[:], route_id), name, context.temp_allocator)
-	stage_list_write(app, p.id, routes[:])
+	stage_list_write(app, p.id, routes[:], p.next_route)
 }
 
 // One arrow drops the stage list open. One venue's list at a time: the manager
@@ -652,6 +653,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	}
 	routes_free(&doc.routes)
 	doc.routes = venue_routes(p^)
+	doc.next_route = p.next_route
 	if migrating {
 		if save_msg, saved := save_road(doc, venue_road_path(p.id)); !saved {
 			return fmt.tprintf("opened old road but could not migrate it: %s", save_msg), false

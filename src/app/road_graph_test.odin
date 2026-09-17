@@ -99,7 +99,7 @@ insert_on_a_welded_stretch_stays_on_that_stretch :: proc(t: ^testing.T) {
 	testing.expect(t, found, "the ribbon has no sample on the weld edge"); if !found { return }
 
 	before := len(sp.points)
-	idx := geo.insert_point(&sp, frame.pos, frame)
+	idx, _ := geo.insert_point(&sp, frame.pos, frame)
 	testing.expect(t, idx >= 0, "insert refused a welded stretch"); if idx < 0 { return }
 	testing.expect_value(t, len(sp.points), before + 1)
 	testing.expect(t, gfx.Vector3Distance(sp.points[idx].xform.translation, frame.pos) < 0.01,
@@ -128,7 +128,7 @@ weld_indices_survive_every_graph_edit :: proc(t: ^testing.T) {
 
 	// Inserting ahead of the weld target pushes every later index up by one.
 	frame := geo.sample_edge(sp, 0, 1, 0.5)
-	inserted := geo.insert_point(&sp, frame.pos, frame)
+	inserted, _ := geo.insert_point(&sp, frame.pos, frame)
 	testing.expect_value(t, inserted, 1)
 	testing.expect_value(t, sp.points[tail + 1].weld, 2)
 	testing.expect_value(t, sp.points[inserted].weld, -1)

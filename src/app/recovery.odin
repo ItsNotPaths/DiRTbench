@@ -161,6 +161,8 @@ recovery_write_doc :: proc(root: string, doc: ^Venue_Doc) -> (msg: string, ok: b
 		return load_msg, false
 	}
 	p.routes = doc.routes[:]
+	p.next_route = doc.next_route
+	venue_route_counter_floor(&p)
 	return venue_write(p, paths[1])
 }
 

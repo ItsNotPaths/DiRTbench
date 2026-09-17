@@ -36,6 +36,8 @@ Venue_Doc :: struct {
 	// the road is saved. The project manager edits it here while a window has
 	// the venue open; a stage window's `route_sel` indexes it.
 	routes:        [dynamic]Venue_Route,
+	// Travels with `routes`: the list alone cannot say which ids are retired.
+	next_route:    int,
 	spline:        geo.Spline,
 	// The one scan of the game install, borrowed. The app owns it and every
 	// document reads the same one, so a rescan in any window is seen by all of

@@ -43,7 +43,9 @@ VENUE_FORMAT :: "dirtbench.venue"
 // geo.Road_Marker). road.json v9 migrates as id = array index, so a v4 file
 // reads unchanged, but an older build reading ids as positions would put
 // every line on the wrong road after one insert.
-VENUE_VERSION :: 5
+// v6 carries the stage-id counter. Without it the id came from the lowest free
+// `route_N`, so removing a stage handed its id to the next one added.
+VENUE_VERSION :: 6
 VENUE_FILE :: "venue.json"
 VENUE_ROAD_FILE :: "road.json"
 VENUE_STAGES_DIR :: "stages"
@@ -110,6 +112,9 @@ Venue :: struct {
 	// and migrated into `routes`; nothing writes them any more.
 	stages:     []string,
 	routes:     []Venue_Route,
+	// Names the next stage. Only ever counts up, so an id is never reused.
+	// Absent before v6, where it is seeded past every id already in use.
+	next_route: int,
 }
 
 // --- paths -------------------------------------------------------------------
@@ -263,7 +268,18 @@ venue_load :: proc(
 		return Venue{}, fmt.tprintf("project id %q does not match directory %q", bad_id, id), false
 	}
 	venue_migrate_routes(&p, allocator)
+	venue_route_counter_floor(&p)
 	return p, "", true
+}
+
+// The counter may never sit below an id in use, or it hands that id out twice.
+// A file written before v6 carries no counter at all.
+venue_route_counter_floor :: proc(p: ^Venue) {
+	for r in p.routes {
+		if n := d3.route_index(r.id); n != max(int) && n + 1 > p.next_route {
+			p.next_route = n + 1
+		}
+	}
 }
 
 // A v1 or v2 project lists its stages as bare names. Carry them into `routes`
@@ -332,7 +348,13 @@ venue_save :: proc(p: Venue) -> (msg: string, ok: bool) {
 // of these beside its road, because a venue's stages live in venue.json and a
 // road saved without them is a road with no start or finish lines.
 venue_write :: proc(p: Venue, path: string) -> (msg: string, ok: bool) {
-	data, merr := json.marshal(p, {pretty = true, use_spaces = true}, context.temp_allocator)
+	out := p
+	// What this build writes is this build's format. venue_load keeps the
+	// version the file came with, and most writes are a re-read plus an edit,
+	// so without this a venue keeps claiming the version it was created at
+	// while holding fields no build of that age can read.
+	out.version = VENUE_VERSION
+	data, merr := json.marshal(out, {pretty = true, use_spaces = true}, context.temp_allocator)
 	if merr != nil {
 		return fmt.tprintf("could not encode the project: %v", merr), false
 	}
@@ -486,12 +508,16 @@ export_profile :: proc(
 // document alone. The editor holds the routes while a road is open; this is how
 // they get home. Re-reading first is what keeps an edit made elsewhere in the
 // document — a rename, a base change — from being overwritten by a marker save.
-venue_routes_save :: proc(id: string, routes: []Venue_Route) -> (msg: string, ok: bool) {
+venue_routes_save :: proc(
+	id: string, routes: []Venue_Route, next_route: int,
+) -> (msg: string, ok: bool) {
 	p, load_msg, loaded := venue_load(id, context.temp_allocator)
 	if !loaded {
 		return load_msg, false
 	}
 	p.routes = routes
+	p.next_route = next_route
+	venue_route_counter_floor(&p)
 	return venue_save(p)
 }
 
@@ -523,10 +549,10 @@ venue_compile_route :: proc(
 }
 
 // Append a stage: a name, and no markers yet. The id is the directory the game
-// reads, so it comes from route_id_free and is never one another stage holds.
-routes_add :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocator) {
+// reads, so it comes off the venue's counter and is never one another stage holds.
+routes_add :: proc(routes: ^[dynamic]Venue_Route, next: ^int, allocator := context.allocator) {
 	append(routes, Venue_Route{
-		id     = route_id_free(routes[:], allocator),
+		id     = route_id_next(next, allocator),
 		name   = strings.clone(fmt.tprintf("STAGE %d", len(routes) + 1), allocator),
 		start  = {from = -1, to = -1},
 		finish = {from = -1, to = -1},
@@ -542,6 +568,31 @@ routes_remove :: proc(routes: ^[dynamic]Venue_Route, i: int, allocator := contex
 	delete(routes[i].name, allocator)
 	delete(routes[i].pins)
 	ordered_remove(routes, i)
+}
+
+// An insert cuts one edge in two, so every line and pin standing on that edge
+// moves onto the half that now holds it.
+routes_follow_split :: proc(routes: []Venue_Route, split: geo.Edge_Split) {
+	for &r in routes {
+		geo.marker_follow(&r.start, split)
+		geo.marker_follow(&r.finish, split)
+		for &p in r.pins {
+			geo.marker_follow(&p, split)
+		}
+	}
+}
+
+// Reverse turns every edge round, so every line and pin has to turn with it or
+// none of them names a road any more. Pin order stays: a stage still runs from
+// its start to its finish, and the compile is undirected.
+routes_reverse :: proc(routes: []Venue_Route) {
+	for &r in routes {
+		r.start = geo.marker_reversed(r.start)
+		r.finish = geo.marker_reversed(r.finish)
+		for &p in r.pins {
+			p = geo.marker_reversed(p)
+		}
+	}
 }
 
 // The menu text only. An id is never renamed.
@@ -582,26 +633,18 @@ routes_free :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocato
 	routes^ = nil
 }
 
-// The lowest `route_<n>` the venue is not already using.
+// The next `route_<n>`, counting up and never back.
 //
-// **Never renumber an existing route.** A deployed venue has a `track_model`
-// row whose `route_string` is this id and a localization key built from it, so
-// renaming one orphans both. Removing route_1 of three leaves route_0 and
-// route_2, and the next stage added takes route_1 back.
-route_id_free :: proc(routes: []Venue_Route, allocator := context.temp_allocator) -> string {
-	for n := 0; ; n += 1 {
-		id := fmt.tprintf("route_%d", n)
-		taken := false
-		for r in routes {
-			if r.id == id {
-				taken = true
-				break
-			}
-		}
-		if !taken {
-			return strings.clone(id, allocator)
-		}
-	}
+// **Never renumber an existing route, and never reuse a retired id.** A
+// deployed venue has a `track_model` row whose `route_string` is this id and a
+// localization key built from it, so renaming one orphans both — and handing a
+// removed stage's id to a new one makes the new stage inherit the old one's
+// deployed directory and database row. An open stage window holds the same id.
+// Nothing counts routes, so the number may climb as far as it likes.
+route_id_next :: proc(next: ^int, allocator := context.temp_allocator) -> string {
+	id := strings.clone(fmt.tprintf("route_%d", next^), allocator)
+	next^ += 1
+	return id
 }
 
 // Compile every stage of a venue out of its one road graph. This is what makes

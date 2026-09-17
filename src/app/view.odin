@@ -576,7 +576,9 @@ edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys:
 			ed.sel = {kind = .Point, idx = target}
 		case:
 			if at, frame, ok := pick_ribbon(ed.doc.ribbon, ray); ok {
-				ed.sel = {kind = .Point, idx = geo.insert_point(&ed.doc.spline, at, frame)}
+				idx, split := geo.insert_point(&ed.doc.spline, at, frame)
+				routes_follow_split(ed.doc.routes[:], split)
+				ed.sel = {kind = .Point, idx = idx}
 				mark_dirty(ed.doc)
 			} else if g, gok := ray_ground(ray); gok {
 				ed.sel = {kind = .Point, idx = grow_road(&ed.doc.spline, sel, g)}
