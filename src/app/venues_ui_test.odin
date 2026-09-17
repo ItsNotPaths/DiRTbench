@@ -1,6 +1,8 @@
 package main
 
 import "core:testing"
+import "../geo"
+import "../gfx"
 
 // One road-network window per venue, and one window per stage. A second open
 // of either raises the window that is already there: two views of the same road
@@ -84,6 +86,43 @@ the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 	testing.expect_value(t, ed.stage.state, Stage_Compile.Failed)
 	testing.expect(t, len(ed.stage.ribbon) == 0, "a failed compile left a ribbon to draw")
 	testing.expect(t, buf_text(ed.stage.msg[:]) != "", "a failed compile gave no reason")
+}
+
+// The notes are a second cache on top of the compiled stage, keyed on the pace
+// knobs rather than on the stage key: the knobs change no geometry, so a stage
+// that has not moved still needs recalling when one of them does.
+@(test)
+stage_notes_follow_the_ribbon_and_the_pace_knobs :: proc(t: ^testing.T) {
+	doc := Venue_Doc{topo = 8, pace = geo.PACE_DEFAULTS}
+	defer delete(doc.spline.points)
+	defer delete(doc.routes)
+	seed_spline(&doc.spline)
+	// A second child of point 1: the venue road forks, which is the case that
+	// used to produce no notes at all. The stage itself is one chain.
+	spur := geo.make_point({-40, 3, 60}, gfx.Quaternion(1), geo.DEFAULT_WIDTH, parent = 1)
+	append(&doc.spline.points, spur)
+	testing.expect(t, !geo.is_linear(doc.spline), "the fork did not take")
+	append(&doc.routes, Venue_Route{id = "route_0", start = {0, 1, 0.5}, finish = {2, 3, 0.5}})
+	ed := Editor{doc = &doc, kind = .Stage, stage_id = "route_0", route_sel = 0}
+	defer stage_cache_clear(&ed)
+
+	stage_cache_refresh(&ed)
+	stage_notes_refresh(&ed)
+	testing.expect_value(t, ed.stage.notes_pace, doc.pace)
+	testing.expect(t, len(ed.stage.notes) > 0, "a compiled stage was called in silence")
+
+	// A knob moves: the notes are stale even though the road never moved.
+	doc.pace.r_on = 90
+	stage_cache_refresh(&ed)
+	stage_notes_refresh(&ed)
+	testing.expect_value(t, ed.stage.notes_pace, doc.pace)
+
+	// A stage that will not compile has nothing to call.
+	doc.routes[0].finish = {0, 1, 0.1}
+	stage_cache_refresh(&ed)
+	stage_notes_refresh(&ed)
+	testing.expect_value(t, ed.stage.state, Stage_Compile.Failed)
+	testing.expect(t, len(ed.stage.notes) == 0, "a failed compile left notes to call")
 }
 
 // A document outlives every window but the last. Closing one of two windows on

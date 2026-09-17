@@ -295,6 +295,7 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 	// venue's, so a change here moves every stage's gates.
 	ui.im_text_colored(DIM_COL, "gates below are venue-wide")
 	draw_timing_section(ed)
+	draw_pace_section(ed)
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("point at the road and press S for the start line")
@@ -351,7 +352,6 @@ draw_inspector :: proc(ed: ^Editor) {
 
 	draw_terrain_section(ed)
 	draw_point_section(ed)
-	draw_pace_section(ed)
 	draw_veg_section(ed)
 
 	ui.igSeparatorText("Controls")
@@ -504,8 +504,10 @@ draw_point_section :: proc(ed: ^Editor) {
 	}
 }
 
-// Pace notes derived from the spline. The sliders are the placement "numbers";
-// changing any dirties the road cache, which recomputes the notes.
+// Pace notes on the compiled stage, and the ride that calls them. A stage
+// window's panel: the notes come from this window's ribbon, and the knobs are
+// the venue's — they say how a corner is called, not which stage calls it.
+// Nothing here marks geometry dirty; stage_notes_refresh compares the knobs.
 draw_pace_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Pace notes", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
@@ -515,19 +517,14 @@ draw_pace_section :: proc(ed: ^Editor) {
 	// gentle bends get a number.
 	if ui.igSliderFloat("call radius", &pp.r_on, 40, 400, "%.0f m", ui.IM_SLIDER_NONE) {
 		pp.r_off = max(pp.r_off, pp.r_on + 20)
-		mark_dirty(ed.doc)
 	}
 	// How far ahead of the feature the call fires.
-	if ui.igSliderFloat("lead", &pp.lead_m, 0, 120, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
+	ui.igSliderFloat("lead", &pp.lead_m, 0, 120, "%.0f m", ui.IM_SLIDER_NONE)
 	// Straight length that turns "into" into a spoken distance.
-	if ui.igSliderFloat("into gap", &pp.into_m, 4, 120, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
+	ui.igSliderFloat("into gap", &pp.into_m, 4, 120, "%.0f m", ui.IM_SLIDER_NONE)
 	ui.igSpacing()
 	pace_ready := len(ed.app.clips) > 0
-	ui.igBeginDisabled(!pace_ready || len(ed.doc.notes) == 0)
+	ui.igBeginDisabled(!pace_ready || len(ed.stage.notes) == 0)
 	if ui.im_button(ed.previewing ? "Stop ride" : "Preview ride") {
 		preview_toggle(ed)
 	}
@@ -545,21 +542,21 @@ draw_pace_section :: proc(ed: ^Editor) {
 	if !pace_ready {
 		ui.im_text("(no clips found in pacenotes/)")
 	} else if ed.previewing {
-		nextm := ed.preview_next < len(ed.doc.notes) ? ed.doc.notes[ed.preview_next].station - ed.preview_s : 0
+		nextm := ed.preview_next < len(ed.stage.notes) ? ed.stage.notes[ed.preview_next].station - ed.preview_s : 0
 		ui.im_text(fmt.ctprintf("riding %.0f m  (next call in %.0f m)", ed.preview_s, max(0, nextm)))
 	} else {
 		ui.im_text(fmt.ctprintf("%d clips loaded", len(ed.app.clips)))
 	}
 	ui.igSpacing()
 
-	ui.im_text(fmt.ctprintf("%d notes", len(ed.doc.notes)))
+	ui.im_text(fmt.ctprintf("%d notes", len(ed.stage.notes)))
 
 	// Auto-resize inspector, so cap the list; the preview is where you live with
 	// the full stream anyway.
 	PACE_LIST_MAX :: 30
-	for nt, i in ed.doc.notes {
+	for nt, i in ed.stage.notes {
 		if i >= PACE_LIST_MAX {
-			ui.im_text(fmt.ctprintf("... +%d more", len(ed.doc.notes) - PACE_LIST_MAX))
+			ui.im_text(fmt.ctprintf("... +%d more", len(ed.stage.notes) - PACE_LIST_MAX))
 			break
 		}
 		ui.im_text(fmt.ctprintf("%6.0fm  %s", nt.station, geo.pace_note_text(nt)))

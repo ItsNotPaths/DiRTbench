@@ -62,12 +62,10 @@ Venue_Doc :: struct {
 	topo:          c.int, // ribbon samples per spline segment
 	roughness:     f32,   // global roughness: road vertical jitter + cliff jitter, 0..1
 
-	// Pace notes, derived from the ribbon (pacenote.odin). Recomputed with the
-	// road, since both are caches of the spline. These belong to a stage rather
-	// than to a venue and move to the stage view once it exists; a branched
-	// venue road produces none at all (see geo.is_linear).
+	// How the co-driver calls a corner. The knobs are the venue's, because they
+	// describe the calling and not the stage being called; the notes themselves
+	// live on the window, generated from its compiled stage (Stage_Cache).
 	pace:          geo.Pace_Params,
-	notes:         [dynamic]geo.Pace_Note,
 	timing:        Timing_Params,
 
 	// Vegetation scatter (vegetation.odin). Part of the document, handed to the
@@ -144,11 +142,6 @@ rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved:
 		doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), context.allocator)
 		doc.ribbon_gen += 1
 		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.topo, doc.roughness)
-		if geo.is_linear(doc.spline) {
-			geo.pace_generate(doc.ribbon, doc.pace, &doc.notes)
-		} else {
-			clear(&doc.notes)
-		}
 		doc.dirty_road = false
 	}
 	if doc.dirty_terrain && !dragging {

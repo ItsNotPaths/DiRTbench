@@ -100,12 +100,18 @@ Stage_Compile :: enum {
 // build_ribbon both allocate, so they run when the key changes and not per
 // frame. `msg` is compile_stage's reason, shown in the panel either way.
 Stage_Cache :: struct {
-	key:    Stage_Key,
-	state:  Stage_Compile,
-	msg:    [128]u8,
-	spline: geo.Spline,
-	ribbon: []geo.Cross_Section,
-	length: f32,
+	key:        Stage_Key,
+	state:      Stage_Compile,
+	msg:        [128]u8,
+	spline:     geo.Spline,
+	ribbon:     []geo.Cross_Section,
+	length:     f32,
+	// The co-driver's calls on `ribbon`. Outside `key`: the pace knobs change no
+	// geometry, so the notes carry their own compare. `notes_pace` is what they
+	// were generated from, and a cleared cache zeroes it — no live Pace_Params
+	// is zero, so a cleared cache always regenerates.
+	notes:      [dynamic]geo.Pace_Note,
+	notes_pace: geo.Pace_Params,
 }
 
 // One window onto a document. Everything a camera or a cursor touches lives
@@ -142,8 +148,8 @@ Editor :: struct {
 	wireframe:     bool,
 	quit:          bool,
 
-	// Preview ride: a cursor advances along the spline by arc, firing each note's
-	// VO clips as it passes the trigger station.
+	// Preview ride, in a stage window only: a cursor advances along the compiled
+	// ribbon by arc, firing each note's VO clips as it passes the trigger station.
 	previewing:    bool,
 	preview_speed: f32, // metres/second
 	preview_s:     f32, // current arc station
@@ -229,6 +235,7 @@ stage_resync :: proc(ed: ^Editor) -> bool {
 stage_cache_clear :: proc(ed: ^Editor) {
 	delete(ed.stage.spline.points)
 	delete(ed.stage.ribbon)
+	delete(ed.stage.notes)
 	ed.stage = {}
 }
 
@@ -263,6 +270,26 @@ stage_cache_refresh :: proc(ed: ^Editor) {
 	if arc := geo.ribbon_arc(ed.stage.ribbon); len(arc) > 0 {
 		ed.stage.length = arc[len(arc) - 1]
 	}
+}
+
+// The pace notes for the compiled stage. This is where they belong: a stage is
+// one chain, linear by construction, which a branched venue road is not — and
+// notes are called along one drive, not over a graph.
+stage_notes_refresh :: proc(ed: ^Editor) {
+	if ed.stage.state != .Ready {
+		clear(&ed.stage.notes)
+		return
+	}
+	if ed.stage.notes_pace == ed.doc.pace {
+		return
+	}
+	// A ride is a cursor into the list about to be replaced, so it ends here
+	// rather than calling the wrong corners for the rest of the stage.
+	if ed.previewing {
+		preview_stop(ed)
+	}
+	geo.pace_generate(ed.stage.ribbon, ed.doc.pace, &ed.stage.notes)
+	ed.stage.notes_pace = ed.doc.pace
 }
 
 // --- camera -------------------------------------------------------------------
@@ -596,14 +623,24 @@ stage_frame :: proc(ed: ^Editor) {
 	if !ui_mouse {
 		update_camera(&ed.cam)
 	}
-	cam3d := to_camera3d(ed.cam)
-	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
 
 	stage_resync(ed)
 	stage_cache_refresh(ed)
+	stage_notes_refresh(ed)
+	// The ride moves the camera target, so it runs before the view matrix is
+	// built. Cheap when idle; the queue is pumped either way.
+	preview_update(ed)
+
+	cam3d := to_camera3d(ed.cam)
+	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
 	draw_stage_scene(ed, cam3d)
 
 	ui.imgui_backend_begin()
+	// Show the current call even when pace-note audio is disabled.
+	if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.stage.notes) {
+		txt := fmt.ctprintf("%s", geo.pace_note_text(ed.stage.notes[ed.preview_last]))
+		ui.draw_overlay_text_centered(txt, 40, 40, f32(gfx.GetScreenWidth()), 0xff78dcff)
+	}
 	draw_menubar(ed)
 	draw_stage_inspector(ed)
 	if ed.show_demo {
@@ -652,13 +689,6 @@ venue_frame :: proc(ed: ^Editor) {
 		mark_dirty(ed.doc)
 	}
 
-	// Advance the preview ride and fire pace-note clips. Cheap when idle.
-	// The ride moves the camera target, so rebuild the view matrix from it.
-	preview_update(ed)
-	if ed.previewing {
-		cam3d = to_camera3d(ed.cam)
-	}
-
 	// Node handles come from the world-space terrain controls, so they are
 	// recomputed after the rebuild and shared by drawing, picking and the
 	// gizmo. Temp-allocated: valid for this frame only.
@@ -676,11 +706,6 @@ venue_frame :: proc(ed: ^Editor) {
 	// ImGuizmo draws into an ImGui draw list, so it lives here rather than
 	// inside BeginMode3D, and projects itself with the camera's matrices.
 	ui.imgui_backend_begin()
-	// Show the current call even when pace-note audio is disabled.
-	if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.doc.notes) {
-		txt := fmt.ctprintf("%s", geo.pace_note_text(ed.doc.notes[ed.preview_last]))
-		ui.draw_overlay_text_centered(txt, 40, 40, f32(gfx.GetScreenWidth()), 0xff78dcff)
-	}
 	if ed.terrain_brush_phase != .None {
 		brush_count := 0
 		for selected in ed.terrain_brush_mask {

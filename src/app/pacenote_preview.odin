@@ -62,28 +62,38 @@ pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, 
 	return ribbon[n - 1].pos, gfx.Vector3Normalize(ribbon[n - 1].pos - ribbon[n - 2].pos)
 }
 
-// Start/stop the ride from the head of the spline.
-preview_toggle :: proc(ed: ^Editor) {
-	ed.previewing = !ed.previewing
+// End the ride and silence whatever is mid-phrase. One audio device per
+// process, so the window that started a ride is the one that hands it back —
+// closing that window counts as stopping (see editor_close).
+preview_stop :: proc(ed: ^Editor) {
+	ed.previewing = false
 	if ed.app.play_i < len(ed.app.play_q) {
 		gfx.StopSound(ed.app.play_q[ed.app.play_i])
 	}
 	clear(&ed.app.play_q)
 	ed.app.play_i = 0
 	ed.app.play_started = false
-	if ed.previewing {
-		ed.preview_s = 0
-		ed.preview_next = 0
-		ed.preview_last = -1
-		// Snap the camera to the start heading so the ride opens looking down the
-		// stage, rather than easing in from the last orbit angle.
-		if len(ed.doc.ribbon) >= 2 {
-			f := gfx.Vector3Normalize(ed.doc.ribbon[1].pos - ed.doc.ribbon[0].pos)
-			if abs(f.x) + abs(f.z) > 1e-5 {
-				ed.cam.yaw = math.atan2(-f.x, -f.z)
-			}
-			ed.cam.target = ed.doc.ribbon[0].pos
+}
+
+// Start/stop the ride from the head of the compiled stage.
+preview_toggle :: proc(ed: ^Editor) {
+	was_riding := ed.previewing
+	preview_stop(ed)
+	if was_riding {
+		return
+	}
+	ed.previewing = true
+	ed.preview_s = 0
+	ed.preview_next = 0
+	ed.preview_last = -1
+	// Snap the camera to the start heading so the ride opens looking down the
+	// stage, rather than easing in from the last orbit angle.
+	if len(ed.stage.ribbon) >= 2 {
+		f := gfx.Vector3Normalize(ed.stage.ribbon[1].pos - ed.stage.ribbon[0].pos)
+		if abs(f.x) + abs(f.z) > 1e-5 {
+			ed.cam.yaw = math.atan2(-f.x, -f.z)
 		}
+		ed.cam.target = ed.stage.ribbon[0].pos
 	}
 }
 
@@ -124,24 +134,24 @@ preview_update :: proc(ed: ^Editor) {
 	if !ed.previewing {
 		return
 	}
-	if len(ed.doc.ribbon) < 2 {
+	if len(ed.stage.ribbon) < 2 {
 		ed.previewing = false
 		return
 	}
-	arc := geo.ribbon_arc(ed.doc.ribbon)
+	arc := geo.ribbon_arc(ed.stage.ribbon)
 	total := arc[len(arc) - 1]
 	ed.preview_s += ed.preview_speed * gfx.GetFrameTime()
-	for ed.preview_next < len(ed.doc.notes) && ed.doc.notes[ed.preview_next].station <= ed.preview_s {
-		pace_enqueue(ed, ed.doc.notes[ed.preview_next])
+	for ed.preview_next < len(ed.stage.notes) && ed.stage.notes[ed.preview_next].station <= ed.preview_s {
+		pace_enqueue(ed, ed.stage.notes[ed.preview_next])
 		ed.preview_last = ed.preview_next
 		ed.preview_next += 1
 	}
-	pos, fwd := pace_ride_pos(ed.doc.ribbon, arc, ed.preview_s)
+	pos, fwd := pace_ride_pos(ed.stage.ribbon, arc, ed.preview_s)
 	ed.preview_pos = pos
 	// Attach the camera to the ride: target rides the car, and the yaw swings to
 	// look down the stage (eye behind the car, facing travel). Pitch and zoom stay
-	// the user's. Yaw is eased toward the heading so corners don't snap. The caller
-	// rebuilds cam3d from this after the update.
+	// the user's. Yaw is eased toward the heading so corners don't snap. The
+	// caller builds cam3d after this has run.
 	ed.cam.target = pos
 	fh := gfx.Vector3{fwd.x, 0, fwd.z}
 	if gfx.Vector3Length(fh) > 1e-5 {

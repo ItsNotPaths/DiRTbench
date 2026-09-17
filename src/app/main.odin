@@ -63,7 +63,6 @@ doc_new :: proc(app: ^App) -> ^Venue_Doc {
 	doc := new(Venue_Doc)
 	doc^ = doc_defaults()
 	doc.install = &app.install
-	doc.notes = make([dynamic]geo.Pace_Note)
 	doc.material = gfx.LoadMaterialDefault()
 	set_stage_name(doc, "untitled")
 	seed_spline(&doc.spline)
@@ -81,7 +80,6 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 	geo.terrain_field_delete(&doc.terrain_field)
 	delete(doc.ribbon)
 	veg_cache_clear(doc)
-	delete(doc.notes)
 	delete(doc.spline.points)
 	delete(doc.open_venue)
 	delete(doc.open_stage)
@@ -146,6 +144,9 @@ editors_detach :: proc(app: ^App, ed: ^Editor) -> ^Venue_Doc {
 // Close one window and free it. The document goes too, once no other window is
 // looking at it — it holds the meshes, which are the largest thing here.
 editor_close :: proc(app: ^App, ed: ^Editor) {
+	if ed.previewing {
+		preview_stop(ed) // the ride owns the one audio device until it ends
+	}
 	orphan := editors_detach(app, ed)
 	view_delete(ed)
 	if ed.imgui != nil {

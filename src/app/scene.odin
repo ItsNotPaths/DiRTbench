@@ -147,9 +147,6 @@ draw_venue_scene :: proc(
 	draw_world(ed)
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
-	if ed.previewing {
-		gfx.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
-	}
 	gfx.EndMode3D()
 }
 
@@ -168,6 +165,9 @@ draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	if ed.stage.state == .Ready {
 		draw_ribbon_edges(ed.stage.ribbon, {255, 235, 120, 255})
 		draw_timing_markers(timing_markers(ed.stage.ribbon, ed.doc.timing))
+	}
+	if ed.previewing {
+		gfx.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
 	}
 	gfx.EndMode3D()
 }
