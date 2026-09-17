@@ -736,12 +736,15 @@ main :: proc() {
 		rl.DrawGrid(GRID_SLICES, GRID_SPACING)
 		geo.gpu_mesh_draw(ed.terrain_mesh, ed.material, ed.wireframe)
 		geo.gpu_mesh_draw(ed.road, ed.material, ed.wireframe)
-		// After the opaque ground, so the translucent canopies blend over it.
-		geo.veg_draw(ed.veg_cache)
+		// Handles first: they share one fixed-size batch with the scenery, which
+		// grows with the stage, and what does not fit is dropped (see
+		// batch_has_room). Losing the far trees is a nuisance; losing the handles
+		// makes the editor unusable.
 		draw_centreline(ed.ribbon)
 		draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
-		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 		draw_handles(ed.spline, selected_point(&ed))
+		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
+		geo.veg_draw(ed.veg_cache)
 		draw_marker(ed.spline, ed.start, {110, 255, 140, 255})
 		draw_marker(ed.spline, ed.finish, {255, 110, 110, 255})
 		if ed.previewing {

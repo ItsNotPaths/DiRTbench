@@ -307,6 +307,7 @@ BeginMode3D :: proc(camera: Camera3D) {
 	clear(&scene_draws)
 	clear(&batch_lines)
 	clear(&batch_tris)
+	batch_dropped = 0
 }
 
 // Uploads the debug batch, then draws it after every static mesh, in one
@@ -379,8 +380,22 @@ ClearBackground :: proc(color: Color) {
 
 // --- immediate mode ---------------------------------------------------------
 
+// Verts the batch had to refuse this frame. The buffer is a fixed size and the
+// overlay it carries is not — a big stage's sculpt nodes and its trees both scale
+// with the stage — so what does not fit is counted and reported (see the Veg
+// panel) rather than vanishing. Whatever draws last is what goes missing.
+batch_dropped: int
+
+batch_dropped_verts :: proc() -> int {
+	return batch_dropped
+}
+
 batch_has_room :: proc(n: int) -> bool {
-	return len(batch_lines) + len(batch_tris) + n <= BATCH_MAX_VERTS
+	if len(batch_lines) + len(batch_tris) + n <= BATCH_MAX_VERTS {
+		return true
+	}
+	batch_dropped += n
+	return false
 }
 
 batch_tri :: proc(a, b, c: Vector3, color: Color) {

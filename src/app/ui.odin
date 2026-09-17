@@ -565,6 +565,11 @@ draw_veg_section :: proc(ed: ^Editor) {
 	if !ed.terrain.enabled {
 		ui.im_text("(terrain off: trees ride the road edge)")
 	}
+	// The overlay batch is a fixed buffer; a stage can outgrow it. Trees are last
+	// in, so they are what goes missing first.
+	if dropped := rl.batch_dropped_verts(); dropped > 0 {
+		ui.im_text(fmt.ctprintf("overlay batch full: %d verts dropped", dropped))
+	}
 }
 
 // One row per target: what it does and where it writes. Also the place the

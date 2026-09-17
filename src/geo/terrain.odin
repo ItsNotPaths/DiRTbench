@@ -1074,7 +1074,7 @@ draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, active, affected: []b
 				hcol = {255, 190, 80, 255}
 			}
 		}
-		rl.DrawSphereEx(pos[i], radius, 6, 6, hcol)
+		rl.DrawSphereEx(pos[i], radius, 3, 4, hcol)
 	}
 }
 
