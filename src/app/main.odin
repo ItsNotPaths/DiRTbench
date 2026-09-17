@@ -18,6 +18,7 @@ import "core:c"
 import "core:fmt"
 import "core:math"
 import "core:os"
+import "core:strings"
 import "../geo"
 import "../ui"
 import rl "../gfx"
@@ -96,10 +97,11 @@ Editor :: struct {
 	// maps/. Saving writes back to the venue.
 	open_venue:  string,
 	open_stage:    string,
-	// Start and finish of the venue's first stage, while its road is open. They
-	// belong to venue.json and are written back when the road is saved.
-	start:         geo.Road_Marker,
-	finish:        geo.Road_Marker,
+	// The venue's stage list, while its road is open. It belongs to venue.json
+	// and is written back when the road is saved. `route_sel` indexes it, or is
+	// -1 when the venue has no stages yet.
+	routes:        [dynamic]Venue_Route,
+	route_sel:     int,
 	// Editing a stage, not the venue. A stage is two markers on the venue road
 	// and nothing else, so the road itself is read-only here: no insert, no
 	// branch, no weld, no delete, and the gizmo does not move a control point.
@@ -174,8 +176,9 @@ Editor :: struct {
 	play_i:        int,
 	play_started:  bool,
 
-	// ImGui edits this buffer in place, so it is a fixed C string, not a string.
+	// ImGui edits these buffers in place, so they are fixed C strings.
 	stage_name:    [64]u8,
+	route_name:    [64]u8,
 	// Result of the last save/load. Copied, because the messages come off the
 	// temp allocator, which is reset every frame.
 	status:        [256]u8,
@@ -184,6 +187,49 @@ Editor :: struct {
 }
 
 // --- selection --------------------------------------------------------------
+
+// The stage the marker keys act on, or nil. Validates the index, because
+// removing a stage can leave the selection past the end of the list.
+selected_route :: proc(ed: ^Editor) -> ^Venue_Route {
+	if ed.route_sel < 0 || ed.route_sel >= len(ed.routes) {
+		return nil
+	}
+	return &ed.routes[ed.route_sel]
+}
+
+// Point the stage list at `i`, and refresh the name field from whatever is
+// there now. The field is the only editable copy of the name, so it has to
+// follow the selection or a rename lands on the wrong stage.
+select_route :: proc(ed: ^Editor, i: int) {
+	ed.route_sel = i
+	if r := selected_route(ed); r != nil {
+		set_buf(ed.route_name[:], r.name)
+	} else {
+		ed.route_name = {}
+	}
+}
+
+add_route :: proc(ed: ^Editor) {
+	append(&ed.routes, Venue_Route{
+		id     = route_id_free(ed.routes[:], context.allocator),
+		name   = strings.clone(fmt.tprintf("STAGE %d", len(ed.routes) + 1)),
+		start  = {from = -1, to = -1},
+		finish = {from = -1, to = -1},
+	})
+	select_route(ed, len(ed.routes) - 1)
+}
+
+// Ordered, so the stages keep the order the menu will show them in. The id is
+// not reused until route_id_free hands it out again.
+remove_route :: proc(ed: ^Editor, i: int) {
+	if i < 0 || i >= len(ed.routes) {
+		return
+	}
+	delete(ed.routes[i].id)
+	delete(ed.routes[i].name)
+	ordered_remove(&ed.routes, i)
+	select_route(ed, min(i, len(ed.routes) - 1))
+}
 
 // The selected control point, or -1. Validates the index: an edit or a load can
 // shrink the spline under a stale selection.
@@ -327,10 +373,20 @@ veg_refresh :: proc(ed: ^Editor) {
 
 // --- status line ------------------------------------------------------------
 
+// ImGui edits a name in place, so every name the editor shows it is a fixed
+// byte buffer rather than a string. These two are the only way in and out.
+set_buf :: proc(buf: []u8, s: string) {
+	n := min(len(s), len(buf) - 1)
+	copy(buf[:n], s[:n])
+	buf[n] = 0
+}
+
+buf_text :: proc(buf: []u8) -> string {
+	return string(cstring(raw_data(buf)))
+}
+
 set_status :: proc(ed: ^Editor, msg: string, ok: bool) {
-	n := min(len(msg), len(ed.status) - 1)
-	copy(ed.status[:n], msg[:n])
-	ed.status[n] = 0
+	set_buf(ed.status[:], msg)
 	ed.status_ok = ok
 	ed.status_at = rl.GetTime()
 }
@@ -344,13 +400,11 @@ status_text :: proc(ed: ^Editor) -> (text: cstring, ok: bool) {
 
 // The stage name as ImGui left it in the buffer: NUL-terminated, unsanitised.
 stage_name_text :: proc(ed: ^Editor) -> string {
-	return string(cstring(raw_data(ed.stage_name[:])))
+	return buf_text(ed.stage_name[:])
 }
 
 set_stage_name :: proc(ed: ^Editor, name: string) {
-	n := min(len(name), len(ed.stage_name) - 1)
-	copy(ed.stage_name[:n], name[:n])
-	ed.stage_name[n] = 0
+	set_buf(ed.stage_name[:], name)
 }
 
 // --- Camera -----------------------------------------------------------------
@@ -502,6 +556,18 @@ grow_road :: proc(sp: ^geo.Spline, from: int, g: rl.Vector3) -> int {
 	return idx
 }
 
+// Every stage's lines. The selected one is drawn bright and the rest dim, so a
+// new stage is placed against the ones already using this road.
+draw_route_markers :: proc(ed: ^Editor) {
+	for route, i in ed.routes {
+		lit := i == ed.route_sel
+		start := rl.Color{110, 255, 140, 255} if lit else {60, 120, 80, 255}
+		finish := rl.Color{255, 110, 110, 255} if lit else {120, 60, 60, 255}
+		draw_marker(ed.spline, route.start, start)
+		draw_marker(ed.spline, route.finish, finish)
+	}
+}
+
 // A start or finish line, drawn across the road where it sits.
 draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: rl.Color) {
 	if !geo.marker_valid(sp, m) {
@@ -634,6 +700,7 @@ main :: proc() {
 	defer install_scan_delete(&ed.install)
 	defer delete(ed.open_venue)
 	defer delete(ed.open_stage)
+	defer routes_free(&ed.routes)
 	set_stage_name(&ed, "untitled")
 	seed_spline(&ed.spline)
 	defer delete(ed.spline.points)
@@ -745,8 +812,7 @@ main :: proc() {
 		draw_handles(ed.spline, selected_point(&ed))
 		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 		geo.veg_draw(ed.veg_cache)
-		draw_marker(ed.spline, ed.start, {110, 255, 140, 255})
-		draw_marker(ed.spline, ed.finish, {255, 110, 110, 255})
+		draw_route_markers(&ed)
 		if ed.previewing {
 			rl.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
 		}
@@ -891,14 +957,17 @@ main :: proc() {
 		// S and F drop the start and finish lines wherever the cursor is on the
 		// road. Placing one again just moves it; there is only ever one of each.
 		if !ui_keys && !nav && ed.stage_mode {
-			ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-			line := !ctrl && rl.IsKeyPressed(.S) ? &ed.start : rl.IsKeyPressed(.F) ? &ed.finish : nil
-			if line != nil {
-				if _, _, frame, hit := pick_ribbon(ed.ribbon, ray); hit {
-					line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
-					set_status(&ed, line == &ed.start ? "start line placed" : "finish line placed", true)
-				} else {
-					set_status(&ed, "point at the road to place a line there", false)
+			if route := selected_route(&ed); route != nil {
+				ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+				start := !ctrl && rl.IsKeyPressed(.S)
+				line := start ? &route.start : rl.IsKeyPressed(.F) ? &route.finish : nil
+				if line != nil {
+					if _, _, frame, hit := pick_ribbon(ed.ribbon, ray); hit {
+						line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
+						set_status(&ed, start ? "start line placed" : "finish line placed", true)
+					} else {
+						set_status(&ed, "point at the road to place a line there", false)
+					}
 				}
 			}
 		}

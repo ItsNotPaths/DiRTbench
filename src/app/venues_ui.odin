@@ -357,17 +357,6 @@ first_playable_route :: proc(venue: d3.Venue) -> int {
 	return -1
 }
 
-// An ImGui text buffer up to its NUL.
-@(private = "file")
-buf_text :: proc(buf: []u8) -> string {
-	for b, i in buf {
-		if b == 0 {
-			return string(buf[:i])
-		}
-	}
-	return string(buf)
-}
-
 // --- opening -----------------------------------------------------------------
 
 open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
@@ -383,7 +372,9 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 		set_status(ed, msg, false)
 		return false
 	}
-	ed.start, ed.finish = venue_markers(p^)
+	routes_free(&ed.routes)
+	ed.routes = venue_routes(p^)
+	ed.route_sel = len(ed.routes) > 0 ? 0 : -1
 	ed.stage_mode = false
 	if migrating {
 		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing, &ed.terrain); !ok {

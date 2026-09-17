@@ -16,6 +16,7 @@ import "core:c"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strings"
 import rl "../gfx"
 import "../geo"
 import "../ui"
@@ -31,9 +32,9 @@ do_save :: proc(ed: ^Editor) {
 		path := venue_road_path(ed.open_venue)
 		msg, ok := save_stage_to(ed.spline, path, ed.veg, ed.timing, &ed.terrain)
 		if ok {
-			// The markers are the stage, and they live in venue.json. Saving the
-			// road without them would drop the start and finish lines.
-			msg, ok = venue_markers_save(ed.open_venue, ed.start, ed.finish)
+			// The markers are the stages, and they live in venue.json. Saving the
+			// road without them would drop every start and finish line.
+			msg, ok = venue_routes_save(ed.open_venue, ed.routes[:])
 		}
 		if ok {
 			msg = fmt.tprintf("saved %s road network and stage lines", ed.open_venue)
@@ -109,19 +110,6 @@ draw_menubar :: proc(ed: ^Editor) {
 		if ed.open_venue != "" && ui.igMenuItem_Bool("Close editor", nil, false, true) {
 			ed.quit = true
 		}
-		if ed.open_venue != "" {
-			label: cstring = ed.stage_mode ? "Edit venue geometry" : "Edit stage start/finish"
-			if ui.igMenuItem_Bool(label, nil, false, true) {
-				ed.stage_mode = !ed.stage_mode
-				ed.sel = {}
-				set_status(
-					ed,
-					ed.stage_mode ? "stage mode: S sets the start line, F the finish; the road is read-only" : "venue mode: the road is editable again",
-					true,
-				)
-			}
-			ui.igSeparator()
-		}
 		if ed.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
 			do_new(ed)
 		}
@@ -192,6 +180,57 @@ draw_status_text :: proc(ed: ^Editor) {
 	green := ui.Im_Vec4{0.45, 0.85, 0.5, 1}
 	red := ui.Im_Vec4{1.0, 0.45, 0.4, 1}
 	ui.im_text_colored(ed.status_ok ? green : red, msg)
+}
+
+// The venue's stage list. A stage is a name and two markers on this road, so
+// there is nothing else to show and nothing else to edit.
+//
+// Radio buttons rather than a list box: a venue holds a handful of stages, and
+// this needs no cimgui binding that is not already here.
+draw_stages :: proc(ed: ^Editor) {
+	ui.igSeparatorText("Stages")
+	if len(ed.routes) == 0 {
+		ui.im_text("no stages yet")
+	}
+	for route, i in ed.routes {
+		if ui.igRadioButton_Bool(fmt.ctprintf("%s##route%d", route.name, i), i == ed.route_sel) {
+			select_route(ed, i)
+		}
+		ui.im_same_line()
+		ui.im_text_colored(
+			route_has_markers(route) ? ui.Im_Vec4{0.45, 0.85, 0.5, 1} : ui.Im_Vec4{0.75, 0.7, 0.45, 1},
+			route_has_markers(route) ? fmt.ctprintf("%s", route.id) : fmt.ctprintf("%s, no lines", route.id),
+		)
+	}
+
+	if ui.im_button("Add stage") {
+		add_route(ed)
+	}
+	ui.im_same_line()
+	ui.igBeginDisabled(selected_route(ed) == nil)
+	if ui.im_button("Remove") {
+		remove_route(ed, ed.route_sel)
+	}
+	ui.igEndDisabled()
+
+	route := selected_route(ed)
+	if route == nil {
+		ed.stage_mode = false
+		return
+	}
+	if ui.igInputText("name", raw_data(ed.route_name[:]), len(ed.route_name), {}, nil, nil) {
+		delete(route.name)
+		route.name = strings.clone(buf_text(ed.route_name[:]))
+	}
+	if ui.im_button(ed.stage_mode ? "Edit the road" : "Place start and finish") {
+		ed.stage_mode = !ed.stage_mode
+		ed.sel = {}
+	}
+	ui.im_text(
+		ed.stage_mode \
+		? fmt.ctprintf("S sets the start line, F the finish. The road is read-only.") \
+		: fmt.ctprintf("the road is editable"),
+	)
 }
 
 // A floating, closable panel: `igBegin` with a p_open gives it an X, and the
@@ -297,6 +336,10 @@ draw_inspector :: proc(ed: ^Editor) {
 	ui.im_text(fmt.ctprintf("%d points", len(ed.spline.points)))
 
 	draw_status_text(ed)
+
+	if ed.open_venue != "" {
+		draw_stages(ed)
+	}
 
 	ui.igSeparatorText("Gizmo")
 	if ui.igRadioButton_Bool("Move (1)", ed.gizmo_mode == .Move) {

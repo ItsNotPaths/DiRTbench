@@ -457,21 +457,16 @@ export_profile :: proc(
 	return out, "", true
 }
 
-// Write the first stage's two markers back into venue.json, leaving everything
-// else in the document alone. The editor holds the markers while a road is
-// open; this is how they get home.
-venue_markers_save :: proc(id: string, start, finish: geo.Road_Marker) -> (msg: string, ok: bool) {
+// Write the stage list back into venue.json, leaving everything else in the
+// document alone. The editor holds the routes while a road is open; this is how
+// they get home. Re-reading first is what keeps an edit made elsewhere in the
+// document — a rename, a base change — from being overwritten by a marker save.
+venue_routes_save :: proc(id: string, routes: []Venue_Route) -> (msg: string, ok: bool) {
 	p, load_msg, loaded := venue_load(id, context.temp_allocator)
 	if !loaded {
 		return load_msg, false
 	}
-	if len(p.routes) == 0 {
-		routes := make([]Venue_Route, 1, context.temp_allocator)
-		routes[0] = {id = "route_0", name = p.names.venue}
-		p.routes = routes
-	}
-	p.routes[0].start = start
-	p.routes[0].finish = finish
+	p.routes = routes
 	return venue_save(p)
 }
 
@@ -503,12 +498,49 @@ venue_compile_route :: proc(
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
 }
 
-// The first stage's markers, or two unset ones when the venue has no stage yet.
-venue_markers :: proc(p: Venue) -> (start, finish: geo.Road_Marker) {
-	if len(p.routes) == 0 {
-		return {from = -1, to = -1}, {from = -1, to = -1}
+// The venue's stage list, cloned for the editor to hold and edit.
+venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue_Route {
+	out := make([dynamic]Venue_Route, 0, len(p.routes), allocator)
+	for r in p.routes {
+		append(&out, Venue_Route{
+			id     = strings.clone(r.id, allocator),
+			name   = strings.clone(r.name, allocator),
+			start  = r.start,
+			finish = r.finish,
+		})
 	}
-	return p.routes[0].start, p.routes[0].finish
+	return out
+}
+
+routes_free :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocator) {
+	for r in routes {
+		delete(r.id, allocator)
+		delete(r.name, allocator)
+	}
+	delete(routes^)
+	routes^ = nil
+}
+
+// The lowest `route_<n>` the venue is not already using.
+//
+// **Never renumber an existing route.** A deployed venue has a `track_model`
+// row whose `route_string` is this id and a localization key built from it, so
+// renaming one orphans both. Removing route_1 of three leaves route_0 and
+// route_2, and the next stage added takes route_1 back.
+route_id_free :: proc(routes: []Venue_Route, allocator := context.temp_allocator) -> string {
+	for n := 0; ; n += 1 {
+		id := fmt.tprintf("route_%d", n)
+		taken := false
+		for r in routes {
+			if r.id == id {
+				taken = true
+				break
+			}
+		}
+		if !taken {
+			return strings.clone(id, allocator)
+		}
+	}
 }
 
 // Compile every stage of a venue out of its one road graph. This is what makes
