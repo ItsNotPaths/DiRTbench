@@ -14,6 +14,7 @@ package main
 
 import "core:c"
 import "core:fmt"
+import "core:math/rand"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -212,7 +213,7 @@ draw_generator :: proc(ed: ^Editor) {
 	if ui.igInputInt("seed", &g.seed, 1, 16, ui.IM_INPUT_TEXT_NONE) {changed = true}
 	ui.im_same_line()
 	if ui.im_button("Randomise") {
-		g.seed = gfx.GetRandomValue(0, 999999)
+		g.seed = rand.int31_max(1_000_000)
 		changed = true
 	}
 

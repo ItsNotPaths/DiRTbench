@@ -1,6 +1,7 @@
 package gfx
 
 import "core:c"
+import "core:c/libc"
 import sdl "vendor:sdl3"
 import vorbis "vendor:stb/vorbis"
 
@@ -47,7 +48,7 @@ LoadSoundFromMemory :: proc(data: []u8) -> Sound {
 
 UnloadSound :: proc(sound: Sound) {
 	if sound.stream != nil { sdl.DestroyAudioStream(sound.stream) }
-	if sound.pcm != nil { MemFree(sound.pcm) }
+	if sound.pcm != nil { libc.free(sound.pcm) }
 }
 
 PlaySound :: proc(sound: Sound) {

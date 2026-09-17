@@ -10,21 +10,8 @@ package gfx
 // every frame. Static draws are recorded during the frame and flushed, with
 // the debug batch, by EndMode3D; nothing records GPU commands directly.
 
-import "core:c"
 import "core:math"
 import sdl "vendor:sdl3"
-
-foreign import libc "system:c"
-
-@(default_calling_convention = "c")
-foreign libc {
-	malloc :: proc(size: c.size_t) -> rawptr ---
-	free :: proc(ptr: rawptr) ---
-}
-
-MemFree :: proc(ptr: rawptr) {
-	free(ptr)
-}
 
 Material :: struct {}
 
@@ -75,13 +62,6 @@ clip_near: f32 = 0.1
 clip_far:  f32 = 10000
 wire_mode: bool
 cull_mode: bool = true
-
-GetRandomValue :: proc(minimum, maximum: i32) -> i32 {
-	if maximum <= minimum {
-		return minimum
-	}
-	return minimum + i32(sdl.rand(maximum - minimum + 1))
-}
 
 LoadMaterialDefault :: proc() -> Material {
 	return {}
