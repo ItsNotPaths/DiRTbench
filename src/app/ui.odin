@@ -158,7 +158,7 @@ draw_menubar :: proc(ed: ^Editor) {
 		ui.igEndMenu()
 	}
 	if ui.igBeginMenu("View", true) {
-		if ui.igMenuItem_Bool("Stage generator", nil, ed.show_gen, true) {
+		if ed.kind == .Venue && ui.igMenuItem_Bool("Stage generator", nil, ed.show_gen, true) {
 			ed.show_gen = !ed.show_gen
 		}
 		ui.igSeparator()
@@ -182,8 +182,9 @@ draw_status_text :: proc(s: ^Status) {
 	ui.im_text_colored(s.ok ? green : red, msg)
 }
 
-// The venue's stage list. A stage is a name and two markers on this road, so
-// there is nothing else to show and nothing else to edit.
+// The venue's stage list: which stages use this road, and whether each has its
+// lines yet. The selected one is drawn lit, so a new stage is placed against
+// the ones already here. A stage's name and lines belong to its own window.
 //
 // Radio buttons rather than a list box: a venue holds a handful of stages, and
 // this needs no cimgui binding that is not already here.
@@ -212,25 +213,6 @@ draw_stages :: proc(ed: ^Editor) {
 		remove_route(ed, ed.route_sel)
 	}
 	ui.igEndDisabled()
-
-	route := selected_route(ed)
-	if route == nil {
-		ed.stage_mode = false
-		return
-	}
-	if ui.igInputText("name", raw_data(ed.route_name[:]), len(ed.route_name), {}, nil, nil) {
-		delete(route.name)
-		route.name = strings.clone(buf_text(ed.route_name[:]))
-	}
-	if ui.im_button(ed.stage_mode ? "Edit the road" : "Place start and finish") {
-		ed.stage_mode = !ed.stage_mode
-		ed.sel = {}
-	}
-	ui.im_text(
-		ed.stage_mode \
-		? fmt.ctprintf("S sets the start line, F the finish. The road is read-only.") \
-		: fmt.ctprintf("the road is editable"),
-	)
 }
 
 // A floating, closable panel: `igBegin` with a p_open gives it an X, and the
@@ -297,6 +279,61 @@ draw_generator :: proc(ed: ^Editor) {
 	if changed && ed.doc.gen_live && !ed.gizmo_active {
 		do_generate(ed, false)
 	}
+}
+
+// A stage window's panel. The road is read-only here, so this is the stage and
+// nothing else: its name, where its two lines sit, and whether the road between
+// them compiles.
+draw_stage_inspector :: proc(ed: ^Editor) {
+	ui.igSetNextWindowPos({12, 34}, .FirstUseEver, {0, 0})
+	ui.igSetNextWindowSize({300, 0}, .FirstUseEver)
+	if !ui.igBegin("Stage", nil, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
+		ui.igEnd()
+		return
+	}
+	defer ui.igEnd()
+
+	route := selected_route(ed)
+	if route == nil {
+		ui.im_text_colored(
+			WARN_COL,
+			fmt.ctprintf("%s is no longer a stage of %s", ed.stage_id, ed.doc.open_venue),
+		)
+		ui.im_text("close this window")
+		return
+	}
+
+	ui.igSeparatorText("Stage")
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s / %s", ed.doc.open_venue, route.id))
+	if ui.igInputText("name", raw_data(ed.route_name[:]), len(ed.route_name), {}, nil, nil) {
+		delete(route.name)
+		route.name = strings.clone(buf_text(ed.route_name[:]))
+	}
+	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
+	if ui.im_button("Save") {
+		do_save(ed)
+	}
+	ui.igEndDisabled()
+	draw_status_text(&ed.status)
+
+	ui.igSeparatorText("Start and finish")
+	ui.im_text_colored(
+		route_has_markers(route^) ? MINE_COL : WARN_COL,
+		route_has_markers(route^) ? "both lines placed" : "no lines yet",
+	)
+	msg := buf_text(ed.stage.msg[:])
+	if ed.stage.state == .Ready {
+		ui.im_text_colored(MINE_COL, fmt.ctprintf("%s, %.0f m", msg, ed.stage.length))
+	} else {
+		ui.im_text_colored(WARN_COL, fmt.ctprint(msg))
+	}
+
+	draw_timing_section(ed)
+
+	ui.igSeparatorText("Controls")
+	ui.im_text("point at the road and press S for the start line")
+	ui.im_text("F sets the finish. The road itself is read-only here.")
+	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")
 }
 
 draw_inspector :: proc(ed: ^Editor) {
@@ -367,6 +404,7 @@ draw_inspector :: proc(ed: ^Editor) {
 
 draw_timing_section :: proc(ed:^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Timing gates",ui.IM_TREE_NODE_DEFAULT_OPEN) { return }
+	ui.im_text_colored(DIM_COL, "venue-wide, every stage")
 	ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE)
 	ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE)
 }

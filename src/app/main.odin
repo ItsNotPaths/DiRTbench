@@ -3,8 +3,8 @@ package main
 // dirtbench — a DiRT 3 rally road editor.
 //
 // The process. One project-manager window (venues_ui.odin), one scan of the
-// game install, and a window for each venue opened from it. Picking the world
-// comes before drawing a road in it.
+// game install, and the windows opened from it: a venue's road network, and one
+// per stage of that venue. Picking the world comes before drawing a road in it.
 //
 // One process rather than one per venue, because a stage window has to see its
 // venue's live terrain, and that is free when the windows share a document and
@@ -35,9 +35,9 @@ App :: struct {
 	editors: [dynamic]^Editor,
 	// One document per open venue, shared by every window onto it.
 	docs:    [dynamic]^Venue_Doc,
-	// The venue a button asked to open, serviced between frames. See
+	// The window a button asked to open, serviced between frames. See
 	// app_service_open_request for why it cannot happen inside one.
-	open_request: [64]u8,
+	open_request: Open_Request,
 	status:  Status,
 	show_demo: bool,
 	quit:    bool,
@@ -47,6 +47,14 @@ App :: struct {
 	play_q:       [dynamic]gfx.Sound,   // clips to play back-to-back
 	play_i:       int,
 	play_started: bool,
+}
+
+// Which window a project-manager button asked for: a venue's road graph, or
+// one stage of it. Buffers rather than strings, because the venue list is
+// reloaded between the click and the open and a borrowed id would dangle.
+Open_Request :: struct {
+	venue: [64]u8,
+	stage: [64]u8, // "" opens the road-network window
 }
 
 // A fresh document, with its GPU geometry. Its window comes separately: the
@@ -84,6 +92,8 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 view_delete :: proc(ed: ^Editor) {
 	delete(ed.terrain_brush_mask)
 	delete(ed.terrain_brush_offsets)
+	delete(ed.stage_id)
+	stage_cache_clear(ed)
 }
 
 editor_window_open :: proc(ed: ^Editor, title: cstring) -> bool {

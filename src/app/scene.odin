@@ -125,26 +125,59 @@ draw_handles :: proc(sp: geo.Spline, selected: int) {
 	}
 }
 
-// The viewport pass. Handles first: they share one fixed-size batch with the
-// scenery, which grows with the stage, and what does not fit is dropped (see
-// batch_has_room). Losing the far trees is a nuisance; losing the handles makes
-// the editor unusable.
-draw_scene :: proc(
-	ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3, node_active: []bool, sel_node: int,
-) {
-	gfx.ClearBackground({26, 28, 34, 255})
-	gfx.BeginMode3D(cam3d)
+// Both edges of a ribbon, lifted clear of the surface it lies on. This is how
+// one stage is drawn over the road it was cut from.
+draw_ribbon_edges :: proc(ribbon: []geo.Cross_Section, col: gfx.Color) {
+	lift := gfx.Vector3{0, 0.15, 0}
+	for i in 0 ..< len(ribbon) - 1 {
+		if ribbon[i + 1].break_before { continue }
+		la, ra := geo.xsec_ends(ribbon[i])
+		lb, rb := geo.xsec_ends(ribbon[i + 1])
+		gfx.DrawLine3D(la + lift, lb + lift, col)
+		gfx.DrawLine3D(ra + lift, rb + lift, col)
+	}
+}
+
+// The venue itself, from the shared cache: what both window kinds draw first.
+draw_world :: proc(ed: ^Editor) {
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
 	geo.gpu_mesh_draw(ed.doc.terrain_mesh, ed.doc.material, ed.wireframe)
 	geo.gpu_mesh_draw(ed.doc.road, ed.doc.material, ed.wireframe)
 	draw_centreline(ed.doc.ribbon)
+	geo.veg_draw(ed.doc.veg_cache)
+}
+
+// The venue window's pass. Handles first: they share one fixed-size batch with
+// the scenery, which grows with the stage, and what does not fit is dropped (see
+// batch_has_room). Losing the far trees is a nuisance; losing the handles makes
+// the editor unusable.
+draw_venue_scene :: proc(
+	ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3, node_active: []bool, sel_node: int,
+) {
+	gfx.ClearBackground({26, 28, 34, 255})
+	gfx.BeginMode3D(cam3d)
+	draw_world(ed)
 	draw_timing_markers(timing_markers(ed.doc.ribbon,ed.doc.timing))
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
-	geo.veg_draw(ed.doc.veg_cache)
 	draw_route_markers(ed)
 	if ed.previewing {
 		gfx.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
+	}
+	gfx.EndMode3D()
+}
+
+// A stage window's pass: the venue road with this stage lit up on it. The
+// timing gates come off the compiled ribbon, which is the road the game will
+// actually time, rather than off the whole graph.
+draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
+	gfx.ClearBackground({26, 28, 34, 255})
+	gfx.BeginMode3D(cam3d)
+	draw_world(ed)
+	draw_route_markers(ed)
+	if ed.stage.state == .Ready {
+		draw_ribbon_edges(ed.stage.ribbon, {255, 235, 120, 255})
+		draw_timing_markers(timing_markers(ed.stage.ribbon, ed.doc.timing))
 	}
 	gfx.EndMode3D()
 }

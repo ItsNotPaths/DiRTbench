@@ -72,6 +72,43 @@ Terrain_Brush_Phase :: enum {
 	Move,
 }
 
+// What this window is for. A stage window and a venue window differ in what
+// they draw, what input they take and what panels they show, which is one
+// decision rather than a pile of booleans.
+View_Kind :: enum {
+	Venue, // the road graph: insert, branch, weld, sculpt
+	Stage, // two markers on that road, and the road it cuts out
+}
+
+// What the compiled stage is keyed on. Every spline edit ticks `gen`, and topo
+// is the only other input to the ribbon, so these four say whether the cache
+// below still describes the stage.
+Stage_Key :: struct {
+	gen:           u64, // doc.ribbon_gen
+	start, finish: geo.Road_Marker,
+	topo:          c.int,
+}
+
+// Where the cached compile stands. One field, because two booleans would allow
+// a fourth state that cannot happen.
+Stage_Compile :: enum {
+	None,   // nothing compiled at this key yet
+	Failed, // compile_stage refused, and `msg` is why
+	Ready,
+}
+
+// The compiled stage a stage window draws, cached: compile_stage and
+// build_ribbon both allocate, so they run when the key changes and not per
+// frame. `msg` is compile_stage's reason, shown in the panel either way.
+Stage_Cache :: struct {
+	key:    Stage_Key,
+	state:  Stage_Compile,
+	msg:    [128]u8,
+	spline: geo.Spline,
+	ribbon: []geo.Cross_Section,
+	length: f32,
+}
+
 // One window onto a document. Everything a camera or a cursor touches lives
 // here, so a second window over the same venue gets its own view of it and
 // shares none of it.
@@ -82,12 +119,12 @@ Editor :: struct {
 	imgui:         rawptr,
 	app:           ^App,
 	doc:           ^Venue_Doc,
+	kind:          View_Kind,
 	// Which stage this window acts on, or -1. Indexes `doc.routes`.
 	route_sel:     int,
-	// Editing a stage, not the venue. A stage is two markers on the venue road
-	// and nothing else, so the road itself is read-only here: no insert, no
-	// branch, no weld, no delete, and the gizmo does not move a control point.
-	stage_mode:    bool,
+	// A stage window's stage, by id. `stage_resync` turns it into `route_sel`.
+	stage_id:      string,
+	stage:         Stage_Cache,
 	cam:           Orbit_Camera,
 	sel:           Selection,
 	gizmo_active:  bool,
@@ -211,6 +248,59 @@ terrain_brush_snapshot :: proc(ed: ^Editor) {
 	resize(&ed.terrain_brush_offsets, len(ed.doc.terrain.controls))
 	for c, i in ed.doc.terrain.controls {
 		ed.terrain_brush_offsets[i] = c.offset
+	}
+}
+
+// --- the compiled stage -------------------------------------------------------
+
+// Point this window at its stage again. Stages are addressed by id here: the
+// venue window can add or remove one at any time, and an index would then name
+// a different stage without anything looking wrong. Returns false once the
+// stage is gone.
+stage_resync :: proc(ed: ^Editor) -> bool {
+	i := route_index(ed.doc.routes[:], ed.stage_id)
+	if i != ed.route_sel {
+		select_route(ed, i)
+	}
+	return i >= 0
+}
+
+stage_cache_clear :: proc(ed: ^Editor) {
+	delete(ed.stage.spline.points)
+	delete(ed.stage.ribbon)
+	ed.stage = {}
+}
+
+// Recompile when the key says the cached ribbon is out of date, and not
+// otherwise. A failure is cached too: the reason belongs on screen, and
+// retrying it every frame would only reallocate the same message.
+stage_cache_refresh :: proc(ed: ^Editor) {
+	route := selected_route(ed)
+	if route == nil {
+		stage_cache_clear(ed)
+		return
+	}
+	key := Stage_Key{
+		gen    = ed.doc.ribbon_gen,
+		start  = route.start,
+		finish = route.finish,
+		topo   = ed.doc.topo,
+	}
+	if ed.stage.state != .None && ed.stage.key == key {
+		return
+	}
+	stage_cache_clear(ed)
+	sp, msg, ok := geo.compile_stage(ed.doc.spline, route.start, route.finish)
+	ed.stage.key = key
+	ed.stage.state = ok ? .Ready : .Failed
+	set_buf(ed.stage.msg[:], msg)
+	if !ok {
+		return
+	}
+	ed.stage.spline = sp
+	ed.stage.ribbon = geo.build_ribbon(sp, int(ed.doc.topo), context.allocator)
+	if arc := geo.ribbon_arc(ed.stage.ribbon); len(arc) > 0 {
+		ed.stage.length = arc[len(arc) - 1]
 	}
 }
 
@@ -391,7 +481,7 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	ui.gizmo_set_rect(0, 0, f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight()))
 
 	gizmo_used, gizmo_shown := false, false
-	if pi := selected_point(ed); pi >= 0 && !ed.stage_mode && focused {
+	if pi := selected_point(ed); pi >= 0 && focused {
 		gizmo_shown = true
 		gizmo_used = gizmo_manipulate(&ed.doc.spline.points[pi], cam3d, ed.gizmo_mode)
 		if gizmo_used {
@@ -427,9 +517,10 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 }
 
 // S and F drop the start and finish lines wherever the cursor is on the road.
-// Placing one again just moves it; there is only ever one of each.
+// Placing one again just moves it; there is only ever one of each. This is the
+// whole of a stage window's road input.
 place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
-	if ui_keys || nav || !ed.stage_mode {
+	if ui_keys || nav {
 		return
 	}
 	route := selected_route(ed)
@@ -458,7 +549,7 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 // holds a raw pointer into that array while dragging, so this runs only once
 // the gizmo has released.
 edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys: bool) {
-	if gizmo_used || ui_mouse || ed.stage_mode {
+	if gizmo_used || ui_mouse {
 		return
 	}
 	if gfx.IsMouseButtonPressed(.RIGHT) && !nav {
@@ -516,14 +607,59 @@ editor_input :: proc(
 	// Edits below resize spline.points, which can reallocate it. The gizmo
 	// holds a raw pointer into that array while dragging, so never mutate
 	// the array mid-drag.
-	place_stage_markers(ed, ray, nav, ui_keys)
 	edit_road(ed, ray, gizmo_used, nav, ui_mouse, ui_keys)
 }
 
-// One frame of one editor window. Input, the scene, the panels, then the input
-// that needed to know what the gizmo did. The geometry is already current:
-// docs_rebuild ran before any window drew.
+// One frame of one editor window. The two kinds share a camera, a scene pass
+// and a menubar, and nothing else: a stage window has no gizmo, no brush and no
+// road edits. The geometry is already current — docs_rebuild ran before any
+// window drew.
 editor_frame :: proc(ed: ^Editor) {
+	switch ed.kind {
+	case .Venue:
+		venue_frame(ed)
+	case .Stage:
+		stage_frame(ed)
+	}
+}
+
+// A stage window: the venue road, the stage cut out of it, and the two keys
+// that move the cut. The road itself is read-only here.
+stage_frame :: proc(ed: ^Editor) {
+	gfx.BeginWindowFrame(&ed.window)
+	ui_mouse := ui.imgui_want_capture_mouse()
+	ui_keys := ui.imgui_want_capture_keyboard()
+	editor_hotkeys(ed, ui_keys)
+
+	nav := alt_held()
+	if !ui_mouse {
+		update_camera(&ed.cam)
+	}
+	cam3d := to_camera3d(ed.cam)
+	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
+
+	stage_resync(ed)
+	stage_cache_refresh(ed)
+	draw_stage_scene(ed, cam3d)
+
+	ui.imgui_backend_begin()
+	draw_menubar(ed)
+	draw_stage_inspector(ed)
+	if ed.show_demo {
+		ui.igShowDemoWindow(&ed.show_demo)
+	}
+	render_imgui(&ed.window)
+
+	place_stage_markers(ed, ray, nav, ui_keys)
+
+	gfx.EndWindowFrame(&ed.window)
+	free_all(context.temp_allocator)
+}
+
+// A venue window: the road graph, its terrain, and every gizmo that edits
+// either. Input, the scene, the panels, then the input that needed to know what
+// the gizmo did.
+venue_frame :: proc(ed: ^Editor) {
 	gfx.BeginWindowFrame(&ed.window)
 	// ImGui gets first refusal on input: a click on a panel, or a keypress
 	// into a text field, must never also reach the viewport behind it.
@@ -548,7 +684,7 @@ editor_frame :: proc(ed: ^Editor) {
 	// probe, which is accurate at the instant of the press.
 	shift := gfx.IsKeyDown(.LEFT_SHIFT) || gfx.IsKeyDown(.RIGHT_SHIFT)
 	if gfx.IsMouseButtonPressed(.LEFT) &&
-	   shift && !nav && !ui_mouse && !ed.gizmo_active && !ed.stage_mode &&
+	   shift && !nav && !ui_mouse && !ed.gizmo_active &&
 	   selected_point(ed) >= 0 &&
 	   ed.gizmo_hovered {
 		ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.doc.spline, ed.sel.idx)}
@@ -573,7 +709,7 @@ editor_frame :: proc(ed: ^Editor) {
 		terrain_brush_clear(ed)
 	}
 
-	draw_scene(ed, cam3d, node_pos, node_active, sel_node)
+	draw_venue_scene(ed, cam3d, node_pos, node_active, sel_node)
 
 	// --- ImGui frame (the gizmo both draws and reports interaction) ----
 	// ImGuizmo draws into an ImGui draw list, so it lives here rather than

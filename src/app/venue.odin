@@ -72,6 +72,16 @@ route_ids :: proc(p: Venue, allocator := context.temp_allocator) -> (ids, names:
 	return
 }
 
+// Where this stage sits in the list, or -1.
+route_index :: proc(routes: []Venue_Route, id: string) -> int {
+	for r, i in routes {
+		if r.id == id {
+			return i
+		}
+	}
+	return -1
+}
+
 route_has_markers :: proc(r: Venue_Route) -> bool {
 	return r.start.from >= 0 && r.start.to >= 0 && r.finish.from >= 0 && r.finish.to >= 0
 }

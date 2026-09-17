@@ -219,9 +219,9 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 		deployed ? "deployed" : "not deployed",
 	)
 
-	open := venue_editor_open(app, p.id) != nil
-	if ui.im_button(fmt.ctprintf("%s###open_%s", open ? "Show editor" : "Edit road network", p.id)) {
-		set_buf(app.open_request[:], p.id)
+	open := venue_window(app, p.id, .Venue) != nil
+	if ui.im_button(fmt.ctprintf("%s###open_%s", open ? "Show road network" : "Edit road network", p.id)) {
+		open_window_request(app, p.id, "")
 	}
 	ui.im_same_line()
 	draw_venue_deployment(app, p, deployed)
@@ -239,7 +239,40 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 			if ok { venues_screen_reload(ps) }
 		}
 	}
+	draw_venue_stages(app, p)
 	ui.igSpacing()
+}
+
+// One button per stage, opening that stage in a window of its own. This is the
+// only way into a stage.
+//
+// The names come from the open document when there is one, so a stage added but
+// not yet saved is here too — venue.json is only reloaded on a rescan.
+@(private = "file")
+draw_venue_stages :: proc(app: ^App, p: ^Venue) {
+	routes := p.routes
+	if doc := venue_doc_for(app, p.id); doc != nil {
+		routes = doc.routes[:]
+	}
+	if len(routes) == 0 {
+		ui.im_text_colored(DIM_COL, "no stages yet — add one in the road network window")
+		return
+	}
+	for route in routes {
+		open := venue_window(app, p.id, .Stage, route.id) != nil
+		if ui.im_button(fmt.ctprintf("%s###stage_%s_%s", route.name, p.id, route.id)) {
+			open_window_request(app, p.id, route.id)
+		}
+		ui.im_same_line()
+		switch {
+		case !route_has_markers(route):
+			ui.im_text_colored(WARN_COL, fmt.ctprintf("%s, no lines", route.id))
+		case open:
+			ui.im_text_colored(MINE_COL, fmt.ctprintf("%s, open", route.id))
+		case:
+			ui.im_text_colored(DIM_COL, fmt.ctprint(route.id))
+		}
+	}
 }
 
 @(private = "file")
@@ -347,7 +380,7 @@ first_playable_route :: proc(venue: d3.Venue) -> int {
 
 // --- opening -----------------------------------------------------------------
 
-open_venue_doc :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
+venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	path := venue_road_path(p.id)
 	migrating := false
 	// One-time compatibility bridge for projects made before venues owned a
@@ -379,15 +412,73 @@ open_venue_doc :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	return "", true
 }
 
-// An editor for this venue, or nil. One window per venue: two views of the
-// same road with two caches behind them would disagree the moment either edits.
-venue_editor_open :: proc(app: ^App, venue_id: string) -> ^Editor {
-	for editor in app.editors {
-		if editor.doc.open_venue == venue_id {
-			return editor
+// The open document for this venue, or nil. One document per venue however
+// many windows are on it: two caches behind one road would disagree the moment
+// either window edited.
+venue_doc_for :: proc(app: ^App, venue_id: string) -> ^Venue_Doc {
+	for doc in app.docs {
+		if doc.open_venue == venue_id {
+			return doc
 		}
 	}
 	return nil
+}
+
+// The window of this kind on this venue, or nil. One road-network window per
+// venue, and one window per stage, so a stage window is matched on its stage
+// as well as on its venue.
+venue_window :: proc(app: ^App, venue_id: string, kind: View_Kind, stage_id := "") -> ^Editor {
+	for ed in app.editors {
+		if ed.doc.open_venue != venue_id || ed.kind != kind {
+			continue
+		}
+		if kind == .Stage && ed.stage_id != stage_id {
+			continue
+		}
+		return ed
+	}
+	return nil
+}
+
+// The document for this venue, loaded if no window has it open yet.
+venue_doc_open :: proc(app: ^App, p: ^Venue) -> (doc: ^Venue_Doc, msg: string, ok: bool) {
+	if existing := venue_doc_for(app, p.id); existing != nil {
+		return existing, "", true
+	}
+	doc = doc_new(app)
+	if load_msg, loaded := venue_doc_load(doc, p); !loaded {
+		doc_delete(doc)
+		free(doc)
+		return nil, load_msg, false
+	}
+	append(&app.docs, doc)
+	return doc, "", true
+}
+
+// Give back a document no window ended up looking at. Only the failure path
+// between opening a document and creating its window needs this; every other
+// release goes through editors_detach.
+venue_doc_release :: proc(app: ^App, doc: ^Venue_Doc) {
+	for ed in app.editors {
+		if ed.doc == doc {
+			return
+		}
+	}
+	for d, i in app.docs {
+		if d == doc {
+			unordered_remove(&app.docs, i)
+			break
+		}
+	}
+	doc_delete(doc)
+	free(doc)
+}
+
+// Ask for a window. One request per frame is enough: it is serviced before the
+// next one is drawn, so a second click cannot overwrite an unserviced first.
+open_window_request :: proc(app: ^App, venue_id, stage_id: string) {
+	set_buf(app.open_request.venue[:], venue_id)
+	set_buf(app.open_request.stage[:], stage_id)
 }
 
 // Act on the button pressed during the last frame.
@@ -398,44 +489,90 @@ venue_editor_open :: proc(app: ^App, venue_id: string) -> ^Editor {
 // context that never had NewFrame, and draw into a command buffer that does not
 // exist. That is a segfault, and it is what this indirection exists to stop.
 app_service_open_request :: proc(app: ^App) {
-	id := buf_text(app.open_request[:])
+	id := buf_text(app.open_request.venue[:])
 	if id == "" {
 		return
 	}
+	stage_id := buf_text(app.open_request.stage[:])
 	defer app.open_request = {}
 	p, found := venue_for(&app.screen, id)
 	if !found {
 		set_status(&app.status, fmt.tprintf("%s is no longer there", id), false)
 		return
 	}
-	open_venue_window(app, p)
+	if stage_id != "" {
+		open_stage_window(app, p, stage_id)
+	} else {
+		open_venue_window(app, p)
+	}
 }
 
-// Open a venue in a window of its own, beside the project manager. The editor
-// is heap-allocated because gfx holds a pointer to the window inside it.
-open_venue_window :: proc(app: ^App, p: ^Venue) {
-	if existing := venue_editor_open(app, p.id); existing != nil {
-		gfx.RaiseWindow(&existing.window)
-		return
-	}
+// One window on a document, in the window list. nil when the window would not
+// open; the document is the caller's to give back. The editor is
+// heap-allocated because gfx holds a pointer to the window inside it.
+editor_open :: proc(app: ^App, doc: ^Venue_Doc, kind: View_Kind, title: cstring) -> ^Editor {
 	ed := new(Editor)
 	ed^ = view_defaults()
 	ed.app = app
-	if !editor_window_open(ed, fmt.ctprintf("dirtbench — %s", p.id)) {
+	ed.kind = kind
+	ed.doc = doc
+	if !editor_window_open(ed, title) {
 		set_status(&app.status, "could not open an editor window", false)
 		free(ed)
-		return
+		return nil
 	}
-	ed.doc = doc_new(app)
-	append(&app.docs, ed.doc)
 	append(&app.editors, ed)
-	if msg, ok := open_venue_doc(ed.doc, p); !ok {
-		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, msg), false)
-		editor_close(app, ed)
+	return ed
+}
+
+// The venue's road network, in a window beside the project manager.
+//
+// The document comes first and the window second, so a venue that will not load
+// costs no window. A window that will not open gives the document back.
+open_venue_window :: proc(app: ^App, p: ^Venue) {
+	if existing := venue_window(app, p.id, .Venue); existing != nil {
+		gfx.RaiseWindow(&existing.window)
 		return
 	}
-	select_route(ed, len(ed.doc.routes) > 0 ? 0 : -1)
+	doc, doc_msg, doc_ok := venue_doc_open(app, p)
+	if !doc_ok {
+		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
+		return
+	}
+	ed := editor_open(app, doc, .Venue, fmt.ctprintf("dirtbench — %s", p.id))
+	if ed == nil {
+		venue_doc_release(app, doc)
+		return
+	}
+	select_route(ed, len(doc.routes) > 0 ? 0 : -1)
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.id), true)
+}
+
+// One stage of a venue, in a window of its own: the same document, and a view
+// that moves nothing but that stage's two lines.
+open_stage_window :: proc(app: ^App, p: ^Venue, stage_id: string) {
+	if existing := venue_window(app, p.id, .Stage, stage_id); existing != nil {
+		gfx.RaiseWindow(&existing.window)
+		return
+	}
+	doc, doc_msg, doc_ok := venue_doc_open(app, p)
+	if !doc_ok {
+		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
+		return
+	}
+	if route_index(doc.routes[:], stage_id) < 0 {
+		set_status(&app.status, fmt.tprintf("%s has no stage %s", p.id, stage_id), false)
+		venue_doc_release(app, doc)
+		return
+	}
+	ed := editor_open(app, doc, .Stage, fmt.ctprintf("dirtbench — %s / %s", p.id, stage_id))
+	if ed == nil {
+		venue_doc_release(app, doc)
+		return
+	}
+	ed.stage_id = strings.clone(stage_id)
+	stage_resync(ed)
+	set_status(&app.status, fmt.tprintf("opened %s / %s", p.id, stage_id), true)
 }
 
 // Drop editors whose window the user closed. Their geometry is the largest
