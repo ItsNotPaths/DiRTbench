@@ -833,7 +833,7 @@ venue_deploy_dir :: proc(
 	dir: string,
 	deployed: bool,
 ) {
-	vs := &ed.install
+	vs := ed.install
 	if !vs.found {
 		return "", false
 	}

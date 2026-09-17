@@ -12,11 +12,15 @@ foreign import imgui "../../vendor/imgui/libimgui.a"
 @(default_calling_convention = "c")
 foreign imgui {
 	dirtImGuiProcessEvent :: proc(event: ^sdl.Event) ---
+	dirtImGuiSetCurrent :: proc(ctx: rawptr) ---
 }
 
 Window :: struct {
 	handle:       ^sdl.Window,
 	id:           sdl.WindowID,
+	// This window's ImGui context (ui.imgui_backend_setup). Made current with
+	// the window, so "the active window" is one idea rather than two.
+	imgui:        rawptr,
 	width:        i32,
 	height:       i32,
 	swapchain:    ^sdl.GPUTexture,
@@ -30,6 +34,7 @@ Window :: struct {
 	scene_drawn:  bool,
 	owns_sdl:     bool,
 	should_close: bool,
+	focused:      bool,
 	frame_start:  u64,
 	frame_time:   f32,
 	mouse:        Vector2,
@@ -98,6 +103,7 @@ CreateWindow :: proc(window: ^Window, width, height: i32, title: cstring) -> boo
 	_ = sdl.GetWindowSize(window.handle, &w, &h)
 	window.width, window.height = i32(w), i32(h)
 	window.frame_start = sdl.GetPerformanceCounter()
+	window.focused = true
 	append(&windows, window)
 	active_window = window
 	return true
@@ -126,7 +132,7 @@ DestroyWindow :: proc(window: ^Window) {
 		}
 	}
 	if active_window == window {
-		active_window = nil
+		SetActiveWindow(nil)
 	}
 	if window.owns_sdl {
 		window.owns_sdl = false
@@ -159,7 +165,8 @@ mouse_button_index :: proc(button: u8) -> (int, bool) {
 
 event_window_id :: proc(event: ^sdl.Event) -> sdl.WindowID {
 	#partial switch event.type {
-	case .WINDOW_CLOSE_REQUESTED, .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED: return event.window.windowID
+	case .WINDOW_CLOSE_REQUESTED, .WINDOW_RESIZED, .WINDOW_PIXEL_SIZE_CHANGED,
+	     .WINDOW_FOCUS_GAINED, .WINDOW_FOCUS_LOST: return event.window.windowID
 	case .MOUSE_MOTION: return event.motion.windowID
 	case .MOUSE_WHEEL: return event.wheel.windowID
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP: return event.button.windowID
@@ -195,6 +202,8 @@ apply_key_event :: proc(window: ^Window, event: ^sdl.Event) {
 apply_window_event :: proc(window: ^Window, event: ^sdl.Event) {
 	#partial switch event.type {
 	case .WINDOW_CLOSE_REQUESTED: window.should_close = true
+	case .WINDOW_FOCUS_GAINED: window.focused = true
+	case .WINDOW_FOCUS_LOST: window.focused = false
 	case .WINDOW_RESIZED: window.width, window.height = event.window.data1, event.window.data2
 	case .WINDOW_PIXEL_SIZE_CHANGED:
 		window.swapchain_w, window.swapchain_h = 0, 0
@@ -207,11 +216,18 @@ apply_window_event :: proc(window: ^Window, event: ^sdl.Event) {
 	}
 }
 
-route_window_event :: proc(event: ^sdl.Event) {
-	window := window_by_id(event_window_id(event))
-	if window != nil {
-		apply_window_event(window, event)
-	}
+// The active window and its ImGui context move together. Every input query in
+// this file and every ImGui call in ui/ reads one of the two, so letting them
+// drift apart would feed one window's keystrokes to another window's panels.
+SetActiveWindow :: proc(window: ^Window) {
+	active_window = window
+	dirtImGuiSetCurrent(window == nil ? nil : window.imgui)
+}
+
+// The ImGui context this window draws its panels with. Set once, after
+// ui.imgui_backend_setup has built it for this window.
+SetWindowImGui :: proc(window: ^Window, ctx: rawptr) {
+	window.imgui = ctx
 }
 
 PollWindowEvents :: proc() {
@@ -222,14 +238,19 @@ PollWindowEvents :: proc() {
 	}
 	event: sdl.Event
 	for sdl.PollEvent(&event) {
-		dirtImGuiProcessEvent(&event)
 		if event.type == .QUIT {
 			for window in windows {
 				window.should_close = true
 			}
 			continue
 		}
-		route_window_event(&event)
+		// Key and mouse-motion events carry no viewport the backend can check,
+		// so the context has to be chosen here or they land in the wrong window.
+		if target := window_by_id(event_window_id(&event)); target != nil {
+			SetActiveWindow(target)
+			dirtImGuiProcessEvent(&event)
+			apply_window_event(target, &event)
+		}
 	}
 }
 
@@ -252,7 +273,7 @@ ensure_depth :: proc(window: ^Window) {
 // a missing swapchain texture (minimized window) makes every later draw of
 // this frame a no-op; EndWindowFrame still submits.
 BeginWindowFrame :: proc(window: ^Window) {
-	active_window = window
+	SetActiveWindow(window)
 	window.cmd, window.swapchain, window.scene_drawn = nil, nil, false
 	window.swapchain_w, window.swapchain_h = window.width, window.height
 	if gpu_device == nil {
@@ -307,6 +328,22 @@ EndWindowFrame :: proc(window: ^Window) {
 	freq := sdl.GetPerformanceFrequency()
 	window.frame_time = f32(f64(now - window.frame_start) / f64(freq))
 	window.frame_start = now
+}
+
+// Bring a window to the front. Opening something that is already open should
+// show it, not make a second one.
+RaiseWindow :: proc(window: ^Window) {
+	if window.handle != nil {
+		sdl.RaiseWindow(window.handle)
+	}
+}
+
+// Whether this window has keyboard focus. ImGuizmo keeps one file-static drag
+// state for the whole process, so only the focused window may run a gizmo:
+// a second window manipulating in the same frame would clobber the first
+// window's drag half way through it.
+WindowFocused :: proc(window: ^Window) -> bool {
+	return window.focused
 }
 
 WindowShouldClose :: proc(window: ^Window) -> bool {

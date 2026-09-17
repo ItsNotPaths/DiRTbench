@@ -26,11 +26,6 @@ DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}
 MINE_COL :: ui.Im_Vec4{0.58, 0.82, 0.62, 1.0}
 
-Venue_Editor_Process :: struct {
-	venue_id: string,
-	process:  os.Process,
-}
-
 // What the screen is doing. The new-venue form is modal in spirit: while it is
 // up, the list is still drawn but nothing else is actionable.
 Venues_Screen :: struct {
@@ -43,7 +38,6 @@ Venues_Screen :: struct {
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
 	delete_ready: string, // second click confirms project deletion
-	editors:      [dynamic]Venue_Editor_Process,
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
@@ -56,10 +50,6 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	delete(ps.error)
 	delete(ps.deploy_ready)
 	delete(ps.delete_ready)
-	for editor in ps.editors {
-		delete(editor.venue_id)
-	}
-	delete(ps.editors)
 	ps^ = {}
 }
 
@@ -84,9 +74,9 @@ venue_for :: proc(ps: ^Venues_Screen, id: string) -> (^Venue, bool) {
 
 // --- the screen --------------------------------------------------------------
 
-draw_venues_screen :: proc(ed: ^Editor) {
-	ps := &ed.screen
-	vs := &ed.install
+draw_venues_screen :: proc(app: ^App) {
+	ps := &app.screen
+	vs := &app.install
 
 	ui.igSetNextWindowPos({0, 22}, .Always, {0, 0})
 	ui.igSetNextWindowSize({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight() - 22)}, .Always)
@@ -127,20 +117,20 @@ draw_venues_screen :: proc(ed: ^Editor) {
 	}
 
 	if ps.adding {
-		draw_new_venue(ed)
+		draw_new_venue(app)
 	}
 
 	ui.igSeparatorText("Yours")
 	mine := 0
 	for &p in ps.venues {
-		draw_venue_row(ed, &p)
+		draw_venue_row(app, &p)
 		mine += 1
 	}
 	if mine == 0 {
 		ui.im_text_colored(DIM_COL, "(none yet — New venue starts one)")
 	}
 
-	draw_status_text(ed)
+	draw_status_text(&app.status)
 	ui.igSeparatorText("Stock — read-only")
 	for venue in vs.install.venues {
 		if _, ours := venue_for(ps, venue.id); ours {
@@ -167,14 +157,14 @@ draw_no_install :: proc(vs: ^Install_Scan) {
 }
 
 @(private = "file")
-draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
-	ps := &ed.screen
+draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
+	ps := &app.screen
 	if deployed {
 		if ui.im_button(fmt.ctprintf("Revert deployment###revert_%s", p.id)) {
-			msg, ok := venue_revert(&ed.install, p^)
-			set_status(ed, msg, ok)
+			msg, ok := venue_revert(&app.install, p^)
+			set_status(&app.status, msg, ok)
 			if ok {
-				install_scan_rescan(&ed.install)
+				install_scan_rescan(&app.install)
 			}
 		}
 		return
@@ -185,15 +175,15 @@ draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
 	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
 		stages, compile_msg, compiled := venue_compile(p^, context.temp_allocator)
 		if !compiled {
-			set_status(ed, compile_msg, false)
+			set_status(&app.status, compile_msg, false)
 			delete(ps.deploy_ready)
 			ps.deploy_ready = ""
 			return
 		}
 		venue_compiled_delete(stages, context.temp_allocator)
-		msg, ok := venue_deploy_preflight(&ed.install, p^)
+		msg, ok := venue_deploy_preflight(&app.install, p^)
 		msg = fmt.tprintf("%s; %s", compile_msg, msg)
-		set_status(ed, msg, ok)
+		set_status(&app.status, msg, ok)
 		delete(ps.deploy_ready)
 		ps.deploy_ready = ok ? strings.clone(p.id) : ""
 	}
@@ -202,26 +192,26 @@ draw_venue_deployment :: proc(ed: ^Editor, p: ^Venue, deployed: bool) {
 	}
 	ui.im_same_line()
 	if ui.im_button(fmt.ctprintf("Apply deploy###apply_%s", p.id)) {
-		msg, ok := venue_deploy(&ed.install, p^)
-		set_status(ed, msg, ok)
+		msg, ok := venue_deploy(&app.install, p^)
+		set_status(&app.status, msg, ok)
 		delete(ps.deploy_ready)
 		ps.deploy_ready = ""
 		if ok {
-			install_scan_rescan(&ed.install)
+			install_scan_rescan(&app.install)
 		}
 	}
 }
 
 @(private = "file")
-draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
-	ps := &ed.screen
+draw_venue_row :: proc(app: ^App, p: ^Venue) {
+	ps := &app.screen
 	label := fmt.ctprintf("%s###venue_%s", p.id, p.id)
 	if !ui.igCollapsingHeader_TreeNodeFlags(label, ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
 	ui.im_text_colored(MINE_COL, fmt.ctprintf("art from %s/%s", p.base, p.base_route))
 	deployed := false
-	if venue, found := d3.install_venue(&ed.install.install, p.location, p.id); found {
+	if venue, found := d3.install_venue(&app.install.install, p.location, p.id); found {
 		deployed = d3.venue_playable(venue^)
 	}
 	ui.im_text_colored(
@@ -229,14 +219,12 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 		deployed ? "deployed" : "not deployed",
 	)
 
-	active := venue_editor_running(ps, p.id)
-	ui.igBeginDisabled(active)
-	if ui.im_button(fmt.ctprintf("%s###open_%s", active ? "Editor open" : "Edit road network", p.id)) {
-		launch_venue_editor(ed, p.id)
+	open := venue_editor_open(app, p.id) != nil
+	if ui.im_button(fmt.ctprintf("%s###open_%s", open ? "Show editor" : "Edit road network", p.id)) {
+		set_buf(app.open_request[:], p.id)
 	}
-	ui.igEndDisabled()
 	ui.im_same_line()
-	draw_venue_deployment(ed, p, deployed)
+	draw_venue_deployment(app, p, deployed)
 	ui.im_same_line()
 	confirming := ps.delete_ready == p.id
 	if ui.im_button(fmt.ctprintf("%s###delete_%s", confirming ? "Confirm delete" : "Delete...", p.id)) {
@@ -244,8 +232,8 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 			delete(ps.delete_ready)
 			ps.delete_ready = strings.clone(p.id)
 		} else {
-			msg, ok := venue_delete(&ed.install, p^)
-			set_status(ed, msg, ok)
+			msg, ok := venue_delete(&app.install, p^)
+			set_status(&app.status, msg, ok)
 			delete(ps.delete_ready)
 			ps.delete_ready = ""
 			if ok { venues_screen_reload(ps) }
@@ -287,9 +275,9 @@ draw_stock_row :: proc(ps: ^Venues_Screen, venue: d3.Venue) {
 // --- new venue ---------------------------------------------------------------
 
 @(private = "file")
-draw_new_venue :: proc(ed: ^Editor) {
-	ps := &ed.screen
-	vs := &ed.install
+draw_new_venue :: proc(app: ^App) {
+	ps := &app.screen
+	vs := &app.install
 
 	ui.igSeparatorText("New venue")
 	ui.igInputText("id", &ps.name_buf[0], len(ps.name_buf), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
@@ -340,7 +328,7 @@ draw_new_venue :: proc(ed: ^Editor) {
 			ps.adding = false
 			ps.name_buf, ps.display_buf = {}, {}
 			venues_screen_reload(ps)
-			set_status(ed, fmt.tprintf("created %s from %s", id, spec), true)
+			set_status(&app.status, fmt.tprintf("created %s from %s", id, spec), true)
 		}
 	}
 	ui.igEndDisabled()
@@ -369,7 +357,7 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 		migrating = true
 	}
 	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing, &ed.terrain); !ok {
-		set_status(ed, msg, false)
+		set_status(&ed.status, msg, false)
 		return false
 	}
 	routes_free(&ed.routes)
@@ -378,12 +366,12 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 	ed.stage_mode = false
 	if migrating {
 		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing, &ed.terrain); !ok {
-			set_status(ed, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
+			set_status(&ed.status, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
 			return false
 		}
 		p.version = VENUE_VERSION
 		if msg, ok := venue_save(p^); !ok {
-			set_status(ed, fmt.tprintf("migrated road but could not update venue: %s", msg), false)
+			set_status(&ed.status, fmt.tprintf("migrated road but could not update venue: %s", msg), false)
 			return false
 		}
 	}
@@ -393,73 +381,101 @@ open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 	ed.open_stage = ""
 	set_stage_name(ed, p.id)
 	mark_dirty(ed)
-	set_status(ed, fmt.tprintf("editing %s road network", p.id), true)
+	set_status(&ed.status, fmt.tprintf("editing %s road network", p.id), true)
 	return true
 }
 
-venue_editor_running :: proc(ps: ^Venues_Screen, venue_id: string) -> bool {
-	for editor in ps.editors {
-		if editor.venue_id == venue_id {
-			return true
+// An editor for this venue, or nil. One window per venue: two views of the
+// same road with two caches behind them would disagree the moment either edits.
+venue_editor_open :: proc(app: ^App, venue_id: string) -> ^Editor {
+	for editor in app.editors {
+		if editor.open_venue == venue_id {
+			return editor
 		}
 	}
-	return false
+	return nil
 }
 
-// Argument slices avoid platform-specific shell quoting.
-launch_venue_editor :: proc(ed: ^Editor, venue_id: string) {
-	if venue_editor_running(&ed.screen, venue_id) {
-		set_status(ed, fmt.tprintf("%s already has an editor open", venue_id), false)
+// Act on the button pressed during the last frame.
+//
+// Opening a window creates an ImGui context and makes it current, and it
+// repoints gfx's active window. Neither may happen inside another window's
+// frame: the project manager would go on to call ImGui::Render against a
+// context that never had NewFrame, and draw into a command buffer that does not
+// exist. That is a segfault, and it is what this indirection exists to stop.
+app_service_open_request :: proc(app: ^App) {
+	id := buf_text(app.open_request[:])
+	if id == "" {
 		return
 	}
-	exe, err := os.get_executable_path(context.temp_allocator)
-	if err != nil {
-		set_status(ed, fmt.tprintf("could not locate dirtbench: %v", err), false)
+	defer app.open_request = {}
+	p, found := venue_for(&app.screen, id)
+	if !found {
+		set_status(&app.status, fmt.tprintf("%s is no longer there", id), false)
 		return
 	}
-	command := []string{exe, "--editor", venue_id}
-	process, start_err := os.process_start({command = command})
-	if start_err != nil {
-		set_status(ed, fmt.tprintf("could not launch editor: %v", start_err), false)
-		return
-	}
-	append(
-		&ed.screen.editors,
-		Venue_Editor_Process{venue_id = strings.clone(venue_id), process = process},
-	)
-	set_status(ed, fmt.tprintf("opened %s in a new editor window", venue_id), true)
+	open_venue_window(app, p)
 }
 
-venues_editors_reap :: proc(ps: ^Venues_Screen) {
-	for i := len(ps.editors) - 1; i >= 0; i -= 1 {
-		state, err := os.process_wait(ps.editors[i].process, timeout = 0)
-		if err == nil && state.exited {
-			delete(ps.editors[i].venue_id)
-			unordered_remove(&ps.editors, i)
+// Open a venue in a window of its own, beside the project manager. The editor
+// is heap-allocated because gfx holds a pointer to the window inside it.
+open_venue_window :: proc(app: ^App, p: ^Venue) {
+	if existing := venue_editor_open(app, p.id); existing != nil {
+		rl.RaiseWindow(&existing.window)
+		return
+	}
+	ed := new(Editor)
+	ed^ = editor_defaults()
+	ed.app = app
+	ed.install = &app.install
+	if !editor_window_open(ed, fmt.ctprintf("dirtbench — %s", p.id)) {
+		set_status(&app.status, "could not open an editor window", false)
+		editor_delete(ed)
+		free(ed)
+		return
+	}
+	if !open_venue_editor(ed, p) {
+		msg, _ := status_text(&ed.status)
+		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, msg), false)
+		editor_close(ed)
+		return
+	}
+	append(&app.editors, ed)
+	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.id), true)
+}
+
+// Drop editors whose window the user closed. Their geometry is the largest
+// thing this process holds, so it goes as soon as the window does.
+venues_editors_reap :: proc(app: ^App) {
+	for i := len(app.editors) - 1; i >= 0; i -= 1 {
+		ed := app.editors[i]
+		if rl.WindowShouldClose(&ed.window) || ed.quit {
+			editor_close(ed)
+			unordered_remove(&app.editors, i)
 		}
 	}
 }
 
-// One frame of the venue screen. Deliberately not the editor's frame with
-// panels swapped: there is no camera, no gizmo and no geometry here, and a mode
-// that shares a loop with the editor ends up sharing its state too.
-draw_venues_frame :: proc(ed: ^Editor, window: ^rl.Window) {
-	rl.BeginWindowFrame(window)
+// One frame of the project manager window. Deliberately not the editor's frame
+// with panels swapped: there is no camera, no gizmo and no geometry here, and a
+// window that shares a loop with the editor ends up sharing its state too.
+draw_venues_frame :: proc(app: ^App) {
+	rl.BeginWindowFrame(&app.window)
 	rl.ClearBackground({22, 24, 29, 255})
 
 	ui.imgui_backend_begin()
-	draw_venues_menubar(ed)
-	draw_venues_screen(ed)
-	if ed.show_demo {
-		ui.igShowDemoWindow(&ed.show_demo)
+	draw_venues_menubar(app)
+	draw_venues_screen(app)
+	if app.show_demo {
+		ui.igShowDemoWindow(&app.show_demo)
 	}
-	render_imgui(window)
+	render_imgui(&app.window)
 
-	rl.EndWindowFrame(window)
+	rl.EndWindowFrame(&app.window)
 }
 
 @(private = "file")
-draw_venues_menubar :: proc(ed: ^Editor) {
+draw_venues_menubar :: proc(app: ^App) {
 	if !ui.igBeginMainMenuBar() {
 		return
 	}
@@ -467,19 +483,19 @@ draw_venues_menubar :: proc(ed: ^Editor) {
 
 	if ui.igBeginMenu("File", true) {
 		if ui.igMenuItem_Bool("Rescan install", nil, false, true) {
-			install_scan_rescan(&ed.install)
-			venues_screen_reload(&ed.screen)
-			set_status(ed, install_scan_status_text(&ed.install), ed.install.found)
+			install_scan_rescan(&app.install)
+			venues_screen_reload(&app.screen)
+			set_status(&app.status, install_scan_status_text(&app.install), app.install.found)
 		}
 		ui.igSeparator()
 		if ui.igMenuItem_Bool("Quit", "Esc", false, true) {
-			ed.quit = true
+			app.quit = true
 		}
 		ui.igEndMenu()
 	}
 	if ui.igBeginMenu("View", true) {
-		if ui.igMenuItem_Bool("ImGui demo window", nil, ed.show_demo, true) {
-			ed.show_demo = !ed.show_demo
+		if ui.igMenuItem_Bool("ImGui demo window", nil, app.show_demo, true) {
+			app.show_demo = !app.show_demo
 		}
 		ui.igEndMenu()
 	}

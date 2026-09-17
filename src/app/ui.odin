@@ -39,13 +39,13 @@ do_save :: proc(ed: ^Editor) {
 		if ok {
 			msg = fmt.tprintf("saved %s road network and stage lines", ed.open_venue)
 		}
-		set_status(ed, msg, ok)
+		set_status(&ed.status, msg, ok)
 		return
 	}
 	name := sanitise_stage_name(stage_name_text(ed))
 	set_stage_name(ed, name)
 	msg, ok := save_stage(ed.spline, name, ed.veg, ed.timing, &ed.terrain)
-	set_status(ed, msg, ok)
+	set_status(&ed.status, msg, ok)
 }
 
 // Export what is on screen, so the stage name doubles as the item and map name.
@@ -58,7 +58,7 @@ do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 	set_stage_name(ed, name)
 	rebuild_geometry(ed)
 	msg, ok := export_stage(ed, name, target)
-	set_status(ed, msg, ok)
+	set_status(&ed.status, msg, ok)
 }
 
 do_load :: proc(ed: ^Editor, name: string) {
@@ -70,7 +70,7 @@ do_load :: proc(ed: ^Editor, name: string) {
 		ed.sel = {} // indices from the old spline mean nothing now
 		mark_dirty(ed)
 	}
-	set_status(ed, msg, ok)
+	set_status(&ed.status, msg, ok)
 }
 
 do_new :: proc(ed: ^Editor) {
@@ -80,7 +80,7 @@ do_new :: proc(ed: ^Editor) {
 	geo.terrain_invalidate(&ed.terrain)
 	set_stage_name(ed, "untitled")
 	mark_dirty(ed)
-	set_status(ed, "new stage", true)
+	set_status(&ed.status, "new stage", true)
 }
 
 // Regenerating reallocates spline.points, so it must never run while the gizmo
@@ -95,7 +95,7 @@ do_generate :: proc(ed: ^Editor, frame_camera: bool) {
 			frame_spline(&ed.cam, ed.spline)
 		}
 	}
-	set_status(ed, msg, ok)
+	set_status(&ed.status, msg, ok)
 }
 
 // --- UI ---------------------------------------------------------------------
@@ -152,8 +152,8 @@ draw_menubar :: proc(ed: ^Editor) {
 	}
 	if ui.igBeginMenu("Dirt 3", true) {
 		if ui.igMenuItem_Bool("Rescan install", nil, false, true) {
-			install_scan_rescan(&ed.install)
-			set_status(ed, install_scan_status_text(&ed.install), ed.install.found)
+			install_scan_rescan(ed.install)
+			set_status(&ed.status, install_scan_status_text(ed.install), ed.install.found)
 		}
 		ui.igEndMenu()
 	}
@@ -172,14 +172,14 @@ draw_menubar :: proc(ed: ^Editor) {
 // The last save/load/export result, green or red, for however long
 // STATUS_LINGER allows. Drawn by the inspector and by the venue screen, which
 // is why it is not inline in either.
-draw_status_text :: proc(ed: ^Editor) {
-	msg, shown := status_text(ed)
+draw_status_text :: proc(s: ^Status) {
+	msg, shown := status_text(s)
 	if !shown {
 		return
 	}
 	green := ui.Im_Vec4{0.45, 0.85, 0.5, 1}
 	red := ui.Im_Vec4{1.0, 0.45, 0.4, 1}
-	ui.im_text_colored(ed.status_ok ? green : red, msg)
+	ui.im_text_colored(s.ok ? green : red, msg)
 }
 
 // The venue's stage list. A stage is a name and two markers on this road, so
@@ -325,7 +325,7 @@ draw_inspector :: proc(ed: ^Editor) {
 		geo.reverse_spline(&ed.spline)
 		ed.sel = {}
 		mark_dirty(ed)
-		set_status(ed, "reversed driving direction", true)
+		set_status(&ed.status, "reversed driving direction", true)
 	}
 	ui.igEndDisabled()
 	ui.im_same_line()
@@ -335,7 +335,7 @@ draw_inspector :: proc(ed: ^Editor) {
 	ui.im_same_line()
 	ui.im_text(fmt.ctprintf("%d points", len(ed.spline.points)))
 
-	draw_status_text(ed)
+	draw_status_text(&ed.status)
 
 	if ed.open_venue != "" {
 		draw_stages(ed)
@@ -526,7 +526,7 @@ draw_pace_section :: proc(ed: ^Editor) {
 		mark_dirty(ed)
 	}
 	ui.igSpacing()
-	pace_ready := len(ed.clips) > 0
+	pace_ready := len(ed.app.clips) > 0
 	ui.igBeginDisabled(!pace_ready || len(ed.notes) == 0)
 	if ui.im_button(ed.previewing ? "Stop ride" : "Preview ride") {
 		preview_toggle(ed)
@@ -536,7 +536,7 @@ draw_pace_section :: proc(ed: ^Editor) {
 	// Direct playback test: bypasses the ride/queue entirely, so a silent result
 	// here points at the audio device, not our sequencing.
 	if ui.im_button("Test clip") {
-		if snd, ok := ed.clips["hairpin-left"]; ok {
+		if snd, ok := ed.app.clips["hairpin-left"]; ok {
 			rl.PlaySound(snd)
 		}
 	}
@@ -548,7 +548,7 @@ draw_pace_section :: proc(ed: ^Editor) {
 		nextm := ed.preview_next < len(ed.notes) ? ed.notes[ed.preview_next].station - ed.preview_s : 0
 		ui.im_text(fmt.ctprintf("riding %.0f m  (next call in %.0f m)", ed.preview_s, max(0, nextm)))
 	} else {
-		ui.im_text(fmt.ctprintf("%d clips loaded", len(ed.clips)))
+		ui.im_text(fmt.ctprintf("%d clips loaded", len(ed.app.clips)))
 	}
 	ui.igSpacing()
 

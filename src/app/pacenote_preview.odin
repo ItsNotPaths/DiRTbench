@@ -65,12 +65,12 @@ pace_ride_pos :: proc(ribbon: []geo.Cross_Section, arc: []f32, s: f32) -> (pos, 
 // Start/stop the ride from the head of the spline.
 preview_toggle :: proc(ed: ^Editor) {
 	ed.previewing = !ed.previewing
-	if ed.play_i < len(ed.play_q) {
-		rl.StopSound(ed.play_q[ed.play_i])
+	if ed.app.play_i < len(ed.app.play_q) {
+		rl.StopSound(ed.app.play_q[ed.app.play_i])
 	}
-	clear(&ed.play_q)
-	ed.play_i = 0
-	ed.play_started = false
+	clear(&ed.app.play_q)
+	ed.app.play_i = 0
+	ed.app.play_started = false
 	if ed.previewing {
 		ed.preview_s = 0
 		ed.preview_next = 0
@@ -89,9 +89,9 @@ preview_toggle :: proc(ed: ^Editor) {
 
 @(private = "file")
 pace_enqueue :: proc(ed: ^Editor, nt: geo.Pace_Note) {
-	for name in geo.pace_tile(geo.pace_note_tokens(nt), ed.clips) {
-		if snd, ok := ed.clips[name]; ok {
-			append(&ed.play_q, snd)
+	for name in geo.pace_tile(geo.pace_note_tokens(nt), ed.app.clips) {
+		if snd, ok := ed.app.clips[name]; ok {
+			append(&ed.app.play_q, snd)
 		}
 	}
 }
@@ -99,21 +99,21 @@ pace_enqueue :: proc(ed: ^Editor, nt: geo.Pace_Note) {
 // Play the queued clips one after another: start the head, advance when it ends.
 @(private = "file")
 pace_pump_queue :: proc(ed: ^Editor) {
-	if ed.play_i >= len(ed.play_q) {
-		if len(ed.play_q) > 0 {
-			clear(&ed.play_q)
-			ed.play_i = 0
-			ed.play_started = false
+	if ed.app.play_i >= len(ed.app.play_q) {
+		if len(ed.app.play_q) > 0 {
+			clear(&ed.app.play_q)
+			ed.app.play_i = 0
+			ed.app.play_started = false
 		}
 		return
 	}
-	cur := ed.play_q[ed.play_i]
-	if !ed.play_started {
+	cur := ed.app.play_q[ed.app.play_i]
+	if !ed.app.play_started {
 		rl.PlaySound(cur)
-		ed.play_started = true
+		ed.app.play_started = true
 	} else if !rl.IsSoundPlaying(cur) {
-		ed.play_i += 1
-		ed.play_started = false
+		ed.app.play_i += 1
+		ed.app.play_started = false
 	}
 }
 

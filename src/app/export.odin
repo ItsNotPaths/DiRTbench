@@ -250,7 +250,7 @@ build_export_job :: proc(ed: ^Editor, name: string) -> (job: Export_Job, msg: st
 	job.timing = ed.timing
 	// glTF needs no shaders, so a missing profile is only fatal for the target
 	// that names them.
-	job.profile, job.profile_msg, _ = export_profile(&ed.install, ed.open_venue, context.temp_allocator)
+	job.profile, job.profile_msg, _ = export_profile(ed.install, ed.open_venue, context.temp_allocator)
 	job.props = geo.veg_generate(
 		ed.ribbon,
 		&ed.terrain,
@@ -305,7 +305,7 @@ export_dest :: proc(
 			}
 			return route, true, "", true
 		}
-		route := install_scan_route_dir(&ed.install)
+		route := install_scan_route_dir(ed.install)
 		if route == "" {
 			return "", false, "no route selected: open one from Dirt 3 > Install_Scan, or tick Write to out/", false
 		}
@@ -403,7 +403,9 @@ export_headless :: proc(
 
 	// The install scan is the only thing that knows where the game is, so a
 	// headless export into it needs the scan too.
+	scan: Install_Scan
 	ed := Editor {
+		install   = &scan,
 		topo      = geo.SAMPLES_PER_SEG,
 		roughness = roughness,
 		terrain   = geo.TERRAIN_DEFAULTS,
@@ -411,15 +413,15 @@ export_headless :: proc(
 		veg       = geo.VEG_DEFAULTS,
 	}
 	ed.debug_export = debug_out
-	install_scan_init(&ed.install)
-	defer install_scan_delete(&ed.install)
+	install_scan_init(ed.install)
+	defer install_scan_delete(ed.install)
 	// `--venue <id>` names one of ours and `stage` is its stage; `--route
 	// <venue>/<route_n>` names a route already in the game. They are the two
 	// destinations an install can have, and only one applies at a time.
 	if venue != "" {
 		ed.open_venue, ed.open_stage = venue, stage
 	} else if route != "" {
-		if m, sok := install_scan_select(&ed.install, route); !sok {
+		if m, sok := install_scan_select(ed.install, route); !sok {
 			return m, false
 		}
 	}

@@ -67,11 +67,20 @@ Im_Col :: enum c.int {
 
 @(default_calling_convention = "c")
 foreign imgui {
-	// Creates the ImGui context on an SDL window; rendering goes through the
+	// Creates an ImGui context on an SDL window; rendering goes through the
 	// SDL_GPU backend. `device` is the gfx GPU device, `color_format` the
-	// window's swapchain texture format as an integer.
+	// window's swapchain texture format as an integer. Returns the context, or
+	// nil, and leaves it current. One per window — see the shim for why.
 	@(link_name = "dirtImGuiSetup")
-	imgui_backend_setup :: proc(dark_theme: bool, window, device: rawptr, color_format: c.int) -> bool ---
+	imgui_backend_setup :: proc(dark_theme: bool, window, device: rawptr, color_format: c.int) -> rawptr ---
+	// Which context the ImGui and ImGuizmo calls below act on. gfx switches this
+	// with the active window, so nothing else should need to call it.
+	@(link_name = "dirtImGuiSetCurrent")
+	imgui_backend_set_current :: proc(ctx: rawptr) ---
+	// Where this context saves its window layout. nil turns saving off, which is
+	// what every window but the first wants: they would write over each other.
+	@(link_name = "dirtImGuiSetIniFilename")
+	imgui_backend_set_ini :: proc(ctx: rawptr, name: cstring) ---
 	// Begins the ImGui frame (feeds input, calls NewFrame). All ImGui and
 	// ImGuizmo calls for the frame go between Begin and Prepare.
 	@(link_name = "dirtImGuiBegin")
@@ -83,9 +92,9 @@ foreign imgui {
 	// Records the prepared draw data into the caller's swapchain pass.
 	@(link_name = "dirtImGuiDraw")
 	imgui_backend_draw :: proc(cmd, pass: rawptr) ---
-	// Destroys the context before its SDL window and GL context disappear.
+	// Destroys one context before its SDL window disappears.
 	@(link_name = "dirtImGuiShutdown")
-	imgui_backend_shutdown :: proc() ---
+	imgui_backend_shutdown :: proc(ctx: rawptr) ---
 }
 
 // --- dirt_imgui_shim: ImGuiIO fields with no flat-C accessor -------------------

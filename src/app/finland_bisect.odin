@@ -78,7 +78,7 @@ finland_bisect_prepare :: proc(
 
 	p, load_msg, loaded := venue_load(venue_id, context.temp_allocator)
 	if !loaded { return base, load_msg, false }
-	donor_venue, donor_route, found := venue_source(&ed.install, p)
+	donor_venue, donor_route, found := venue_source(ed.install, p)
 	if !found { return base, fmt.tprintf("could not resolve %s's base venue in the live install", venue_id), false }
 	base.donor_vis_path, _ = filepath.join({donor_route.dir, "track.vis"}, allocator)
 
@@ -99,7 +99,7 @@ finland_bisect_prepare :: proc(
 	if !read_ok { return base, fmt.tprintf("track.jpk: %s", read_msg), false }
 	defer d3.d3_collision_delete(&collision, context.allocator)
 
-	profile, profile_msg, profile_ok := export_profile(&ed.install, venue_id, allocator)
+	profile, profile_msg, profile_ok := export_profile(ed.install, venue_id, allocator)
 	if !profile_ok { return base, fmt.tprintf("profile: %s", profile_msg), false }
 	base.profile = profile
 
@@ -159,9 +159,10 @@ finland_bisect_render_profile :: proc(profile: ^d3.Venue_Profile) -> d3.Venue_Pr
 }
 
 finland_bisect_stage1_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: bool) {
-	ed: Editor
-	install_scan_init(&ed.install)
-	defer install_scan_delete(&ed.install)
+	scan: Install_Scan
+	ed := Editor{install = &scan}
+	install_scan_init(ed.install)
+	defer install_scan_delete(ed.install)
 	base, prep_msg, prepped := finland_bisect_prepare(&ed, venue_id, route_id, context.allocator)
 	if !prepped { return prep_msg, false }
 	defer delete(base.tris)
@@ -225,9 +226,10 @@ FINLAND_BISECT_FLAT_CELLS_X :: 60
 FINLAND_BISECT_FLAT_CELLS_Z :: 60
 
 finland_bisect_stage1_flat_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: bool) {
-	ed: Editor
-	install_scan_init(&ed.install)
-	defer install_scan_delete(&ed.install)
+	scan: Install_Scan
+	ed := Editor{install = &scan}
+	install_scan_init(ed.install)
+	defer install_scan_delete(ed.install)
 	base, prep_msg, prepped := finland_bisect_prepare(&ed, venue_id, route_id, context.allocator)
 	if !prepped { return prep_msg, false }
 	defer delete(base.tris)
@@ -284,9 +286,10 @@ finland_bisect_short_collision :: proc(route: []d3.Route_Sample, allocator := co
 }
 
 finland_bisect_short_headless :: proc(venue_id, route_id: string) -> (msg: string, ok: bool) {
-	ed: Editor
-	install_scan_init(&ed.install)
-	defer install_scan_delete(&ed.install)
+	scan: Install_Scan
+	ed := Editor{install = &scan}
+	install_scan_init(ed.install)
+	defer install_scan_delete(ed.install)
 	base, prep_msg, prepped := finland_bisect_prepare(&ed, venue_id, route_id, context.allocator)
 	if !prepped { return prep_msg, false }
 	defer delete(base.tris)

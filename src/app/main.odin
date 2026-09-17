@@ -9,10 +9,13 @@ package main
 // Right-click inserts a point into the road under the cursor, or appends one on
 // open ground. Panels are Dear ImGui, through ui/imgui.odin.
 //
-// dirtbench boots into the project manager (venues_ui.odin). It launches this
-// editor as a separate `--editor <venue>` process: picking the world comes
-// before drawing a road in it. A finished road goes to an export target
-// (export.odin), and the editor does not know which game that is.
+// dirtbench boots into the project manager (venues_ui.odin), which is window 0
+// of one process. Opening a venue gives it an editor window beside it, over an
+// Editor of its own: picking the world comes before drawing a road in it. One
+// process, because a stage window has to see the venue's live terrain, and that
+// is free when they share a cache and expensive when they do not. A finished
+// road goes to an export target (export.odin), and the editor does not know
+// which game that is.
 
 import "core:c"
 import "core:fmt"
@@ -91,8 +94,35 @@ STATUS_LINGER :: 8.0
 TOPO_MIN :: 2
 TOPO_MAX :: 48
 
+// The process. One project-manager window, one scan of the game install, and
+// however many venue editors are open over it. Everything in here is shared;
+// everything per-venue is in Editor.
+App :: struct {
+	window:  rl.Window,
+	imgui:   rawptr,
+	install: Install_Scan,
+	screen:  Venues_Screen,
+	editors: [dynamic]^Editor,
+	// The venue a button asked to open, serviced between frames. See
+	// app_service_open_request for why it cannot happen inside one.
+	open_request: [64]u8,
+	status:  Status,
+	show_demo: bool,
+	quit:    bool,
+	// One audio device per process, so one clip bank and one playback queue.
+	// Whichever window starts a ride preview owns them until it stops.
+	clips:        map[string]rl.Sound, // basename -> decoded OGG
+	play_q:       [dynamic]rl.Sound,   // clips to play back-to-back
+	play_i:       int,
+	play_started: bool,
+}
+
 Editor :: struct {
-	screen:        Venues_Screen,
+	// This editor's own window. Heap-allocated with the Editor, because gfx
+	// keeps a pointer to it in its window list.
+	window:        rl.Window,
+	imgui:         rawptr,
+	app:           ^App,
 	// Which venue stage the editor has open, "" when it is a loose stage out of
 	// maps/. Saving writes back to the venue.
 	open_venue:  string,
@@ -124,7 +154,10 @@ Editor :: struct {
 	show_targets:  bool, // the Export targets panel
 	debug_export:  bool, // write to out/ instead of into the game (export.odin)
 	gen:           Gen_Params,
-	install:       Install_Scan,
+	// The one scan of the game install, borrowed. The project manager owns it
+	// and every editor window reads the same one, so a rescan in any window is
+	// seen by all of them. Headless CLI paths point this at a local.
+	install:       ^Install_Scan,
 	gen_live:      bool, // regenerate while a slider is being dragged
 	quit:          bool,
 
@@ -171,19 +204,21 @@ Editor :: struct {
 	preview_pos:   rl.Vector3,
 	preview_next:  int, // index of the next note to fire
 	preview_last:  int, // index of the last note fired (for the HUD), or -1
-	clips:         map[string]rl.Sound, // basename -> decoded OGG
-	play_q:        [dynamic]rl.Sound,   // clips to play back-to-back
-	play_i:        int,
-	play_started:  bool,
 
 	// ImGui edits these buffers in place, so they are fixed C strings.
 	stage_name:    [64]u8,
 	route_name:    [64]u8,
-	// Result of the last save/load. Copied, because the messages come off the
-	// temp allocator, which is reset every frame.
-	status:        [256]u8,
-	status_ok:     bool,
-	status_at:     f64, // rl.GetTime() when set
+	status:        Status,
+}
+
+// The last save/load/export result, shown for STATUS_LINGER seconds. One per
+// window: a message belongs to the window whose action produced it.
+Status :: struct {
+	// Copied, because the messages come off the temp allocator, which is reset
+	// every frame.
+	text: [256]u8,
+	ok:   bool,
+	at:   f64, // rl.GetTime() when set
 }
 
 // --- selection --------------------------------------------------------------
@@ -385,17 +420,17 @@ buf_text :: proc(buf: []u8) -> string {
 	return string(cstring(raw_data(buf)))
 }
 
-set_status :: proc(ed: ^Editor, msg: string, ok: bool) {
-	set_buf(ed.status[:], msg)
-	ed.status_ok = ok
-	ed.status_at = rl.GetTime()
+set_status :: proc(s: ^Status, msg: string, ok: bool) {
+	set_buf(s.text[:], msg)
+	s.ok = ok
+	s.at = rl.GetTime()
 }
 
-status_text :: proc(ed: ^Editor) -> (text: cstring, ok: bool) {
-	if ed.status[0] == 0 || rl.GetTime() - ed.status_at > STATUS_LINGER {
+status_text :: proc(s: ^Status) -> (text: cstring, ok: bool) {
+	if s.text[0] == 0 || rl.GetTime() - s.at > STATUS_LINGER {
 		return nil, false
 	}
-	return cstring(raw_data(ed.status[:])), true
+	return cstring(raw_data(s.text[:])), true
 }
 
 // The stage name as ImGui left it in the buffer: NUL-terminated, unsanitised.
@@ -621,63 +656,10 @@ seed_spline :: proc(sp: ^geo.Spline) {
 	}
 }
 
-main :: proc() {
-	if run_cli() {
-		return
-	}
-	editor_venue := ""
-	if len(os.args) > 1 && os.args[1] == "--editor" {
-		if len(os.args) != 3 {
-			fmt.println("usage: dirtbench --editor <venue-id>")
-			os.exit(2)
-		}
-		editor_venue = os.args[2]
-	}
-	window: rl.Window
-	window_ok: bool
-	if editor_venue == "" {
-		window_ok = rl.CreateWindow(&window, PROJECT_MANAGER_W, PROJECT_MANAGER_H, "dirtbench — project manager")
-	} else {
-		window_ok = rl.CreateWindow(&window, WINDOW_W, WINDOW_H, "dirtbench — editor")
-	}
-	if !window_ok {
-		fmt.println("could not create SDL window")
-		return
-	}
-	defer rl.DestroyWindow(&window)
-	// The backend installs its clip state with the window.
-	rl.SetClipPlanes(CAM_NEAR, CAM_FAR)
-
-	if !ui.imgui_backend_setup(true, rl.NativeWindow(&window), rl.GpuDevice(), rl.WindowSwapchainFormat(&window)) {
-		fmt.println("could not initialize Dear ImGui")
-		return
-	}
-	defer ui.imgui_backend_shutdown()
-
-	// The default process is only the project manager. In particular, it does
-	// not initialize audio, seed an editor document, or allocate GPU geometry.
-	// Editors are separate `--editor <venue>` processes launched by it.
-	if editor_venue == "" {
-		ed := Editor{}
-		install_scan_init(&ed.install)
-		defer install_scan_delete(&ed.install)
-		venues_screen_init(&ed.screen)
-		defer venues_screen_delete(&ed.screen)
-		for !rl.WindowShouldClose(&window) && !ed.quit {
-			rl.PollWindowEvents()
-			venues_editors_reap(&ed.screen)
-			draw_venues_frame(&ed, &window)
-			free_all(context.temp_allocator)
-		}
-		return
-	}
-
-	// Audio must come up before LoadSound. The pace-note clips are decoded here.
-	rl.InitAudioDevice()
-	defer rl.CloseAudioDevice()
-	rl.SetMasterVolume(1.0)
-
-	ed := Editor{
+// Sensible knobs for a fresh editor. Not a constant, because the terrain and
+// the route list own allocations that must not be shared between editors.
+editor_defaults :: proc() -> Editor {
+	return Editor{
 		cam = {target = {10, 3, 48}, distance = 110, yaw = 0.6, pitch = 0.6},
 		gen = GEN_DEFAULTS,
 		gen_live = true,
@@ -689,326 +671,410 @@ main :: proc() {
 		timing = TIMING_DEFAULTS,
 		veg = geo.VEG_DEFAULTS,
 	}
+}
+
+// The window and the GPU geometry that hangs off it. Separate from
+// editor_defaults so the headless CLI paths can build an Editor without one.
+editor_window_open :: proc(ed: ^Editor, title: cstring) -> bool {
+	if !rl.CreateWindow(&ed.window, WINDOW_W, WINDOW_H, title) {
+		return false
+	}
+	ctx := ui.imgui_backend_setup(
+		true, rl.NativeWindow(&ed.window), rl.GpuDevice(), rl.WindowSwapchainFormat(&ed.window),
+	)
+	if ctx == nil {
+		rl.DestroyWindow(&ed.window)
+		return false
+	}
+	rl.SetWindowImGui(&ed.window, ctx)
+	// Only the project manager saves a layout. Every context writing the same
+	// .ini means the last window closed decides where all of them sit.
+	ui.imgui_backend_set_ini(ctx, nil)
+	ed.imgui = ctx
+
 	ed.notes = make([dynamic]geo.Pace_Note)
-	defer delete(ed.notes)
-	ed.play_q = make([dynamic]rl.Sound)
-	defer delete(ed.play_q)
-	ed.clips = pace_audio_load()
-	defer pace_audio_unload(&ed.clips)
-
-	install_scan_init(&ed.install)
-	defer install_scan_delete(&ed.install)
-	defer delete(ed.open_venue)
-	defer delete(ed.open_stage)
-	defer routes_free(&ed.routes)
-	set_stage_name(&ed, "untitled")
-	seed_spline(&ed.spline)
-	defer delete(ed.spline.points)
-	p, load_msg, loaded := venue_load(editor_venue)
-	if !loaded {
-		fmt.printfln("could not open venue %q: %s", editor_venue, load_msg)
-		return
-	}
-	defer venue_free(p)
-	if !open_venue_editor(&ed, &p) {
-		status, _ := status_text(&ed)
-		fmt.printfln("could not open venue %q: %s", editor_venue, status)
-		return
-	}
-
 	ed.material = rl.LoadMaterialDefault()
-	defer rl.UnloadMaterial(ed.material)
-	defer geo.gpu_mesh_unload(&ed.road)
-	defer geo.gpu_mesh_unload(&ed.terrain_mesh)
-	defer geo.terrain_delete(&ed.terrain)
-	defer geo.terrain_field_delete(&ed.terrain_field)
-	defer delete(ed.ribbon)
-	defer veg_cache_clear(&ed)
-	defer delete(ed.terrain_brush_mask)
-	defer delete(ed.terrain_brush_offsets)
-	mark_dirty(&ed)
+	set_stage_name(ed, "untitled")
+	seed_spline(&ed.spline)
+	mark_dirty(ed)
+	return true
+}
 
-	for !rl.WindowShouldClose(&window) && !ed.quit {
+// Everything the editor allocated, window or not.
+editor_delete :: proc(ed: ^Editor) {
+	rl.UnloadMaterial(ed.material)
+	geo.gpu_mesh_unload(&ed.road)
+	geo.gpu_mesh_unload(&ed.terrain_mesh)
+	geo.terrain_delete(&ed.terrain)
+	geo.terrain_field_delete(&ed.terrain_field)
+	delete(ed.ribbon)
+	veg_cache_clear(ed)
+	delete(ed.terrain_brush_mask)
+	delete(ed.terrain_brush_offsets)
+	delete(ed.notes)
+	delete(ed.spline.points)
+	delete(ed.open_venue)
+	delete(ed.open_stage)
+	routes_free(&ed.routes)
+}
+
+// Close one editor window and free it. The Editor is heap-allocated, so this
+// owns the free as well.
+editor_close :: proc(ed: ^Editor) {
+	editor_delete(ed)
+	if ed.imgui != nil {
+		ui.imgui_backend_shutdown(ed.imgui)
+		ed.imgui = nil
+	}
+	rl.DestroyWindow(&ed.window)
+	free(ed)
+}
+
+main :: proc() {
+	if run_cli() {
+		return
+	}
+	app := App{}
+	if !rl.CreateWindow(&app.window, PROJECT_MANAGER_W, PROJECT_MANAGER_H, "dirtbench — project manager") {
+		fmt.println("could not create SDL window")
+		return
+	}
+	defer rl.DestroyWindow(&app.window)
+	// Process-wide in the renderer, so this covers every window opened later.
+	rl.SetClipPlanes(CAM_NEAR, CAM_FAR)
+
+	app.imgui = ui.imgui_backend_setup(
+		true, rl.NativeWindow(&app.window), rl.GpuDevice(), rl.WindowSwapchainFormat(&app.window),
+	)
+	if app.imgui == nil {
+		fmt.println("could not initialize Dear ImGui")
+		return
+	}
+	rl.SetWindowImGui(&app.window, app.imgui)
+	defer ui.imgui_backend_shutdown(app.imgui)
+
+	// One audio device and one clip bank for the process. Decoding the pace-note
+	// clips again per editor window would be the same bytes three times over.
+	rl.InitAudioDevice()
+	defer rl.CloseAudioDevice()
+	rl.SetMasterVolume(1.0)
+	app.clips = pace_audio_load()
+	defer pace_audio_unload(&app.clips)
+	app.play_q = make([dynamic]rl.Sound)
+	defer delete(app.play_q)
+
+	install_scan_init(&app.install)
+	defer install_scan_delete(&app.install)
+	venues_screen_init(&app.screen)
+	defer venues_screen_delete(&app.screen)
+	// Defers run last-first, so the delete is written above the loop that has
+	// to run before it. Written the other way round, the loop walks the freed
+	// array and closes garbage.
+	defer delete(app.editors)
+	defer for ed in app.editors {
+		editor_close(ed)
+	}
+
+	for !rl.WindowShouldClose(&app.window) && !app.quit {
 		rl.PollWindowEvents()
-		rl.BeginWindowFrame(&window)
-		// ImGui gets first refusal on input: a click on a panel, or a keypress
-		// into a text field, must never also reach the viewport behind it.
-		ui_mouse := ui.imgui_want_capture_mouse()
-		ui_keys := ui.imgui_want_capture_keyboard()
-
-		// 1 = move, 2 = rotate, Ctrl+S = save
-		if !ui_keys {
-			if rl.IsKeyPressed(.ONE) {
-				ed.gizmo_mode = .Move
-			}
-			if rl.IsKeyPressed(.TWO) {
-				ed.gizmo_mode = .Rotate
-			}
-			ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-			if ctrl && rl.IsKeyPressed(.S) && len(ed.spline.points) >= 2 {
-				do_save(&ed)
-			}
+		venues_editors_reap(&app)
+		draw_venues_frame(&app)
+		app_service_open_request(&app)
+		for ed in app.editors {
+			editor_frame(ed)
 		}
-
-		// Alt owns the mouse for camera navigation; the gizmo must not grab it.
-		nav := alt_held()
-		ui.gizmo_enable(!nav)
-		if !ui_mouse && (nav || !ed.gizmo_active) {
-			update_camera(&ed.cam)
-		}
-		cam3d := to_camera3d(ed.cam)
-		ray := rl.GetScreenToWorldRay(rl.GetMousePosition(), cam3d)
-
-		// Shift + grabbing the gizmo extrudes: duplicate the selected point and
-		// drag the copy outward, growing the spline at its ends. This must run
-		// before gizmo_manipulate, which processes the press later this frame,
-		// so the drag latches onto the copy. gizmo_hovered is last frame's
-		// probe, which is accurate at the instant of the press.
-		shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
-		if rl.IsMouseButtonPressed(.LEFT) &&
-		   shift && !nav && !ui_mouse && !ed.gizmo_active && !ed.stage_mode &&
-		   selected_point(&ed) >= 0 &&
-		   ed.gizmo_hovered {
-			ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.spline, ed.sel.idx)}
-			mark_dirty(&ed)
-		}
-
-		// One rebuild per frame, after every mutation above has landed.
-		if geometry_stale(&ed) {
-			rebuild_geometry(&ed)
-		}
-		// Regenerate the scatter if a rebuild (or a veg edit) invalidated it.
-		veg_refresh(&ed)
-
-		// Advance the preview ride and fire pace-note clips. Cheap when idle.
-		// The ride moves the camera target, so rebuild the view matrix from it.
-		preview_update(&ed)
-		if ed.previewing {
-			cam3d = to_camera3d(ed.cam)
-		}
-
-		// Node handles come from the world-space terrain controls, so they are
-		// recomputed after the rebuild and shared by drawing, picking and the
-		// gizmo. Temp-allocated: valid for this frame only.
-		node_pos := geo.terrain_node_world(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
-		node_active := geo.terrain_node_active_mask(&ed.terrain, node_pos)
-		sel_node := selected_node(&ed, node_pos, node_active)
-		if ed.sel.kind == .Node && sel_node < 0 {
-			ed.sel = {}
-			terrain_brush_clear(&ed)
-		}
-
-		rl.ClearBackground({26, 28, 34, 255})
-		rl.BeginMode3D(cam3d)
-		rl.DrawGrid(GRID_SLICES, GRID_SPACING)
-		geo.gpu_mesh_draw(ed.terrain_mesh, ed.material, ed.wireframe)
-		geo.gpu_mesh_draw(ed.road, ed.material, ed.wireframe)
-		// Handles first: they share one fixed-size batch with the scenery, which
-		// grows with the stage, and what does not fit is dropped (see
-		// batch_has_room). Losing the far trees is a nuisance; losing the handles
-		// makes the editor unusable.
-		draw_centreline(ed.ribbon)
-		draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
-		draw_handles(ed.spline, selected_point(&ed))
-		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
-		geo.veg_draw(ed.veg_cache)
-		draw_route_markers(&ed)
-		if ed.previewing {
-			rl.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
-		}
-		rl.EndMode3D()
-
-		// --- ImGui frame (the gizmo both draws and reports interaction) ----
-		// ImGuizmo draws into an ImGui draw list, so it lives here rather than
-		// inside BeginMode3D, and projects itself with the camera's matrices.
-		ui.imgui_backend_begin()
-		// Show the current call even when pace-note audio is disabled.
-		if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.notes) {
-			txt := fmt.ctprintf("%s", geo.pace_note_text(ed.notes[ed.preview_last]))
-			ui.draw_overlay_text_centered(txt, 40, 40, f32(rl.GetScreenWidth()), 0xff78dcff)
-		}
-		if ed.terrain_brush_phase != .None {
-			brush_count := 0
-			for selected in ed.terrain_brush_mask {
-				if selected { brush_count += 1 }
-			}
-			txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", brush_count, ed.terrain_brush_radius)
-			ui.draw_overlay_text_centered(txt, 40, 72, f32(rl.GetScreenWidth()), 0xff50beff)
-		}
-		ui.gizmo_begin_frame()
-		ui.gizmo_set_orthographic(false)
-		ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
-
-		// ImGuizmo answers gizmo_is_over out of the state its last manipulate call
-		// left behind, so with nothing selected it keeps reporting a hover over the
-		// gizmo that used to be there — right on top of the handle just deselected,
-		// which would then refuse every click that tries to select it again.
-		gizmo_used, gizmo_shown := false, false
-		if pi := selected_point(&ed); pi >= 0 && !ed.stage_mode {
-			gizmo_shown = true
-			gizmo_used = gizmo_manipulate(&ed.spline.points[pi], cam3d, ed.gizmo_mode)
-			if gizmo_used {
-				mark_dirty(&ed) // dragging moves a point, so the mesh is stale
-			}
-		} else if sel_node >= 0 {
-			gizmo_shown = true
-			mouse := rl.GetMousePosition()
-			left_down := rl.IsMouseButtonDown(.LEFT)
-			right_down := rl.IsMouseButtonDown(.RIGHT)
-
-			// RMB joining the node drag starts brush sizing, and may join again
-			// mid-move to re-size without dropping the node. Movement before the
-			// first join is intentional single-node editing; a later join keeps
-			// the moved offsets and re-anchors on them.
-			if ed.terrain_brush_phase != .Size && left_down && right_down {
-				ed.terrain_brush_phase = .Size
-				ed.terrain_brush_mouse_y = mouse.y
-				ed.terrain_brush_radius_start = ed.terrain_brush_radius
-				ed.terrain_brush_anchor_offset = ed.terrain.controls[ed.sel.idx].offset
-				terrain_brush_select(&ed, node_pos, sel_node)
-			}
-
-			// ImGuizmo owns the original LMB drag. It must keep receiving every frame,
-			// including brush sizing and movement, or it resumes later with the whole
-			// accumulated mouse delta and snaps the anchor node. Brush phases discard
-			// its output but let its internal drag state advance and release normally.
-			gizmo_y, gizmo_dragging := ui.gizmo_manipulate_height(node_pos[sel_node], cam3d)
-
-			switch ed.terrain_brush_phase {
-			case .Size:
-				gizmo_used = true
-				// ImGuizmo may have owned LMB immediately before RMB entered brush
-				// mode. Pin its last value throughout sizing: this phase changes only
-				// the affected set, never terrain height.
-				if ed.sel.idx >= 0 && ed.sel.idx < len(ed.terrain.controls) {
-					ed.terrain.controls[ed.sel.idx].offset = ed.terrain_brush_anchor_offset
-				}
-				if !left_down {
-					terrain_brush_clear(&ed)
-				} else if right_down {
-					world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
-						f32(max(rl.GetScreenHeight(), 1))
-					brush_per_pixel := clamp(world_per_pixel * 2, f32(0.1), f32(2))
-					ed.terrain_brush_radius = clamp(ed.terrain_brush_radius_start +
-						(ed.terrain_brush_mouse_y - mouse.y) * brush_per_pixel,
-						f32(0), ed.terrain.reach_m * 4)
-					terrain_brush_select(&ed, node_pos, sel_node)
-				} else {
-					ed.terrain_brush_phase = .Move
-					ed.terrain_brush_mouse_y = mouse.y
-					terrain_brush_snapshot(&ed)
-				}
-			case .Move:
-				gizmo_used = true
-				if !left_down {
-					terrain_brush_clear(&ed)
-				} else {
-					world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
-						f32(max(rl.GetScreenHeight(), 1))
-					move_per_pixel := clamp(world_per_pixel, f32(0.01), f32(1))
-					dy := (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel
-					for &c, i in ed.terrain.controls {
-						if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
-						   ed.terrain_brush_mask[i] {
-							c.offset = ed.terrain_brush_offsets[i] + dy
-						}
-					}
-					mark_terrain_dirty(&ed)
-				}
-			case .None:
-				// Height only, so an ordinary LMB drag keeps the single-control gizmo.
-				if gizmo_dragging {
-					geo.terrain_set_node(&ed.terrain, ed.sel.idx, gizmo_y)
-					mark_terrain_dirty(&ed)
-				}
-				gizmo_used = gizmo_dragging
-			}
-		}
-		ed.gizmo_active = gizmo_used
-		ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
-
-		draw_menubar(&ed)
-		draw_inspector(&ed)
-		draw_generator(&ed)
-		draw_targets(&ed)
-		if ed.show_demo {
-			ui.igShowDemoWindow(&ed.show_demo)
-		}
-		render_imgui(&window)
-
-		// --- input (now that gizmo interaction for this frame is known) ----
-		// A click arbitrates between a control point and a terrain node by depth,
-		// so whichever handle is actually in front wins.
-		if rl.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
-			pi, pd := pick_point(ed.spline, ray)
-			ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.terrain), ray)
-			switch {
-			case ni >= 0 && (pi < 0 || nd < pd):
-				ed.sel = {kind = .Node, idx = ni}
-			case pi >= 0:
-				ed.sel = {kind = .Point, idx = pi}
-			case:
-				ed.sel = {}
-			}
-		}
-		// Edits below resize spline.points, which can reallocate it. The gizmo
-		// holds a raw pointer into that array while dragging, so never mutate
-		// the array mid-drag.
-		// S and F drop the start and finish lines wherever the cursor is on the
-		// road. Placing one again just moves it; there is only ever one of each.
-		if !ui_keys && !nav && ed.stage_mode {
-			if route := selected_route(&ed); route != nil {
-				ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-				start := !ctrl && rl.IsKeyPressed(.S)
-				line := start ? &route.start : rl.IsKeyPressed(.F) ? &route.finish : nil
-				if line != nil {
-					if _, _, frame, hit := pick_ribbon(ed.ribbon, ray); hit {
-						line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
-						set_status(&ed, start ? "start line placed" : "finish line placed", true)
-					} else {
-						set_status(&ed, "point at the road to place a line there", false)
-					}
-				}
-			}
-		}
-		if !gizmo_used && !ui_mouse && !ed.stage_mode {
-			// Right-click, in priority order: another control point welds the
-			// selection into it and closes a loop, the ribbon inserts, and bare
-			// ground grows the road from the selected point rather than from
-			// whatever happens to sit last in the array.
-			if rl.IsMouseButtonPressed(.RIGHT) && !nav {
-				sel := selected_point(&ed)
-				target, _ := pick_point(ed.spline, ray)
-				switch {
-				case target >= 0 && sel >= 0 && target != sel:
-					if ed.spline.points[sel].weld == target {
-						geo.unweld_point(&ed.spline, sel)
-					} else {
-						_ = geo.weld_points(&ed.spline, sel, target)
-					}
-					mark_dirty(&ed)
-				case target >= 0:
-					ed.sel = {kind = .Point, idx = target}
-				case:
-					if seg, at, frame, ok := pick_ribbon(ed.ribbon, ray); ok {
-						ed.sel = {kind = .Point, idx = geo.insert_point(&ed.spline, seg, at, frame)}
-						mark_dirty(&ed)
-					} else if g, gok := ray_ground(ray); gok {
-						ed.sel = {kind = .Point, idx = grow_road(&ed.spline, sel, g)}
-						mark_dirty(&ed)
-					}
-				}
-			}
-			// Only a road point can be deleted. Terrain controls are generated from
-			// the terrain region rather than individually added or removed.
-			if pi := selected_point(&ed); rl.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
-				geo.remove_point(&ed.spline, pi)
-				ed.sel = {}
-				mark_dirty(&ed)
-			}
-		}
-
-		rl.EndWindowFrame(&window)
 		free_all(context.temp_allocator)
 	}
+}
+
+// One frame of one editor window. Input, one geometry rebuild, the scene, the
+// panels, then the input that needed to know what the gizmo did.
+editor_frame :: proc(ed: ^Editor) {
+	rl.BeginWindowFrame(&ed.window)
+	// ImGui gets first refusal on input: a click on a panel, or a keypress
+	// into a text field, must never also reach the viewport behind it.
+	ui_mouse := ui.imgui_want_capture_mouse()
+	ui_keys := ui.imgui_want_capture_keyboard()
+
+	// 1 = move, 2 = rotate, Ctrl+S = save
+	if !ui_keys {
+		if rl.IsKeyPressed(.ONE) {
+			ed.gizmo_mode = .Move
+		}
+		if rl.IsKeyPressed(.TWO) {
+			ed.gizmo_mode = .Rotate
+		}
+		ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+		if ctrl && rl.IsKeyPressed(.S) && len(ed.spline.points) >= 2 {
+			do_save(ed)
+		}
+	}
+
+	// Alt owns the mouse for camera navigation; the gizmo must not grab it.
+	nav := alt_held()
+	ui.gizmo_enable(!nav)
+	if !ui_mouse && (nav || !ed.gizmo_active) {
+		update_camera(&ed.cam)
+	}
+	cam3d := to_camera3d(ed.cam)
+	ray := rl.GetScreenToWorldRay(rl.GetMousePosition(), cam3d)
+
+	// Shift + grabbing the gizmo extrudes: duplicate the selected point and
+	// drag the copy outward, growing the spline at its ends. This must run
+	// before gizmo_manipulate, which processes the press later this frame,
+	// so the drag latches onto the copy. gizmo_hovered is last frame's
+	// probe, which is accurate at the instant of the press.
+	shift := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+	if rl.IsMouseButtonPressed(.LEFT) &&
+	   shift && !nav && !ui_mouse && !ed.gizmo_active && !ed.stage_mode &&
+	   selected_point(ed) >= 0 &&
+	   ed.gizmo_hovered {
+		ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.spline, ed.sel.idx)}
+		mark_dirty(ed)
+	}
+
+	// One rebuild per frame, after every mutation above has landed.
+	if geometry_stale(ed) {
+		rebuild_geometry(ed)
+	}
+	// Regenerate the scatter if a rebuild (or a veg edit) invalidated it.
+	veg_refresh(ed)
+
+	// Advance the preview ride and fire pace-note clips. Cheap when idle.
+	// The ride moves the camera target, so rebuild the view matrix from it.
+	preview_update(ed)
+	if ed.previewing {
+		cam3d = to_camera3d(ed.cam)
+	}
+
+	// Node handles come from the world-space terrain controls, so they are
+	// recomputed after the rebuild and shared by drawing, picking and the
+	// gizmo. Temp-allocated: valid for this frame only.
+	node_pos := geo.terrain_node_world(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
+	node_active := geo.terrain_node_active_mask(&ed.terrain, node_pos)
+	sel_node := selected_node(ed, node_pos, node_active)
+	if ed.sel.kind == .Node && sel_node < 0 {
+		ed.sel = {}
+		terrain_brush_clear(ed)
+	}
+
+	rl.ClearBackground({26, 28, 34, 255})
+	rl.BeginMode3D(cam3d)
+	rl.DrawGrid(GRID_SLICES, GRID_SPACING)
+	geo.gpu_mesh_draw(ed.terrain_mesh, ed.material, ed.wireframe)
+	geo.gpu_mesh_draw(ed.road, ed.material, ed.wireframe)
+	// Handles first: they share one fixed-size batch with the scenery, which
+	// grows with the stage, and what does not fit is dropped (see
+	// batch_has_room). Losing the far trees is a nuisance; losing the handles
+	// makes the editor unusable.
+	draw_centreline(ed.ribbon)
+	draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
+	draw_handles(ed.spline, selected_point(ed))
+	geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
+	geo.veg_draw(ed.veg_cache)
+	draw_route_markers(ed)
+	if ed.previewing {
+		rl.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
+	}
+	rl.EndMode3D()
+
+	// --- ImGui frame (the gizmo both draws and reports interaction) ----
+	// ImGuizmo draws into an ImGui draw list, so it lives here rather than
+	// inside BeginMode3D, and projects itself with the camera's matrices.
+	ui.imgui_backend_begin()
+	// Show the current call even when pace-note audio is disabled.
+	if ed.previewing && ed.preview_last >= 0 && ed.preview_last < len(ed.notes) {
+		txt := fmt.ctprintf("%s", geo.pace_note_text(ed.notes[ed.preview_last]))
+		ui.draw_overlay_text_centered(txt, 40, 40, f32(rl.GetScreenWidth()), 0xff78dcff)
+	}
+	if ed.terrain_brush_phase != .None {
+		brush_count := 0
+		for selected in ed.terrain_brush_mask {
+			if selected { brush_count += 1 }
+		}
+		txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", brush_count, ed.terrain_brush_radius)
+		ui.draw_overlay_text_centered(txt, 40, 72, f32(rl.GetScreenWidth()), 0xff50beff)
+	}
+	// ImGuizmo holds one file-static drag state for the whole process, so only
+	// the focused window may run it. A second editor window manipulating in the
+	// same frame would clobber this one's drag part way through.
+	focused := rl.WindowFocused(&ed.window)
+	ui.gizmo_begin_frame()
+	ui.gizmo_set_orthographic(false)
+	ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
+
+	// ImGuizmo answers gizmo_is_over out of the state its last manipulate call
+	// left behind, so with nothing selected it keeps reporting a hover over the
+	// gizmo that used to be there — right on top of the handle just deselected,
+	// which would then refuse every click that tries to select it again.
+	gizmo_used, gizmo_shown := false, false
+	if pi := selected_point(ed); pi >= 0 && !ed.stage_mode && focused {
+		gizmo_shown = true
+		gizmo_used = gizmo_manipulate(&ed.spline.points[pi], cam3d, ed.gizmo_mode)
+		if gizmo_used {
+			mark_dirty(ed) // dragging moves a point, so the mesh is stale
+		}
+	} else if sel_node >= 0 && focused {
+		gizmo_shown = true
+		mouse := rl.GetMousePosition()
+		left_down := rl.IsMouseButtonDown(.LEFT)
+		right_down := rl.IsMouseButtonDown(.RIGHT)
+
+		// RMB joining the node drag starts brush sizing, and may join again
+		// mid-move to re-size without dropping the node. Movement before the
+		// first join is intentional single-node editing; a later join keeps
+		// the moved offsets and re-anchors on them.
+		if ed.terrain_brush_phase != .Size && left_down && right_down {
+			ed.terrain_brush_phase = .Size
+			ed.terrain_brush_mouse_y = mouse.y
+			ed.terrain_brush_radius_start = ed.terrain_brush_radius
+			ed.terrain_brush_anchor_offset = ed.terrain.controls[ed.sel.idx].offset
+			terrain_brush_select(ed, node_pos, sel_node)
+		}
+
+		// ImGuizmo owns the original LMB drag. It must keep receiving every frame,
+		// including brush sizing and movement, or it resumes later with the whole
+		// accumulated mouse delta and snaps the anchor node. Brush phases discard
+		// its output but let its internal drag state advance and release normally.
+		gizmo_y, gizmo_dragging := ui.gizmo_manipulate_height(node_pos[sel_node], cam3d)
+
+		switch ed.terrain_brush_phase {
+		case .Size:
+			gizmo_used = true
+			// ImGuizmo may have owned LMB immediately before RMB entered brush
+			// mode. Pin its last value throughout sizing: this phase changes only
+			// the affected set, never terrain height.
+			if ed.sel.idx >= 0 && ed.sel.idx < len(ed.terrain.controls) {
+				ed.terrain.controls[ed.sel.idx].offset = ed.terrain_brush_anchor_offset
+			}
+			if !left_down {
+				terrain_brush_clear(ed)
+			} else if right_down {
+				world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
+					f32(max(rl.GetScreenHeight(), 1))
+				brush_per_pixel := clamp(world_per_pixel * 2, f32(0.1), f32(2))
+				ed.terrain_brush_radius = clamp(ed.terrain_brush_radius_start +
+					(ed.terrain_brush_mouse_y - mouse.y) * brush_per_pixel,
+					f32(0), ed.terrain.reach_m * 4)
+				terrain_brush_select(ed, node_pos, sel_node)
+			} else {
+				ed.terrain_brush_phase = .Move
+				ed.terrain_brush_mouse_y = mouse.y
+				terrain_brush_snapshot(ed)
+			}
+		case .Move:
+			gizmo_used = true
+			if !left_down {
+				terrain_brush_clear(ed)
+			} else {
+				world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
+					f32(max(rl.GetScreenHeight(), 1))
+				move_per_pixel := clamp(world_per_pixel, f32(0.01), f32(1))
+				dy := (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel
+				for &c, i in ed.terrain.controls {
+					if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
+					   ed.terrain_brush_mask[i] {
+						c.offset = ed.terrain_brush_offsets[i] + dy
+					}
+				}
+				mark_terrain_dirty(ed)
+			}
+		case .None:
+			// Height only, so an ordinary LMB drag keeps the single-control gizmo.
+			if gizmo_dragging {
+				geo.terrain_set_node(&ed.terrain, ed.sel.idx, gizmo_y)
+				mark_terrain_dirty(ed)
+			}
+			gizmo_used = gizmo_dragging
+		}
+	}
+	if !focused && ed.terrain_brush_phase != .None {
+		terrain_brush_clear(ed)
+	}
+	ed.gizmo_active = gizmo_used
+	ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
+
+	draw_menubar(ed)
+	draw_inspector(ed)
+	draw_generator(ed)
+	draw_targets(ed)
+	if ed.show_demo {
+		ui.igShowDemoWindow(&ed.show_demo)
+	}
+	render_imgui(&ed.window)
+
+	// --- input (now that gizmo interaction for this frame is known) ----
+	// A click arbitrates between a control point and a terrain node by depth,
+	// so whichever handle is actually in front wins.
+	if rl.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
+		pi, pd := pick_point(ed.spline, ray)
+		ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.terrain), ray)
+		switch {
+		case ni >= 0 && (pi < 0 || nd < pd):
+			ed.sel = {kind = .Node, idx = ni}
+		case pi >= 0:
+			ed.sel = {kind = .Point, idx = pi}
+		case:
+			ed.sel = {}
+		}
+	}
+	// Edits below resize spline.points, which can reallocate it. The gizmo
+	// holds a raw pointer into that array while dragging, so never mutate
+	// the array mid-drag.
+	// S and F drop the start and finish lines wherever the cursor is on the
+	// road. Placing one again just moves it; there is only ever one of each.
+	if !ui_keys && !nav && ed.stage_mode {
+		if route := selected_route(ed); route != nil {
+			ctrl := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
+			start := !ctrl && rl.IsKeyPressed(.S)
+			line := start ? &route.start : rl.IsKeyPressed(.F) ? &route.finish : nil
+			if line != nil {
+				if _, _, frame, hit := pick_ribbon(ed.ribbon, ray); hit {
+					line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
+					set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
+				} else {
+					set_status(&ed.status, "point at the road to place a line there", false)
+				}
+			}
+		}
+	}
+	if !gizmo_used && !ui_mouse && !ed.stage_mode {
+		// Right-click, in priority order: another control point welds the
+		// selection into it and closes a loop, the ribbon inserts, and bare
+		// ground grows the road from the selected point rather than from
+		// whatever happens to sit last in the array.
+		if rl.IsMouseButtonPressed(.RIGHT) && !nav {
+			sel := selected_point(ed)
+			target, _ := pick_point(ed.spline, ray)
+			switch {
+			case target >= 0 && sel >= 0 && target != sel:
+				if ed.spline.points[sel].weld == target {
+					geo.unweld_point(&ed.spline, sel)
+				} else {
+					_ = geo.weld_points(&ed.spline, sel, target)
+				}
+				mark_dirty(ed)
+			case target >= 0:
+				ed.sel = {kind = .Point, idx = target}
+			case:
+				if seg, at, frame, ok := pick_ribbon(ed.ribbon, ray); ok {
+					ed.sel = {kind = .Point, idx = geo.insert_point(&ed.spline, seg, at, frame)}
+					mark_dirty(ed)
+				} else if g, gok := ray_ground(ray); gok {
+					ed.sel = {kind = .Point, idx = grow_road(&ed.spline, sel, g)}
+					mark_dirty(ed)
+				}
+			}
+		}
+		// Only a road point can be deleted. Terrain controls are generated from
+		// the terrain region rather than individually added or removed.
+		if pi := selected_point(ed); rl.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
+			geo.remove_point(&ed.spline, pi)
+			ed.sel = {}
+			mark_dirty(ed)
+		}
+	}
+
+	rl.EndWindowFrame(&ed.window)
+	free_all(context.temp_allocator)
 }
