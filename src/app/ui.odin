@@ -65,7 +65,7 @@ do_load :: proc(ed: ^Editor, name: string) {
 	if ok {
 		set_stage_name(ed, name)
 		ed.sel = {} // indices from the old spline mean nothing now
-		geo.terrain_invalidate(&ed.terrain) // and so do the lattice's absolute heights
+		geo.terrain_invalidate(&ed.terrain) // and so do the route's world controls
 		mark_dirty(ed)
 	}
 	set_status(ed, msg, ok)
@@ -314,6 +314,7 @@ draw_inspector :: proc(ed: ^Editor) {
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("LMB select point or terrain node")
+	ui.im_text("Terrain: RMB+LMB drag sizes brush; release RMB to raise/lower")
 	ui.im_text("Shift+drag gizmo extrudes a point")
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")
@@ -351,8 +352,7 @@ draw_terrain_section :: proc(ed: ^Editor) {
 	draw_terrain_mesh_section(ed)
 }
 
-// The out-of-stage mesh. Along-road nodes are specified as a spacing so long
-// routes gain control rows instead of stretching a fixed-size lattice.
+// The out-of-stage mesh. Sculpt controls are spaced directly in world XZ.
 draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	t := &ed.terrain
 	if ui.igCheckbox("terrain", &t.enabled) {
@@ -370,8 +370,8 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("reach", &t.reach_m, 8, geo.TERRAIN_REACH_MAX, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed)
 	}
-	// How far the road pulls the ground with it before the lattice takes over.
-	// Must stay inside the reach, or the seam never resolves to the lattice at
+	// How far the road pulls the ground with it before sculpt offsets take over.
+	// Must stay inside the reach, or the seam never resolves to the controls at
 	// all. Too narrow and the terrain terraces rather than sloping.
 	if ui.igSliderFloat("blend", &t.blend_m, 1, max(t.reach_m, 2), "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed)
@@ -382,16 +382,16 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 		mark_terrain_dirty(ed)
 	}
 
-	// These reseed the lattice, which the node gizmo is writing into. Same guard,
+	// These regenerate controls, which the node gizmo is writing into. Same guard,
 	// and same reason, as the generator's `live` checkbox.
 	ui.igBeginDisabled(ed.gizmo_active)
 	defer ui.igEndDisabled()
 
-	if ui.igSliderFloat("node spacing", &t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX, "%.0f m along", ui.IM_SLIDER_NONE) {
+	if ui.igSliderFloat("node spacing", &t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed)
 	}
 	ui.im_same_line()
-	ui.im_text(fmt.ctprintf("(%d rows)", t.rows))
+	ui.im_text(fmt.ctprintf("(%d controls)", geo.terrain_node_count(t)))
 
 	if ui.im_button("Flatten to verge") {
 		geo.terrain_invalidate(t)
@@ -407,7 +407,7 @@ draw_point_section :: proc(ed: ^Editor) {
 	sel := selected_point(ed)
 	if sel < 0 {
 		if ed.sel.kind == .Node {
-			ui.im_text(fmt.ctprintf("terrain node selected (%s side)", ed.sel.side == 0 ? "left" : "right"))
+			ui.im_text("terrain control selected")
 			ui.im_text("drag its vertical handle to sculpt")
 		} else {
 			ui.im_text("no point selected")

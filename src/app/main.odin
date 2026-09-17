@@ -64,17 +64,22 @@ Gizmo_Mode :: enum {
 }
 
 // What the gizmo is pointed at. A bare index cannot say, now that a spline
-// control point and a terrain lattice node are both selectable.
+// control point and a world-space terrain control are both selectable.
 Sel_Kind :: enum {
 	None,
 	Point, // idx indexes geo.Spline points
-	Node,  // idx indexes one side's lattice, r*cols + c; `side` says which
+	Node,  // idx indexes geo.Terrain.controls
 }
 
 Selection :: struct {
 	kind: Sel_Kind,
 	idx:  int,
-	side: int,
+}
+
+Terrain_Brush_Phase :: enum {
+	None,
+	Size,
+	Move,
 }
 
 // How long a save/load result stays on screen, seconds.
@@ -105,6 +110,13 @@ Editor :: struct {
 	gizmo_active:  bool,
 	gizmo_hovered: bool,
 	gizmo_mode:    Gizmo_Mode,
+	terrain_brush_phase: Terrain_Brush_Phase,
+	terrain_brush_radius: f32,
+	terrain_brush_radius_start: f32,
+	terrain_brush_mouse_y: f32,
+	terrain_brush_anchor_offset: f32,
+	terrain_brush_mask: [dynamic]bool,
+	terrain_brush_offsets: [dynamic]f32,
 	show_demo:     bool,
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
@@ -119,7 +131,7 @@ Editor :: struct {
 	// going through mark_dirty/rebuild.
 	ribbon:        []geo.Cross_Section,
 	// Ticks on every ribbon rebuild. The terrain's world grid is keyed on it, so
-	// dragging a lattice node reuses the grid instead of rebuilding it.
+	// dragging a terrain control reuses the grid instead of rebuilding it.
 	ribbon_gen:    u64,
 	road:          geo.Gpu_Mesh,
 	terrain:       geo.Terrain,
@@ -187,11 +199,40 @@ selected_node :: proc(ed: ^Editor, node_pos: []rl.Vector3, node_active: []bool) 
 	if ed.sel.kind != .Node || len(node_pos) == 0 {
 		return -1
 	}
-	i := ed.sel.side * geo.terrain_node_count(&ed.terrain) + ed.sel.idx
+	i := ed.sel.idx
 	if i < 0 || i >= len(node_pos) || (len(node_active) == len(node_pos) && !node_active[i]) {
-		return -1 // lattice was resized under the selection
+		return -1 // controls were regenerated under the selection
 	}
 	return i
+}
+
+terrain_brush_clear :: proc(ed: ^Editor) {
+	ed.terrain_brush_phase = .None
+	clear(&ed.terrain_brush_mask)
+	clear(&ed.terrain_brush_offsets)
+}
+
+terrain_brush_select :: proc(ed: ^Editor, node_pos: []rl.Vector3, selected: int) {
+	resize(&ed.terrain_brush_mask, len(node_pos))
+	for &affected in ed.terrain_brush_mask {
+		affected = false
+	}
+	if selected < 0 || selected >= len(node_pos) {
+		return
+	}
+	centre := node_pos[selected]
+	r2 := ed.terrain_brush_radius * ed.terrain_brush_radius
+	for p, i in node_pos {
+		dx, dz := p.x - centre.x, p.z - centre.z
+		ed.terrain_brush_mask[i] = i == selected || dx * dx + dz * dz <= r2
+	}
+}
+
+terrain_brush_snapshot :: proc(ed: ^Editor) {
+	resize(&ed.terrain_brush_offsets, len(ed.terrain.controls))
+	for c, i in ed.terrain.controls {
+		ed.terrain_brush_offsets[i] = c.offset
+	}
 }
 
 // --- geometry cache ---------------------------------------------------------
@@ -205,7 +246,7 @@ mark_dirty :: proc(ed: ^Editor) {
 	ed.veg_dirty = true
 }
 
-// For edits that leave the ribbon alone: lattice nodes, terrain sliders. These
+// For edits that leave the ribbon alone: sculpt controls, terrain sliders. These
 // still move the ground under the trees, so the scatter is stale too — but the
 // ribbon_gen it keys on has not ticked, hence the explicit flag.
 mark_terrain_dirty :: proc(ed: ^Editor) {
@@ -224,7 +265,7 @@ geometry_stale :: proc(ed: ^Editor) -> bool {
 // The terrain is several times the road's triangle count, so rebuilding it every
 // frame of a control-point drag is the one thing that makes a big stage feel
 // sluggish. Defer it: the road follows the gizmo live, the terrain snaps to it on
-// release. Dragging a *lattice node* is exempt — the terrain is the only thing
+// release. Dragging a terrain control is exempt — the terrain is the only thing
 // changing, and watching it move is the entire point.
 //
 // `gizmo_active` is last frame's value here, which is what we want: the frame a
@@ -624,6 +665,8 @@ main :: proc() {
 	defer geo.terrain_field_delete(&ed.terrain_field)
 	defer delete(ed.ribbon)
 	defer delete(ed.veg_cache)
+	defer delete(ed.terrain_brush_mask)
+	defer delete(ed.terrain_brush_offsets)
 	mark_dirty(&ed)
 
 	for !rl.WindowShouldClose(&window) && !ed.quit {
@@ -685,7 +728,7 @@ main :: proc() {
 			cam3d = to_camera3d(ed.cam)
 		}
 
-		// Node handles are derived from the ribbon and the lattice, so they are
+		// Node handles come from the world-space terrain controls, so they are
 		// recomputed after the rebuild and shared by drawing, picking and the
 		// gizmo. Temp-allocated: valid for this frame only.
 		node_pos := geo.terrain_node_world(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
@@ -693,6 +736,7 @@ main :: proc() {
 		sel_node := selected_node(&ed, node_pos, node_active)
 		if ed.sel.kind == .Node && sel_node < 0 {
 			ed.sel = {}
+			terrain_brush_clear(&ed)
 		}
 
 		rl.ClearBackground({26, 28, 34, 255})
@@ -704,7 +748,7 @@ main :: proc() {
 		geo.veg_draw(ed.veg_cache)
 		draw_centreline(ed.ribbon)
 		draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
-		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, sel_node)
+		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 		draw_handles(ed.spline, selected_point(&ed))
 		draw_marker(ed.spline, ed.start, {110, 255, 140, 255})
 		draw_marker(ed.spline, ed.finish, {255, 110, 110, 255})
@@ -722,6 +766,14 @@ main :: proc() {
 			txt := fmt.ctprintf("%s", geo.pace_note_text(ed.notes[ed.preview_last]))
 			ui.draw_overlay_text_centered(txt, 40, 40, f32(rl.GetScreenWidth()), 0xff78dcff)
 		}
+		if ed.terrain_brush_phase != .None {
+			brush_count := 0
+			for selected in ed.terrain_brush_mask {
+				if selected { brush_count += 1 }
+			}
+			txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", brush_count, ed.terrain_brush_radius)
+			ui.draw_overlay_text_centered(txt, 40, 72, f32(rl.GetScreenWidth()), 0xff50beff)
+		}
 		ui.gizmo_begin_frame()
 		ui.gizmo_set_orthographic(false)
 		ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
@@ -733,14 +785,75 @@ main :: proc() {
 				mark_dirty(&ed) // dragging moves a point, so the mesh is stale
 			}
 		} else if sel_node >= 0 {
-			// Height only, so the gizmo offers one vertical handle and the node's
-			// XZ stays derived from the ribbon.
-			y, used := ui.gizmo_manipulate_height(node_pos[sel_node], cam3d)
-			if used {
-				geo.terrain_set_node(&ed.terrain, ed.sel.side, ed.sel.idx, y)
-				mark_terrain_dirty(&ed)
+			mouse := rl.GetMousePosition()
+			left_down := rl.IsMouseButtonDown(.LEFT)
+			right_down := rl.IsMouseButtonDown(.RIGHT)
+
+			// Capture the height at the instant RMB joins the existing node drag.
+			// Movement before that instant is intentional single-node editing.
+			if ed.terrain_brush_phase == .None && left_down && right_down {
+				ed.terrain_brush_phase = .Size
+				ed.terrain_brush_mouse_y = mouse.y
+				ed.terrain_brush_radius_start = ed.terrain_brush_radius
+				ed.terrain_brush_anchor_offset = ed.terrain.controls[ed.sel.idx].offset
+				terrain_brush_select(&ed, node_pos, sel_node)
 			}
-			gizmo_used = used
+
+			// ImGuizmo owns the original LMB drag. It must keep receiving every frame,
+			// including brush sizing and movement, or it resumes later with the whole
+			// accumulated mouse delta and snaps the anchor node. Brush phases discard
+			// its output but let its internal drag state advance and release normally.
+			gizmo_y, gizmo_dragging := ui.gizmo_manipulate_height(node_pos[sel_node], cam3d)
+
+			switch ed.terrain_brush_phase {
+			case .Size:
+				gizmo_used = true
+				// ImGuizmo may have owned LMB immediately before RMB entered brush
+				// mode. Pin its last value throughout sizing: this phase changes only
+				// the affected set, never terrain height.
+				if ed.sel.idx >= 0 && ed.sel.idx < len(ed.terrain.controls) {
+					ed.terrain.controls[ed.sel.idx].offset = ed.terrain_brush_anchor_offset
+				}
+				if !left_down {
+					terrain_brush_clear(&ed)
+				} else if right_down {
+					world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
+						f32(max(rl.GetScreenHeight(), 1))
+					brush_per_pixel := clamp(world_per_pixel * 2, f32(0.1), f32(2))
+					ed.terrain_brush_radius = clamp(ed.terrain_brush_radius_start +
+						(ed.terrain_brush_mouse_y - mouse.y) * brush_per_pixel,
+						f32(0), ed.terrain.reach_m * 4)
+					terrain_brush_select(&ed, node_pos, sel_node)
+				} else {
+					ed.terrain_brush_phase = .Move
+					ed.terrain_brush_mouse_y = mouse.y
+					terrain_brush_snapshot(&ed)
+				}
+			case .Move:
+				gizmo_used = true
+				if !left_down {
+					terrain_brush_clear(&ed)
+				} else {
+					world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
+						f32(max(rl.GetScreenHeight(), 1))
+					move_per_pixel := clamp(world_per_pixel, f32(0.01), f32(1))
+					dy := (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel
+					for &c, i in ed.terrain.controls {
+						if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
+						   ed.terrain_brush_mask[i] {
+							c.offset = ed.terrain_brush_offsets[i] + dy
+						}
+					}
+					mark_terrain_dirty(&ed)
+				}
+			case .None:
+				// Height only, so an ordinary LMB drag keeps the single-control gizmo.
+				if gizmo_dragging {
+					geo.terrain_set_node(&ed.terrain, ed.sel.idx, gizmo_y)
+					mark_terrain_dirty(&ed)
+				}
+				gizmo_used = gizmo_dragging
+			}
 		}
 		ed.gizmo_active = gizmo_used
 		ed.gizmo_hovered = ui.gizmo_is_over()
@@ -757,13 +870,12 @@ main :: proc() {
 		// --- input (now that gizmo interaction for this frame is known) ----
 		// A click arbitrates between a control point and a terrain node by depth,
 		// so whichever handle is actually in front wins.
-		if rl.IsMouseButtonPressed(.LEFT) && !gizmo_used && !nav && !ui_mouse {
+		if rl.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
 			pi, pd := pick_point(ed.spline, ray)
 			ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.terrain), ray)
 			switch {
 			case ni >= 0 && (pi < 0 || nd < pd):
-				count := geo.terrain_node_count(&ed.terrain)
-				ed.sel = {kind = .Node, side = ni / count, idx = ni % count}
+				ed.sel = {kind = .Node, idx = ni}
 			case pi >= 0:
 				ed.sel = {kind = .Point, idx = pi}
 			case:
@@ -815,8 +927,8 @@ main :: proc() {
 					}
 				}
 			}
-			// Only a control point can be deleted. A lattice node is a slot, not an
-			// object: removing one would mean resizing the grid.
+			// Only a road point can be deleted. Terrain controls are generated from
+			// the terrain region rather than individually added or removed.
 			if pi := selected_point(&ed); rl.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
 				geo.remove_point(&ed.spline, pi)
 				ed.sel = {}
