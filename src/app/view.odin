@@ -536,7 +536,7 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 		set_status(&ed.status, "point at the road to place it there", false)
 		return
 	}
-	at := geo.Road_Marker{from = frame.e_from, to = frame.e_to, t = frame.t}
+	at := geo.marker_of(ed.doc.spline, {from = frame.e_from, to = frame.e_to, t = frame.t})
 	// A pin is a road the stage has to cross, and they are crossed in the order
 	// they were placed, so a new one goes on the end.
 	if pin {

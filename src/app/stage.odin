@@ -31,13 +31,19 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // v6 added the parent index and v7 the weld. Both are read behind a version
 // check, because zero is a valid point index and would silently mean "point 0".
 // v8 added the terrain block.
-STAGE_VERSION :: 8
+// v9 adds stable point ids. Older files migrate as id = array index, so the
+// markers a v4 venue.json holds keep naming the same edges. One insert makes
+// ids stop matching positions, so an older build must not read a v9 file.
+STAGE_VERSION :: 9
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
 // quaternion is four floats because core:encoding/json cannot marshal Odin's
 // quaternion type.
 Stage_Point :: struct {
+	// Stable point identity (v9). What a stage's start, finish and pins name.
+	// Absent in older files, where it is filled in from the array position.
+	id:          int,
 	parent:      int,
 	// Second edge out of this point, closing a loop (v7). -1 for none.
 	weld:        int,
@@ -179,6 +185,7 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 	pts := make([]Stage_Point, len(sp.points), context.temp_allocator)
 	for p, i in sp.points {
 		pts[i] = Stage_Point {
+			id          = p.id,
 			parent      = p.parent,
 			weld        = p.weld,
 			pos         = {p.xform.translation.x, p.xform.translation.y, p.xform.translation.z},
@@ -284,6 +291,19 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 			}
 		}
 	}
+	if stage.version >= 9 {
+		// A repeated id would make point_index answer with the first of them, silently.
+		for p, i in stage.points {
+			if p.id < 0 {
+				return fmt.tprintf("road point %d has invalid id %d", i, p.id), false
+			}
+			for q in stage.points[i + 1:] {
+				if q.id == p.id {
+					return fmt.tprintf("road point %d repeats id %d", i, p.id), false
+				}
+			}
+		}
+	}
 
 	// A v1 file carries no cliff fields, so they unmarshal to zero. Zero height
 	// is what we want (no cliffs), but a zero span/taper would leave the point's
@@ -293,6 +313,7 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 	legacy := stage.version < 2
 
 	clear(&sp.points)
+	sp.next_id = 0
 	for p, i in stage.points {
 		width := p.width if p.width > 0 else f32(geo.DEFAULT_WIDTH)
 		span_l := f32(geo.DEFAULT_CLIFF_SPAN) if legacy else p.span_l
@@ -317,7 +338,12 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 				p.parent if stage.version >= 6 else i - 1,
 			),
 		)
-		sp.points[len(sp.points)-1].weld = p.weld if stage.version >= 7 else -1
+		np := &sp.points[len(sp.points)-1]
+		np.weld = p.weld if stage.version >= 7 else -1
+		// v8 and earlier: the id *is* the array position, which is what every
+		// marker written before v9 already names.
+		np.id = p.id if stage.version >= 9 else i
+		sp.next_id = max(sp.next_id, np.id + 1)
 	}
 
 	{

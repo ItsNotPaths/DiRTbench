@@ -307,7 +307,7 @@ generate_stage :: proc(sp: ^geo.Spline, p: Gen_Params) -> (msg: string, ok: bool
 		// Bank rolls the surface normal about the travel direction.
 		up := gfx.Vector3RotateByAxisAngle({0, 1, 0}, fwd, s.bank)
 		pos := s.pos + {0, lift, 0}
-		append(&sp.points, geo.make_point(pos, geo.quat_from_frame(fwd, up), s.width, parent = len(sp.points) - 1))
+		geo.spline_push(sp, geo.make_point(pos, geo.quat_from_frame(fwd, up), s.width, parent = len(sp.points) - 1))
 	}
 	for j := 0; j < len(line); j += stride {
 		add_sample(sp, line[j], lift)

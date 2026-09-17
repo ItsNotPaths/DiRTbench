@@ -36,7 +36,7 @@ branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
-		append(&sp.points, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
+		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
 	testing.expect(t, !geo.is_linear(sp), "the T should not be classified as linear")
 
@@ -111,7 +111,7 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
-		append(&sp.points, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
+		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
 
 	terrain := geo.TERRAIN_DEFAULTS
@@ -185,7 +185,7 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
-		append(&sp.points, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
+		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
 
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
@@ -265,7 +265,7 @@ a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 		if s.parent >= 0 {
 			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
 		}
-		append(&sp.points, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
+		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
 	terrain := geo.TERRAIN_DEFAULTS
 	terrain.enabled = true

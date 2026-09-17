@@ -296,12 +296,12 @@ compile_crosses_a_fork_between_two_branches :: proc(t: ^testing.T) {
 	spur_at := gfx.Vector3{-60, 4, 60}
 	tip_at := gfx.Vector3{-120, 6, 90}
 	spur := len(sp.points)
-	append(&sp.points, geo.make_point(
+	geo.spline_push(&sp, geo.make_point(
 		spur_at, geo.heading_quat(sp.points[1].xform.translation, spur_at),
 		geo.DEFAULT_WIDTH, parent = 1,
 	))
 	tip := len(sp.points)
-	append(&sp.points, geo.make_point(
+	geo.spline_push(&sp, geo.make_point(
 		tip_at, geo.heading_quat(spur_at, tip_at), geo.DEFAULT_WIDTH, parent = spur,
 	))
 

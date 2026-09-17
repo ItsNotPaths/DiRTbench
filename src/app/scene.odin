@@ -78,10 +78,11 @@ draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 
 // A start or finish line, drawn across the road where it sits.
 draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: gfx.Color) {
-	if !geo.marker_valid(sp, m) {
+	at, on_road := geo.marker_resolve(sp, m)
+	if !on_road {
 		return
 	}
-	cs := geo.sample_edge(sp, m.from, m.to, clamp(m.t, 0, 1))
+	cs := geo.sample_edge(sp, at.from, at.to, clamp(at.t, 0, 1))
 	l, r := geo.xsec_ends(cs)
 	gfx.DrawLine3D(l, r, col)
 	gfx.DrawLine3D(l, l + cs.up * 4, col)

@@ -39,7 +39,11 @@ VENUE_FORMAT :: "dirtbench.venue"
 // stage compiles out of that graph at export rather than being its own document.
 // v4 adds the pins a stage is routed through. An older build reading a v4 file
 // would drop them and compile a different road, so the version moves with them.
-VENUE_VERSION :: 4
+// v5: a marker's from/to are point ids, not array positions (see
+// geo.Road_Marker). road.json v9 migrates as id = array index, so a v4 file
+// reads unchanged, but an older build reading ids as positions would put
+// every line on the wrong road after one insert.
+VENUE_VERSION :: 5
 VENUE_FILE :: "venue.json"
 VENUE_ROAD_FILE :: "road.json"
 VENUE_STAGES_DIR :: "stages"

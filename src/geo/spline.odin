@@ -28,6 +28,11 @@ DEFAULT_CLIFF_TAPER :: 16.0 // metres of that span spent rising and falling
 DEFAULT_CLIFF_ANGLE :: 6.0  // degrees off vertical, leaning away from the road
 
 Point :: struct {
+	// Stable identity, handed out by spline_push/spline_inject and never
+	// reused. Array position moves under every insert, remove and extrude;
+	// this does not, which is what lets a marker held outside the spline go on
+	// naming the same stretch of road. See Road_Marker.
+	id:          int,
 	// Parent in the venue road graph. -1 is a root. Nodes are topologically
 	// ordered, so every non-root parent is lower than its child. A second child
 	// is a branch; no separate edge or junction object is needed.
@@ -75,7 +80,11 @@ Point :: struct {
 }
 
 Spline :: struct {
-	points: [dynamic]Point,
+	points:  [dynamic]Point,
+	// Hands out point ids. Only ever grows, never on a remove: an id is never
+	// reused, so a marker naming a point that is gone stays unresolvable
+	// rather than quietly landing on some later point.
+	next_id: int,
 }
 
 first_child :: proc(sp: Spline, idx: int) -> int {
@@ -113,6 +122,40 @@ weld_points :: proc(sp: ^Spline, from, to: int) -> bool {
 
 unweld_point :: proc(sp: ^Spline, idx: int) {
 	if idx >= 0 && idx < len(sp.points) { sp.points[idx].weld = -1 }
+}
+
+// The two ways a point enters the array, and the only two. Both stamp a fresh
+// id, so no edit can add a point without one — the same reason shift_links is
+// a single proc. The loader is the one exception: it restores the ids its file
+// carries and sets next_id itself.
+spline_push :: proc(sp: ^Spline, p: Point) -> int {
+	append(&sp.points, stamped(sp, p))
+	return len(sp.points) - 1
+}
+
+spline_inject :: proc(sp: ^Spline, at: int, p: Point) -> int {
+	inject_at(&sp.points, at, stamped(sp, p))
+	return at
+}
+
+@(private = "file")
+stamped :: proc(sp: ^Spline, p: Point) -> Point {
+	out := p
+	out.id = sp.next_id
+	sp.next_id += 1
+	return out
+}
+
+// Where the point with this id sits right now, or -1. Linear: a road is a few
+// hundred control points, and this runs a handful of times per compile, which
+// is itself cached.
+point_index :: proc(sp: Spline, id: int) -> int {
+	for p, i in sp.points {
+		if p.id == id {
+			return i
+		}
+	}
+	return -1
 }
 
 // Every index the graph stores moves when the array does. One place, so an edit
@@ -513,13 +556,12 @@ insert_point :: proc(sp: ^Spline, at: gfx.Vector3, frame: Cross_Section) -> int 
 		frame.roughness, from,
 	)
 	if sp.points[to].parent != from {
-		append(&sp.points, np)
-		idx := len(sp.points) - 1
+		idx := spline_push(sp, np)
 		sp.points[idx].weld = to
 		sp.points[from].weld = -1
 		return idx
 	}
-	inject_at(&sp.points, to, np)
+	spline_inject(sp, to, np)
 	// Every index the insertion moved, then the one edge it broke: the old
 	// child now hangs off the new point.
 	shift_links(sp, to, to)
@@ -541,12 +583,11 @@ extrude_point :: proc(sp: ^Spline, idx: int) -> int {
 			copy.parent = idx
 			// A fresh node does not inherit someone else's loop closure.
 			copy.weld = -1
-			append(&sp.points, copy)
-			return len(sp.points) - 1
+			return spline_push(sp, copy)
 		}
 	}
 	if idx == 0 && len(sp.points) > 1 {
-		inject_at(&sp.points, 0, sp.points[0])
+		spline_inject(sp, 0, sp.points[0])
 		for &p, i in sp.points {
 			if i > 1 {
 				if p.parent >= 0 { p.parent += 1 }
@@ -559,7 +600,7 @@ extrude_point :: proc(sp: ^Spline, idx: int) -> int {
 		if sp.points[1].weld >= 0 { sp.points[1].weld += 1 }
 		return 0
 	}
-	inject_at(&sp.points, idx + 1, sp.points[idx])
+	spline_inject(sp, idx + 1, sp.points[idx])
 	shift_links(sp, idx + 1, idx + 1)
 	sp.points[idx + 1].parent = idx
 	sp.points[idx + 1].weld = -1
@@ -581,6 +622,7 @@ remove_point :: proc(sp: ^Spline, idx: int) {
 		if p.weld == idx { p.weld = -1 }
 	}
 	ordered_remove(&sp.points, idx)
+	// Parents and welds are array positions and shift; ids stay (see next_id).
 	for &p in sp.points {
 		if p.parent > idx { p.parent -= 1 }
 		if p.weld > idx { p.weld -= 1 }
@@ -640,19 +682,65 @@ append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
 		rough = last.roughness
 	}
 	parent := len(sp.points) - 1
-	append(&sp.points, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough, parent))
-	return len(sp.points) - 1
+	return spline_push(sp, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough, parent))
 }
 
 // --- markers -----------------------------------------------------------------
 
-// Where a start or finish line sits: a point along one graph edge. Naming the
-// edge by both ends rather than by its child is what lets a marker sit on a
-// weld, which is how a loop stage finishes where it began.
+// Where a start or finish line sits: a point along one graph edge.
+//
+// The edge is named by the **ids** of the points at its two ends, not by their
+// array positions. A marker lives outside the spline — in venue.json, on a
+// stage — so nothing can renumber it the way shift_links renumbers parents and
+// welds, and an insert two hundred points away would otherwise slide it onto a
+// different road. Naming both ends rather than the child is what lets it sit on
+// a weld, which is how a loop stage finishes where it began.
+//
+// -1 in either end is "not placed yet".
 Road_Marker :: struct {
 	from: int,
 	to:   int,
 	t:    f32,
+}
+
+// A marker resolved against the spline it names: the same edge, by array index.
+//
+// **Ids at rest, indices in flight.** Everything that walks the graph works in
+// indices; marker_resolve and marker_of are the only two crossings. Its own
+// type rather than a reused Road_Marker, because the two are the same three
+// fields meaning different things, and the compiler is the only reliable place
+// to keep those apart.
+Edge_At :: struct {
+	from: int,
+	to:   int,
+	t:    f32,
+}
+
+// An edge picked off the ribbon, named so it will keep. Cross_Section carries
+// e_from/e_to/t, which is an Edge_At in all but name.
+marker_of :: proc(sp: Spline, e: Edge_At) -> Road_Marker {
+	n := len(sp.points)
+	if e.from < 0 || e.from >= n || e.to < 0 || e.to >= n {
+		return {from = -1, to = -1}
+	}
+	return {from = sp.points[e.from].id, to = sp.points[e.to].id, t = e.t}
+}
+
+// The marker's edge as it stands now, or ok=false when that edge is gone —
+// either end removed, or the stretch split by an insert. False is the honest
+// answer and the caller says so; the alternative is a confident wrong road.
+marker_resolve :: proc(sp: Spline, m: Road_Marker) -> (e: Edge_At, ok: bool) {
+	from, to := point_index(sp, m.from), point_index(sp, m.to)
+	if from < 0 || to < 0 || from == to {
+		return {}, false
+	}
+	// Drawn order only, because `t` runs from `from` to `to`. A marker is
+	// always built from a ribbon sample, and build_ribbon emits every edge the
+	// way it was drawn.
+	if sp.points[to].parent != from && sp.points[from].weld != to {
+		return {}, false
+	}
+	return Edge_At{from = from, to = to, t = m.t}, true
 }
 
 // Keeps a marker clear of the node at either end of its edge. Landing exactly
@@ -661,18 +749,15 @@ Road_Marker :: struct {
 MARKER_MARGIN :: 0.02
 
 marker_valid :: proc(sp: Spline, m: Road_Marker) -> bool {
-	n := len(sp.points)
-	if m.from < 0 || m.from >= n || m.to < 0 || m.to >= n || m.from == m.to {
-		return false
-	}
-	return sp.points[m.to].parent == m.from || sp.points[m.from].weld == m.to
+	_, ok := marker_resolve(sp, m)
+	return ok
 }
 
 // The control point a marker stands for, framed by the road it sits on.
-marker_point :: proc(sp: Spline, m: Road_Marker) -> Point {
-	t := clamp(m.t, MARKER_MARGIN, 1 - MARKER_MARGIN)
-	cs := sample_edge(sp, m.from, m.to, t)
-	src := sp.points[m.from]
+marker_point :: proc(sp: Spline, e: Edge_At) -> Point {
+	t := clamp(e.t, MARKER_MARGIN, 1 - MARKER_MARGIN)
+	cs := sample_edge(sp, e.from, e.to, t)
+	src := sp.points[e.from]
 	return make_point(
 		cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width,
 		cs.cliff_l, cs.cliff_r, src.span_l, src.span_r,
@@ -741,7 +826,7 @@ edge_length :: proc(sp: Spline, a, b: int) -> f32 {
 }
 
 @(private = "file")
-edge_is :: proc(e: Road_Marker, a, b: int) -> bool {
+edge_is :: proc(e: Edge_At, a, b: int) -> bool {
 	return (e.from == a && e.to == b) || (e.from == b && e.to == a)
 }
 
@@ -757,7 +842,7 @@ edge_is :: proc(e: Road_Marker, a, b: int) -> bool {
 graph_path :: proc(
 	sp: Spline,
 	from, to: int,
-	blocked: []Road_Marker = nil,
+	blocked: []Edge_At = nil,
 	allocator := context.temp_allocator,
 ) -> []int {
 	n := len(sp.points)
@@ -848,7 +933,7 @@ graph_path :: proc(
 // --- stages ------------------------------------------------------------------
 
 // The control point a marker stands for, faced the way the stage crosses it.
-marker_point_dir :: proc(sp: Spline, m: Road_Marker, dir: Edge_Dir) -> Point {
+marker_point_dir :: proc(sp: Spline, m: Edge_At, dir: Edge_Dir) -> Point {
 	p := marker_point(sp, m)
 	return dir == .Drawn ? p : point_flipped(p)
 }
@@ -868,12 +953,12 @@ mark_name :: proc(i, count: int) -> string {
 // arrives at. Crossing an edge drawn means leaving at `to`; crossing it against
 // means leaving at `from`.
 @(private = "file")
-mark_exit :: proc(m: Road_Marker, dir: Edge_Dir) -> int {
+mark_exit :: proc(m: Edge_At, dir: Edge_Dir) -> int {
 	return dir == .Drawn ? m.to : m.from
 }
 
 @(private = "file")
-mark_entry :: proc(m: Road_Marker, dir: Edge_Dir) -> int {
+mark_entry :: proc(m: Edge_At, dir: Edge_Dir) -> int {
 	return dir == .Drawn ? m.from : m.to
 }
 
@@ -885,8 +970,8 @@ mark_entry :: proc(m: Road_Marker, dir: Edge_Dir) -> int {
 @(private = "file")
 leg_road :: proc(
 	sp: Spline,
-	a: Road_Marker, da: Edge_Dir,
-	b: Road_Marker, db: Edge_Dir,
+	a: Edge_At, da: Edge_Dir,
+	b: Edge_At, db: Edge_Dir,
 	allocator := context.temp_allocator,
 ) -> (
 	nodes: []int,
@@ -906,7 +991,7 @@ leg_road :: proc(
 	// stage that doubles back along the road it is already on is a U-turn, not
 	// a route. Blocking them is also what sends a start-and-finish pair on one
 	// edge the long way round a loop instead of straight back down it.
-	blocked := [2]Road_Marker{{from = a.from, to = a.to}, {from = b.from, to = b.to}}
+	blocked := [2]Edge_At{{from = a.from, to = a.to}, {from = b.from, to = b.to}}
 	nodes = graph_path(sp, mark_exit(a, da), mark_entry(b, db), blocked[:], allocator)
 	if nodes == nil {
 		return nil, 0, false
@@ -944,15 +1029,22 @@ compile_stage :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	marks := make([dynamic]Road_Marker, 0, len(pins) + 2, context.temp_allocator)
-	append(&marks, start)
-	append(&marks, ..pins)
-	append(&marks, finish)
-	last := len(marks) - 1
-	for m, i in marks {
-		if !marker_valid(sp, m) {
-			return out, fmt.tprintf("%s is not on a road", mark_name(i, len(marks))), false
+	// The waypoints in travel order, each turned from the ids it keeps into the
+	// indices the graph walk needs. This is the only place a stage's markers
+	// are resolved, so a line whose road has been edited away is caught once,
+	// here, and named.
+	lines := make([dynamic]Road_Marker, 0, len(pins) + 2, context.temp_allocator)
+	append(&lines, start)
+	append(&lines, ..pins)
+	append(&lines, finish)
+	last := len(lines) - 1
+	marks := make([]Edge_At, len(lines), context.temp_allocator)
+	for m, i in lines {
+		at, on_road := marker_resolve(sp, m)
+		if !on_road {
+			return out, fmt.tprintf("%s is not on a road", mark_name(i, len(lines))), false
 		}
+		marks[i] = at
 	}
 	for i in 0 ..< last {
 		a, b := marks[i], marks[i + 1]
@@ -1021,8 +1113,10 @@ compile_stage :: proc(
 
 	first_p := marker_point_dir(sp, marks[0], dirs[0])
 	last_p := marker_point_dir(sp, marks[last], dirs[last])
+	// A compiled chain is a new document, so its points take ids from its own
+	// counter rather than inheriting the venue's.
 	out.points = make([dynamic]Point, allocator)
-	append(&out.points, first_p)
+	spline_push(&out, first_p)
 	for nd, i in walk {
 		in_dir := dirs[0]
 		if i > 0 {
@@ -1044,9 +1138,9 @@ compile_stage :: proc(
 			after := i == len(walk) - 1 ? last_p.xform.translation : sp.points[walk[i + 1]].xform.translation
 			p.xform.rotation = heading_quat(before, after)
 		}
-		append(&out.points, p)
+		spline_push(&out, p)
 	}
-	append(&out.points, last_p)
+	spline_push(&out, last_p)
 
 	// A compiled stage is a chain, never a graph. Nothing downstream of here
 	// branches, and the exporter reads array order as travel order.

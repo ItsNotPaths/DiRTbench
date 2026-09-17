@@ -116,7 +116,7 @@ stage_notes_follow_the_ribbon_and_the_pace_knobs :: proc(t: ^testing.T) {
 	// A second child of point 1: the venue road forks, which is the case that
 	// used to produce no notes at all. The stage itself is one chain.
 	spur := geo.make_point({-40, 3, 60}, gfx.Quaternion(1), geo.DEFAULT_WIDTH, parent = 1)
-	append(&doc.spline.points, spur)
+	geo.spline_push(&doc.spline, spur)
 	testing.expect(t, !geo.is_linear(doc.spline), "the fork did not take")
 	append(&doc.routes, Venue_Route{id = "route_0", start = {0, 1, 0.5}, finish = {2, 3, 0.5}})
 	ed := Editor{doc = &doc, kind = .Stage, stage_id = "route_0", route_sel = 0}

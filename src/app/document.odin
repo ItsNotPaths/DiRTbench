@@ -288,7 +288,7 @@ seed_spline :: proc(sp: ^geo.Spline) {
 		if i > 0 {
 			rot = geo.heading_quat(seeds[i - 1], pos)
 		}
-		append(&sp.points, geo.make_point(pos, rot, geo.DEFAULT_WIDTH, parent = i - 1))
+		geo.spline_push(sp, geo.make_point(pos, rot, geo.DEFAULT_WIDTH, parent = i - 1))
 	}
 	if len(sp.points) > 1 {
 		sp.points[0].xform.rotation = sp.points[1].xform.rotation
