@@ -511,49 +511,30 @@ build_tri_mesh :: proc(
 
 // An uploaded triangle soup. Not road-specific: the road and the terrain
 // (terrain.odin) are two of these, drawn separately so either can be toggled.
+// A nil buffer means headless (no GPU device): building still counts the
+// triangles, and drawing skips the mesh.
 Gpu_Mesh :: struct {
-	mesh:     rl.Mesh,
-	uploaded: bool,
-	tris:     int,
+	mesh: rl.Mesh,
+	tris: int,
 }
 
 gpu_mesh_unload :: proc(rm: ^Gpu_Mesh) {
-	if rm.uploaded {
-		rl.UnloadMesh(rm.mesh) // frees the CPU arrays (RL_FREE) and the VBOs
-		rm.uploaded = false
-	}
+	rl.mesh_free(&rm.mesh)
 	rm^ = {}
 }
 
-// Copy the soup into backend-owned buffers and upload. The arrays must come
-// from rl.MemAlloc because rl.UnloadMesh releases them with the matching free.
+// Copy the soup into a backend-owned buffer. The backend copies the vertices
+// synchronously, so the Tri_Mesh may be temp-allocated.
 gpu_mesh_upload :: proc(m: Tri_Mesh) -> Gpu_Mesh {
 	n := len(m.pos)
 	if n == 0 {
 		return {}
 	}
-	mesh: rl.Mesh
-	mesh.vertexCount = c.int(n)
-	mesh.triangleCount = c.int(n / 3)
-
-	mesh.vertices = cast([^]f32)rl.MemAlloc(c.uint(n * 3 * size_of(f32)))
-	mesh.normals = cast([^]f32)rl.MemAlloc(c.uint(n * 3 * size_of(f32)))
-	mesh.colors = cast([^]u8)rl.MemAlloc(c.uint(n * 4 * size_of(u8)))
-
+	verts := make([]rl.Upload_Vertex, n, context.temp_allocator)
 	for i in 0 ..< n {
-		mesh.vertices[i * 3 + 0] = m.pos[i].x
-		mesh.vertices[i * 3 + 1] = m.pos[i].y
-		mesh.vertices[i * 3 + 2] = m.pos[i].z
-		mesh.normals[i * 3 + 0] = m.nrm[i].x
-		mesh.normals[i * 3 + 1] = m.nrm[i].y
-		mesh.normals[i * 3 + 2] = m.nrm[i].z
-		mesh.colors[i * 4 + 0] = m.col[i].r
-		mesh.colors[i * 4 + 1] = m.col[i].g
-		mesh.colors[i * 4 + 2] = m.col[i].b
-		mesh.colors[i * 4 + 3] = m.col[i].a
+		verts[i] = {pos = m.pos[i], col = m.col[i]}
 	}
-	rl.UploadMesh(&mesh, false)
-	return Gpu_Mesh{mesh = mesh, uploaded = true, tris = n / 3}
+	return Gpu_Mesh{mesh = rl.mesh_upload(verts), tris = n / 3}
 }
 
 // Rebuild the whole thing from the ribbon. The old GPU buffers are released
@@ -565,7 +546,7 @@ road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, topo: c.int, r
 }
 
 gpu_mesh_draw :: proc(rm: Gpu_Mesh, mat: rl.Material, wireframe: bool) {
-	if !rm.uploaded {
+	if rm.mesh.buffer == nil {
 		return
 	}
 	// Every face is single-sided and correctly wound for export: the road faces

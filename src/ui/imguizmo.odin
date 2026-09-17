@@ -87,8 +87,8 @@ matrix_from_float_v :: proc(v: Gizmo_Matrix) -> rl.Matrix {
 // installs — the gizmo must project exactly as the scene does or its handles
 // will not sit on the object.
 //
-// The clip planes are read back from rlgl rather than assumed, because main.odin
-// overrides them (rlgl.SetClipPlanes); baking in rlgl's stock 0.01..1000 here
+// The clip planes are read back from the backend rather than assumed, because
+// main.odin overrides them (SetClipPlanes); baking in a stock 0.01..1000 here
 // would leave the gizmo projecting differently from the scene.
 camera_matrices :: proc(cam: rl.Camera3D) -> (view, proj: Gizmo_Matrix) {
 	w := f32(rl.GetScreenWidth())

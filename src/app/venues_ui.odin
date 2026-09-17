@@ -462,7 +462,7 @@ draw_venues_frame :: proc(ed: ^Editor, window: ^rl.Window) {
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
 	}
-	ui.imgui_backend_end()
+	render_imgui(window)
 
 	rl.EndWindowFrame(window)
 }

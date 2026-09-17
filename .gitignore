@@ -1,6 +1,5 @@
 vendor/
 build/
-dist/
 
 # Byte-level format notes, the plan and the handoff roadmaps. Derived from
 # reading the user's own game files; not ours to redistribute.

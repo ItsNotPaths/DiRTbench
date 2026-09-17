@@ -616,3 +616,14 @@ draw_targets :: proc(ed: ^Editor) {
 		ui.im_text_colored(DIM_COL, fmt.ctprintf("No %s yet", conf))
 	}
 }
+
+// Records the finished ImGui frame into the window's swapchain pass: upload
+// outside any pass, then draw inside one. A nil pass (minimized window) draws
+// nothing.
+render_imgui :: proc(window: ^rl.Window) {
+	ui.imgui_backend_prepare(rl.ImGuiCommandBuffer())
+	if pass := rl.BeginImGuiPass(); pass != nil {
+		ui.imgui_backend_draw(rl.ImGuiCommandBuffer(), pass)
+		rl.EndImGuiPass(pass)
+	}
+}

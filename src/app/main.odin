@@ -29,9 +29,9 @@ PROJECT_MANAGER_H :: 720
 
 GROUND_Y :: 0.0
 
-// Render distance: 10x rlgl's stock 0.01..1000, so a multi-kilometre stage is
-// visible end to end. Near moves with far, keeping the far/near ratio — and so
-// the depth-buffer precision — exactly as it was.
+// Render distance: near 0.1, far 10km, so a multi-kilometre stage is visible
+// end to end. Near moves with far, keeping the far/near ratio — and so the
+// depth-buffer precision — exactly as it was.
 CAM_NEAR :: 0.1
 CAM_FAR :: 10_000.0
 
@@ -545,7 +545,7 @@ main :: proc() {
 	// The backend installs its clip state with the window.
 	rl.SetClipPlanes(CAM_NEAR, CAM_FAR)
 
-	if !ui.imgui_backend_setup(true, rl.NativeWindow(&window), rl.NativeGLContext(&window)) {
+	if !ui.imgui_backend_setup(true, rl.NativeWindow(&window), rl.GpuDevice(), rl.WindowSwapchainFormat(&window)) {
 		fmt.println("could not initialize Dear ImGui")
 		return
 	}
@@ -744,7 +744,7 @@ main :: proc() {
 		if ed.show_demo {
 			ui.igShowDemoWindow(&ed.show_demo)
 		}
-		ui.imgui_backend_end()
+		render_imgui(&window)
 
 		// --- input (now that gizmo interaction for this frame is known) ----
 		// A click arbitrates between a control point and a terrain node by depth,

@@ -72,7 +72,7 @@ fetch_sdl() {
 
 fetch_sdl
 
-# --- Dear ImGui + ImGuizmo (+ C APIs + SDL3/OpenGL backend) ------------------
+# --- Dear ImGui + ImGuizmo (+ C APIs + SDL3/SDL_GPU backend) -----------------
 # All five sources are C++ and all compile into one static lib, vendor/imgui/
 # libimgui.a, which src/imgui.odin and src/imguizmo.odin link against.
 #
@@ -102,7 +102,22 @@ IMGUI_DEST="$VENDOR/imgui"
 # cimgui.cpp does #include "./imgui/imgui.h", and cimguizmo.cpp does
 # #include "./ImGuizmo/src/ImGuizmo.h". Keep the tree shaped that way.
 fetch_imgui() {
-    if [ -f "$IMGUI_DEST/libimgui.a" ] && [ -f "$IMGUI_DEST/backends/imgui_impl_sdl3.cpp" ]; then
+    # The archive is gitignored, so a newer backend source or shim must
+    # retrigger the build; existence alone would leave a stale archive.
+    imgui_stale=true
+    if [ -f "$IMGUI_DEST/libimgui.a" ] && [ -f "$IMGUI_DEST/backends/imgui_impl_sdlgpu3.cpp" ]; then
+        imgui_stale=false
+        for s in "$ROOT/csrc/dirt_imgui_shim.cpp" \
+                 "$IMGUI_DEST/backends/imgui_impl_sdl3.cpp" \
+                 "$IMGUI_DEST/backends/imgui_impl_sdlgpu3.cpp" \
+                 "$IMGUI_DEST/backends/imgui_impl_sdlgpu3.h" \
+                 "$IMGUI_DEST/backends/imgui_impl_sdlgpu3_shaders.h"; do
+            if [ "$s" -nt "$IMGUI_DEST/libimgui.a" ]; then
+                imgui_stale=true
+            fi
+        done
+    fi
+    if ! $imgui_stale; then
         echo "  already present: imgui"
         return
     fi
@@ -114,7 +129,7 @@ fetch_imgui() {
     curl -fsSL "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz" | tar xz -C "$tmp"
     cp "$tmp"/imgui-*/{imgui.cpp,imgui_draw.cpp,imgui_tables.cpp,imgui_widgets.cpp,imgui_demo.cpp} "$IMGUI_DEST/imgui/"
     cp "$tmp"/imgui-*/{imgui.h,imgui_internal.h,imconfig.h,imstb_textedit.h,imstb_rectpack.h,imstb_truetype.h} "$IMGUI_DEST/imgui/"
-    cp "$tmp"/imgui-*/backends/{imgui_impl_sdl3.cpp,imgui_impl_sdl3.h,imgui_impl_opengl3.cpp,imgui_impl_opengl3.h,imgui_impl_opengl3_loader.h} "$IMGUI_DEST/backends/"
+    cp "$tmp"/imgui-*/backends/{imgui_impl_sdl3.cpp,imgui_impl_sdl3.h,imgui_impl_sdlgpu3.cpp,imgui_impl_sdlgpu3.h,imgui_impl_sdlgpu3_shaders.h} "$IMGUI_DEST/backends/"
 
     echo "  downloading cimgui @ ${CIMGUI_SHA:0:8}..."
     curl -fsSL "https://github.com/cimgui/cimgui/archive/${CIMGUI_SHA}.tar.gz" | tar xz -C "$tmp"
@@ -136,7 +151,7 @@ fetch_imgui() {
     local srcs=(imgui/imgui.cpp imgui/imgui_draw.cpp imgui/imgui_tables.cpp
                 imgui/imgui_widgets.cpp imgui/imgui_demo.cpp
                 cimgui.cpp ImGuizmo/src/ImGuizmo.cpp cimguizmo.cpp
-                backends/imgui_impl_sdl3.cpp backends/imgui_impl_opengl3.cpp)
+                backends/imgui_impl_sdl3.cpp backends/imgui_impl_sdlgpu3.cpp)
     local objs=()
     for s in "${srcs[@]}"; do
         local o="$IMGUI_DEST/${s//\//_}.o"

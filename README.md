@@ -4,7 +4,7 @@ DiRT 3 stage/venue modding tool.
 
 ```
 ./download-deps.sh      # once: fetches and builds vendor/
-./release.sh --local    # -> dist/dirtbench-<arch>-linux.tar.gz
+./release.sh --local    # -> build/dirtbench
 ./test.sh               # run the test suite
 ```
 

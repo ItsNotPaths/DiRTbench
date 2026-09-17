@@ -68,8 +68,19 @@ QuaternionFromAxisAngle :: proc(axis: Vector3, angle: f32) -> Quaternion {
 
 MatrixTranslate :: proc(x, y, z: f32) -> Matrix { return auto_cast linalg.matrix4_translate(Vector3{x, y, z}) }
 MatrixTranspose :: proc(m: Matrix) -> Matrix { return linalg.transpose(m) }
+// Vulkan depth range (0..1); Y is NOT flipped versus OpenGL because SDL_GPU
+// presents NDC +1 at the top. Matches the pipeline in render.odin; the gizmo
+// in ui/ shares it. View space is right-handed (in front is negative z), so
+// w is -z and depth grows to 1.
 MatrixPerspective :: proc(fovy, aspect, near, far: f32) -> Matrix {
-	return auto_cast linalg.matrix4_perspective(fovy, aspect, near, far)
+	f := 1 / math.tan(fovy * 0.5)
+	ff := far / (far - near)
+	return Matrix{
+		f / aspect, 0, 0, 0,
+		0, f, 0, 0,
+		0, 0, -ff, -ff * near,
+		0, 0, -1, 0,
+	}
 }
 MatrixToFloatV :: proc(m: Matrix) -> [16]f32 { return transmute([16]f32)linalg.transpose(m) }
 GetCameraMatrix :: proc(camera: Camera3D) -> Matrix {

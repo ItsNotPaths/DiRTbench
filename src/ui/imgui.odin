@@ -1,7 +1,7 @@
 package ui
 
 // Odin bindings for Dear ImGui, via cimgui's flat C API, plus the official
-// SDL3/OpenGL3 backends. Vendored and compiled into vendor/imgui/libimgui.a by
+// SDL3 platform and SDL_GPU renderer backends. Vendored and compiled into vendor/imgui/libimgui.a by
 // download-deps.sh — see that script for the pinned versions and why they must
 // move as a set.
 //
@@ -67,16 +67,22 @@ Im_Col :: enum c.int {
 
 @(default_calling_convention = "c")
 foreign imgui {
-	// Creates the ImGui context and attaches it to an SDL OpenGL window.
+	// Creates the ImGui context on an SDL window; rendering goes through the
+	// SDL_GPU backend. `device` is the gfx GPU device, `color_format` the
+	// window's swapchain texture format as an integer.
 	@(link_name = "dirtImGuiSetup")
-	imgui_backend_setup :: proc(dark_theme: bool, window, gl_context: rawptr) -> bool ---
+	imgui_backend_setup :: proc(dark_theme: bool, window, device: rawptr, color_format: c.int) -> bool ---
 	// Begins the ImGui frame (feeds input, calls NewFrame). All ImGui and
-	// ImGuizmo calls for the frame go between Begin and End.
+	// ImGuizmo calls for the frame go between Begin and Prepare.
 	@(link_name = "dirtImGuiBegin")
 	imgui_backend_begin :: proc() ---
-	// Ends the frame and renders draw data into the current OpenGL context.
-	@(link_name = "dirtImGuiEnd")
-	imgui_backend_end :: proc() ---
+	// Ends the frame and uploads the draw data into `cmd`. Must run outside
+	// any render pass.
+	@(link_name = "dirtImGuiPrepare")
+	imgui_backend_prepare :: proc(cmd: rawptr) ---
+	// Records the prepared draw data into the caller's swapchain pass.
+	@(link_name = "dirtImGuiDraw")
+	imgui_backend_draw :: proc(cmd, pass: rawptr) ---
 	// Destroys the context before its SDL window and GL context disappear.
 	@(link_name = "dirtImGuiShutdown")
 	imgui_backend_shutdown :: proc() ---
