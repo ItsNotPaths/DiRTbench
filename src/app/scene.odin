@@ -47,7 +47,6 @@ pick_ribbon :: proc(
 	ribbon: []geo.Cross_Section,
 	ray: gfx.Ray,
 ) -> (
-	seg: int,
 	at: gfx.Vector3,
 	frame: geo.Cross_Section,
 	ok: bool,
@@ -60,7 +59,6 @@ pick_ribbon :: proc(
 		c := gfx.GetRayCollisionQuad(ray, la, ra, rb, lb)
 		if c.hit && c.distance < best_dist {
 			best_dist = c.distance
-			seg = ribbon[i].seg
 			at = c.point
 			frame = ribbon[i]
 			ok = true
@@ -161,6 +159,9 @@ draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	if route := selected_route(ed); route != nil {
 		draw_marker(ed.doc.spline, route.start, {110, 255, 140, 255})
 		draw_marker(ed.doc.spline, route.finish, {255, 110, 110, 255})
+		for pin in route.pins {
+			draw_marker(ed.doc.spline, pin, {120, 190, 255, 255})
+		}
 	}
 	if ed.stage.state == .Ready {
 		draw_ribbon_edges(ed.stage.ribbon, {255, 235, 120, 255})

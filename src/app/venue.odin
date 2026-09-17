@@ -37,7 +37,9 @@ VENUE_FORMAT :: "dirtbench.venue"
 // independently edited spline documents.
 // v3 gives a stage a start and a finish marker on the venue road graph, so a
 // stage compiles out of that graph at export rather than being its own document.
-VENUE_VERSION :: 3
+// v4 adds the pins a stage is routed through. An older build reading a v4 file
+// would drop them and compile a different road, so the version moves with them.
+VENUE_VERSION :: 4
 VENUE_FILE :: "venue.json"
 VENUE_ROAD_FILE :: "road.json"
 VENUE_STAGES_DIR :: "stages"
@@ -58,6 +60,11 @@ Venue_Route :: struct {
 	name:   string, // menu text; the db_ prefix is implied
 	start:  geo.Road_Marker,
 	finish: geo.Road_Marker,
+	// Roads the stage is made to cross between the two lines, in the order they
+	// were placed. Without them the compile takes the shortest way round; each
+	// one is how a longer way is asked for. Not control points — a pin says
+	// which road, not where a point goes.
+	pins:   [dynamic]geo.Road_Marker,
 }
 
 // The route ids and menu names, in order, as the registration and the staging
@@ -303,6 +310,7 @@ venue_free :: proc(p: Venue, allocator := context.allocator) {
 	for route in p.routes {
 		delete(route.id, allocator)
 		delete(route.name, allocator)
+		delete(route.pins)
 	}
 	delete(p.routes, allocator)
 }
@@ -502,7 +510,7 @@ venue_compile_route :: proc(
 		if load_msg, loaded := load_road(doc, venue_road_path(p.id)); !loaded {
 			return out, load_msg, false
 		}
-		return geo.compile_stage(doc.spline, route.start, route.finish, allocator)
+		return geo.compile_stage(doc.spline, route.start, route.finish, route.pins[:], allocator)
 	}
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
 }
@@ -525,6 +533,7 @@ routes_remove :: proc(routes: ^[dynamic]Venue_Route, i: int, allocator := contex
 	}
 	delete(routes[i].id, allocator)
 	delete(routes[i].name, allocator)
+	delete(routes[i].pins)
 	ordered_remove(routes, i)
 }
 
@@ -543,11 +552,14 @@ route_rename :: proc(
 venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue_Route {
 	out := make([dynamic]Venue_Route, 0, len(p.routes), allocator)
 	for r in p.routes {
+		pins := make([dynamic]geo.Road_Marker, 0, len(r.pins), allocator)
+		append(&pins, ..r.pins[:])
 		append(&out, Venue_Route{
 			id     = strings.clone(r.id, allocator),
 			name   = strings.clone(r.name, allocator),
 			start  = r.start,
 			finish = r.finish,
+			pins   = pins,
 		})
 	}
 	return out
@@ -557,6 +569,7 @@ routes_free :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocato
 	for r in routes {
 		delete(r.id, allocator)
 		delete(r.name, allocator)
+		delete(r.pins)
 	}
 	delete(routes^)
 	routes^ = nil
@@ -605,7 +618,9 @@ venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.S
 			venue_compiled_delete(stages[:], allocator)
 			return nil, fmt.tprintf("%s has no start and finish line yet", route.id), false
 		}
-		stage, stage_msg, stage_ok := geo.compile_stage(doc.spline, route.start, route.finish, allocator)
+		stage, stage_msg, stage_ok := geo.compile_stage(
+			doc.spline, route.start, route.finish, route.pins[:], allocator,
+		)
 		if !stage_ok {
 			venue_compiled_delete(stages[:], allocator)
 			return nil, fmt.tprintf("%s: %s", route.id, stage_msg), false

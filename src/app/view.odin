@@ -14,6 +14,7 @@ package main
 import "core:c"
 import "core:fmt"
 import "core:math"
+import "core:slice"
 import "../geo"
 import "../ui"
 import "../gfx"
@@ -81,7 +82,9 @@ View_Kind :: enum {
 
 // What the compiled stage is keyed on. Every spline edit ticks `gen`, and topo
 // is the only other input to the ribbon, so these four say whether the cache
-// below still describes the stage.
+// below still describes the stage. The pins are the fifth input and are not
+// here: a list cannot be compared with `==`, so the cache keeps its own copy
+// and compares that (see stage_cache_refresh).
 Stage_Key :: struct {
 	gen:           u64, // doc.ribbon_gen
 	start, finish: geo.Road_Marker,
@@ -106,6 +109,9 @@ Stage_Cache :: struct {
 	spline:     geo.Spline,
 	ribbon:     []geo.Cross_Section,
 	length:     f32,
+	// The pins this was compiled with, copied. Compared against the route's own
+	// list every frame, because they are part of the key in everything but name.
+	pins:       [dynamic]geo.Road_Marker,
 	// The co-driver's calls on `ribbon`. Outside `key`: the pace knobs change no
 	// geometry, so the notes carry their own compare. `notes_pace` is what they
 	// were generated from, and a cleared cache zeroes it — no live Pace_Params
@@ -236,6 +242,7 @@ stage_cache_clear :: proc(ed: ^Editor) {
 	delete(ed.stage.spline.points)
 	delete(ed.stage.ribbon)
 	delete(ed.stage.notes)
+	delete(ed.stage.pins)
 	ed.stage = {}
 }
 
@@ -254,12 +261,14 @@ stage_cache_refresh :: proc(ed: ^Editor) {
 		finish = route.finish,
 		topo   = ed.doc.topo,
 	}
-	if ed.stage.state != .None && ed.stage.key == key {
+	if ed.stage.state != .None && ed.stage.key == key &&
+	   slice.equal(ed.stage.pins[:], route.pins[:]) {
 		return
 	}
 	stage_cache_clear(ed)
-	sp, msg, ok := geo.compile_stage(ed.doc.spline, route.start, route.finish)
+	sp, msg, ok := geo.compile_stage(ed.doc.spline, route.start, route.finish, route.pins[:])
 	ed.stage.key = key
+	append(&ed.stage.pins, ..route.pins[:])
 	ed.stage.state = ok ? .Ready : .Failed
 	set_buf(ed.stage.msg[:], msg)
 	if !ok {
@@ -517,16 +526,26 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	}
 	ctrl := gfx.IsKeyDown(.LEFT_CONTROL) || gfx.IsKeyDown(.RIGHT_CONTROL)
 	start := !ctrl && gfx.IsKeyPressed(.S)
+	pin := gfx.IsKeyPressed(.P)
 	line := start ? &route.start : gfx.IsKeyPressed(.F) ? &route.finish : nil
-	if line == nil {
+	if line == nil && !pin {
 		return
 	}
-	if _, _, frame, hit := pick_ribbon(ed.doc.ribbon, ray); hit {
-		line^ = {from = frame.e_from, to = frame.e_to, t = frame.t}
-		set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
-	} else {
-		set_status(&ed.status, "point at the road to place a line there", false)
+	_, frame, hit := pick_ribbon(ed.doc.ribbon, ray)
+	if !hit {
+		set_status(&ed.status, "point at the road to place it there", false)
+		return
 	}
+	at := geo.Road_Marker{from = frame.e_from, to = frame.e_to, t = frame.t}
+	// A pin is a road the stage has to cross, and they are crossed in the order
+	// they were placed, so a new one goes on the end.
+	if pin {
+		append(&route.pins, at)
+		set_status(&ed.status, fmt.tprintf("pin %d placed", len(route.pins)), true)
+		return
+	}
+	line^ = at
+	set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
 }
 
 // Right-click, in priority order: another control point welds the selection
@@ -554,8 +573,8 @@ edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys:
 		case target >= 0:
 			ed.sel = {kind = .Point, idx = target}
 		case:
-			if seg, at, frame, ok := pick_ribbon(ed.doc.ribbon, ray); ok {
-				ed.sel = {kind = .Point, idx = geo.insert_point(&ed.doc.spline, seg, at, frame)}
+			if at, frame, ok := pick_ribbon(ed.doc.ribbon, ray); ok {
+				ed.sel = {kind = .Point, idx = geo.insert_point(&ed.doc.spline, at, frame)}
 				mark_dirty(ed.doc)
 			} else if g, gok := ray_ground(ray); gok {
 				ed.sel = {kind = .Point, idx = grow_road(&ed.doc.spline, sel, g)}

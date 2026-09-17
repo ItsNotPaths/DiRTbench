@@ -58,6 +58,7 @@ the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 	defer delete(doc.routes)
 	seed_spline(&doc.spline)
 	append(&doc.routes, Venue_Route{id = "route_0", start = {0, 1, 0.5}, finish = {2, 3, 0.5}})
+	defer delete(doc.routes[0].pins)
 	ed := Editor{doc = &doc, kind = .Stage, stage_id = "route_0", route_sel = 0}
 	defer stage_cache_clear(&ed)
 
@@ -78,10 +79,25 @@ the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 	doc.routes[0].finish.t = 0.9
 	stage_cache_refresh(&ed)
 	testing.expect(t, ed.stage.length > moved, "a moved finish line served the old stage")
+	longer := ed.stage.length
 
-	// Backwards: a finish upstream of the start compiles to nothing, and the
-	// reason is what the panel shows.
-	doc.routes[0].finish = {0, 1, 0.1}
+	// Pins are the fifth input and are not in Stage_Key — a list cannot be
+	// compared with `==` — so the cache keeps its own copy and compares that.
+	// A pin on no edge at all is the cheapest proof that it recompiled.
+	append(&doc.routes[0].pins, geo.Road_Marker{0, 3, 0.5})
+	stage_cache_refresh(&ed)
+	testing.expect_value(t, ed.stage.state, Stage_Compile.Failed)
+	testing.expect_value(t, len(ed.stage.pins), 1)
+
+	ordered_remove(&doc.routes[0].pins, 0)
+	stage_cache_refresh(&ed)
+	testing.expect_value(t, ed.stage.state, Stage_Compile.Ready)
+	testing.expect_value(t, ed.stage.length, longer)
+	testing.expect_value(t, len(ed.stage.pins), 0)
+
+	// A marker off any edge compiles to nothing, and the reason is what the
+	// panel shows.
+	doc.routes[0].finish = {0, 3, 0.5}
 	stage_cache_refresh(&ed)
 	testing.expect_value(t, ed.stage.state, Stage_Compile.Failed)
 	testing.expect(t, len(ed.stage.ribbon) == 0, "a failed compile left a ribbon to draw")
@@ -118,7 +134,7 @@ stage_notes_follow_the_ribbon_and_the_pace_knobs :: proc(t: ^testing.T) {
 	testing.expect_value(t, ed.stage.notes_pace, doc.pace)
 
 	// A stage that will not compile has nothing to call.
-	doc.routes[0].finish = {0, 1, 0.1}
+	doc.routes[0].finish = {0, 3, 0.5}
 	stage_cache_refresh(&ed)
 	stage_notes_refresh(&ed)
 	testing.expect_value(t, ed.stage.state, Stage_Compile.Failed)

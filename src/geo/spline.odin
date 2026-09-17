@@ -127,8 +127,7 @@ shift_links :: proc(sp: ^Spline, at, skip: int) {
 }
 
 // A sampled slice across the road: everything needed to lay a ribbon rung and
-// to pick against it. `seg` is the index of the control point the sample grew
-// from (the parent of the segment it lies on).
+// to pick against it.
 Cross_Section :: struct {
 	// True when this starts another graph edge rather than continuing from the
 	// previous sampled section. Consumers must not bridge across this boundary.
@@ -138,11 +137,9 @@ Cross_Section :: struct {
 	up:      gfx.Vector3, // surface normal, unit
 	fwd:     gfx.Vector3, // travel direction, unit
 	width:   f32,
-	seg:     int,
-	// The graph edge this sample lies on, and where along it. `seg` alone
-	// cannot say: a weld edge and the parent edge into the same node share a
-	// child index. Filled by build_ribbon, which is the only place that knows
-	// which edge it is walking.
+	// The graph edge this sample lies on, and where along it. A child index
+	// alone cannot say: a weld edge and the parent edge into the same node
+	// share one. Everything that puts a point on the road goes by this.
 	e_from:  int,
 	e_to:    int,
 	t:       f32,
@@ -284,7 +281,8 @@ sample_at :: proc(sp: Spline, seg: int, t: f32) -> Cross_Section {
 	rough := p0.roughness + (p1.roughness - p0.roughness) * t
 	return Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
-		width = width, seg = seg, cliff_angle = angle, roughness = rough,
+		width = width, cliff_angle = angle, roughness = rough,
+		e_from = seg, e_to = seg + 1, t = t,
 	}
 }
 
@@ -301,8 +299,7 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 	return Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
 		width = p0.width + (p1.width-p0.width)*t,
-		// `seg` identifies the child for graph-aware insertion.
-		seg = child,
+		e_from = parent, e_to = child, t = t,
 		cliff_l = p0.cliff_l+(p1.cliff_l-p0.cliff_l)*t,
 		cliff_r = p0.cliff_r+(p1.cliff_r-p0.cliff_r)*t,
 		cliff_angle = p0.cliff_angle+(p1.cliff_angle-p0.cliff_angle)*t,
@@ -332,7 +329,6 @@ build_ribbon :: proc(
 				t := f32(s)/f32(spp)
 				cs := sample_edge(sp, parent, child, t)
 				cs.break_before = s == 0
-				cs.e_from, cs.e_to, cs.t = parent, child, t
 				append(&out, cs)
 			}
 		}
@@ -345,7 +341,6 @@ build_ribbon :: proc(
 				t := f32(s)/f32(spp)
 				cs := sample_edge(sp, i, p.weld, t)
 				cs.break_before = s == 0
-				cs.e_from, cs.e_to, cs.t = i, p.weld, t
 				append(&out, cs)
 			}
 		}
@@ -360,14 +355,10 @@ build_ribbon :: proc(
 		// each segment contributes t in [0, 1); the final endpoint is added once
 		for s in 0 ..< spp {
 			t := f32(s) / f32(spp)
-			cs := sample_at(sp, seg, t)
-			cs.e_from, cs.e_to, cs.t = seg, seg + 1, t
-			append(&out, cs)
+			append(&out, sample_at(sp, seg, t))
 		}
 	}
-	last := sample_at(sp, nseg - 1, 1.0)
-	last.e_from, last.e_to, last.t = nseg - 1, nseg, 1
-	append(&out, last)
+	append(&out, sample_at(sp, nseg - 1, 1.0))
 	resolve_cliffs(sp, out[:], spp)
 	return out[:]
 }
@@ -497,45 +488,44 @@ handle_radius :: proc(width: f32) -> f32 {
 
 // --- edits ------------------------------------------------------------------
 
-// insert a control point on segment (seg, seg+1) at world point `at`, framed by
-// the interpolated road frame there. Returns the new point's index.
-insert_point :: proc(sp: ^Spline, seg: int, at: gfx.Vector3, frame: Cross_Section) -> int {
-	if !is_linear(sp^) {
-		child := seg
-		if child <= 0 || child >= len(sp.points) { return -1 }
-		parent := sp.points[child].parent
-		src := sp.points[parent]
-		np := make_point(
-			at, quat_from_frame(frame.fwd, frame.up), frame.width,
-			frame.cliff_l, frame.cliff_r, src.span_l, src.span_r,
-			src.cliff_taper, frame.cliff_angle, frame.roughness, parent,
-		)
-		inject_at(&sp.points, child, np)
-		shift_links(sp, child, child)
-		sp.points[child + 1].parent = child
-		return child
+// Insert a control point where the road was clicked. `frame` names the edge it
+// was clicked on and where along it; nothing else can say, because a weld edge
+// and the parent edge into the same node share a child index.
+//
+// On a parent edge the new point takes the child's place in the array and the
+// child moves along, which keeps every parent below its child. A weld edge has
+// no child to get in front of: the point goes on the end and takes the weld
+// over, so `from` -> new is a parent edge and new -> `to` is the weld that
+// still closes the loop.
+insert_point :: proc(sp: ^Spline, at: gfx.Vector3, frame: Cross_Section) -> int {
+	from, to := frame.e_from, frame.e_to
+	n := len(sp.points)
+	if from < 0 || from >= n || to < 0 || to >= n || from == to {
+		return -1
 	}
-	rot := quat_from_frame(frame.fwd, frame.up)
-	// Adopt the cliff height already resolved at this slice, so inserting a
-	// point into a cliffed stretch does not punch a notch out of the cliff.
-	src := sp.points[seg]
+	src := sp.points[from]
 	np := make_point(
-		at, rot, frame.width,
+		at, quat_from_frame(frame.fwd, frame.up), frame.width,
+		// Adopt the cliff already resolved at this slice, so inserting into a
+		// cliffed stretch does not punch a notch out of the cliff. The frame
+		// carries the lerped roughness for the same reason.
 		frame.cliff_l, frame.cliff_r,
 		src.span_l, src.span_r, src.cliff_taper, frame.cliff_angle,
-		// Inserting into a rough stretch keeps its roughness; the frame already
-		// carries the lerped value at this slice.
-		frame.roughness,
-		seg,
+		frame.roughness, from,
 	)
-	inject_at(&sp.points, seg + 1, np)
-	// The old child now follows the inserted node. Shift every index affected
-	// by the insertion before repairing that one edge.
-	shift_links(sp, seg + 1, seg + 1)
-	if seg + 2 < len(sp.points) && sp.points[seg + 2].parent == seg {
-		sp.points[seg + 2].parent = seg + 1
+	if sp.points[to].parent != from {
+		append(&sp.points, np)
+		idx := len(sp.points) - 1
+		sp.points[idx].weld = to
+		sp.points[from].weld = -1
+		return idx
 	}
-	return seg + 1
+	inject_at(&sp.points, to, np)
+	// Every index the insertion moved, then the one edge it broke: the old
+	// child now hangs off the new point.
+	shift_links(sp, to, to)
+	sp.points[to + 1].parent = to
+	return to
 }
 
 // Extrude the point at `idx`: duplicate it and return the index of the copy, which
@@ -610,18 +600,24 @@ reverse_spline :: proc(sp: ^Spline) {
 		sp.points[i], sp.points[n - 1 - i] = sp.points[n - 1 - i], sp.points[i]
 	}
 	for &p, i in sp.points {
+		p = point_flipped(p)
 		// reverse_spline is only defined for a chain. Array order is its new
 		// travel order, so rebuild the graph edges to match that order.
 		p.parent = i - 1
 		p.weld = -1
-		f := point_forward(p)
-		u := point_up(p)
-		// Flip the frame to face the new travel direction, normal unchanged.
-		p.xform.rotation = quat_from_frame(-f, u)
-		// The physical sides swap when you turn around.
-		p.cliff_l, p.cliff_r = p.cliff_r, p.cliff_l
-		p.span_l, p.span_r = p.span_r, p.span_l
 	}
+}
+
+// The same control point faced the other way: forward negated, the surface
+// normal kept, and the physical sides swapped, because the old left is the new
+// right. A whole chain of these is reverse_spline; one of them is a stage
+// crossing an edge against the way the road was drawn.
+point_flipped :: proc(p: Point) -> Point {
+	out := p
+	out.xform.rotation = quat_from_frame(-point_forward(p), point_up(p))
+	out.cliff_l, out.cliff_r = p.cliff_r, p.cliff_l
+	out.span_l, out.span_r = p.span_r, p.span_l
+	return out
 }
 
 // append a control point at world point `at`, level, aimed there from the last
@@ -649,7 +645,7 @@ append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
 	return len(sp.points) - 1
 }
 
-// --- stages -----------------------------------------------------------------
+// --- markers -----------------------------------------------------------------
 
 // Where a start or finish line sits: a point along one graph edge. Naming the
 // edge by both ends rather than by its child is what lets a marker sit on a
@@ -685,57 +681,382 @@ marker_point :: proc(sp: Spline, m: Road_Marker) -> Point {
 	)
 }
 
-// The road between two markers, as a plain chain the exporter can take.
+// --- the road graph ----------------------------------------------------------
+
+// Which way a stage crosses one edge. An edge is *drawn* parent -> child (or
+// from -> weld), but a stage may cross it either way: coming out of one branch
+// of a fork and going down another is only possible against the drawn
+// direction, and a reverse stage is the same road driven the other way.
+Edge_Dir :: enum {
+	Drawn,
+	Against,
+}
+
+// How `a` and `b` are joined, if they are at all. At most one edge joins two
+// control points: weld_points refuses a weld where a parent edge already runs.
+edge_between :: proc(sp: Spline, a, b: int) -> (dir: Edge_Dir, ok: bool) {
+	n := len(sp.points)
+	if a < 0 || a >= n || b < 0 || b >= n || a == b {
+		return .Drawn, false
+	}
+	if sp.points[b].parent == a || sp.points[a].weld == b {
+		return .Drawn, true
+	}
+	if sp.points[a].parent == b || sp.points[b].weld == a {
+		return .Against, true
+	}
+	return .Drawn, false
+}
+
+EDGE_LENGTH_STEPS :: 8
+
+// How long a compiled chain is, edge by edge. The ribbon is the accurate
+// measure; this one needs no sampling buffer, so a caller that only wants to
+// compare two roads can have it cheaply.
+spline_length :: proc(sp: Spline) -> (total: f32) {
+	for i in 1 ..< len(sp.points) {
+		total += edge_length(sp, i - 1, i)
+	}
+	return
+}
+
+// How long one edge is, for choosing between two roads to the same place.
+// Sampled, because a Hermite segment is longer than the line across its ends.
+edge_length :: proc(sp: Spline, a, b: int) -> f32 {
+	dir, ok := edge_between(sp, a, b)
+	if !ok {
+		return 0
+	}
+	p0, p1 := sp.points[a], sp.points[b]
+	if dir == .Against {
+		p0, p1 = p1, p0
+	}
+	total: f32
+	prev := hermite_pos(p0, p1, 0)
+	for s in 1 ..= EDGE_LENGTH_STEPS {
+		at := hermite_pos(p0, p1, f32(s) / EDGE_LENGTH_STEPS)
+		total += gfx.Vector3Distance(prev, at)
+		prev = at
+	}
+	return total
+}
+
+@(private = "file")
+edge_is :: proc(e: Road_Marker, a, b: int) -> bool {
+	return (e.from == a && e.to == b) || (e.from == b && e.to == a)
+}
+
+// The shortest road between two control points, as the points it runs through,
+// both ends included. Undirected: parent edges and welds are crossable either
+// way, so what comes back is the road a driver can see rather than the one the
+// parent pointers happen to spell out. `blocked` names edges the road may not
+// cross (only `from` and `to` are read), which is how a leg is stopped from
+// doubling back along the edge it just left. nil when no road joins them.
 //
-// The nodes in between come from the parent chain, walked upward from the node
-// the finish edge leaves to the node the start edge enters. That walk is over
-// the tree only, so it terminates even when the road loops: a weld can be the
-// finish edge but never a step in the walk.
+// Shortest by metres, not by control points: two roads to the same place are
+// rarely cut up the same way.
+graph_path :: proc(
+	sp: Spline,
+	from, to: int,
+	blocked: []Road_Marker = nil,
+	allocator := context.temp_allocator,
+) -> []int {
+	n := len(sp.points)
+	if from < 0 || from >= n || to < 0 || to >= n {
+		return nil
+	}
+	if from == to {
+		out := make([]int, 1, allocator)
+		out[0] = from
+		return out
+	}
+
+	// One pass for both edge kinds. Rescanning the whole array at every step
+	// would be the same work over and over.
+	links := make([][dynamic]int, n, context.temp_allocator)
+	for i in 0 ..< n {
+		links[i] = make([dynamic]int, context.temp_allocator)
+	}
+	join :: proc(links: [][dynamic]int, a, b: int) {
+		append(&links[a], b)
+		append(&links[b], a)
+	}
+	for p, i in sp.points {
+		if p.parent >= 0 && p.parent < n && p.parent != i {
+			join(links, p.parent, i)
+		}
+		if p.weld >= 0 && p.weld < n && p.weld != i {
+			join(links, i, p.weld)
+		}
+	}
+
+	INF :: max(f32)
+	dist := make([]f32, n, context.temp_allocator)
+	prev := make([]int, n, context.temp_allocator)
+	done := make([]bool, n, context.temp_allocator)
+	for i in 0 ..< n {
+		dist[i], prev[i] = INF, -1
+	}
+	dist[from] = 0
+	// O(V^2) and no heap: a road is control points, not map tiles.
+	for _ in 0 ..< n {
+		at := -1
+		for i in 0 ..< n {
+			if !done[i] && dist[i] < INF && (at < 0 || dist[i] < dist[at]) {
+				at = i
+			}
+		}
+		if at < 0 || at == to {
+			break
+		}
+		done[at] = true
+		for nbr in links[at] {
+			if done[nbr] {
+				continue
+			}
+			skip := false
+			for e in blocked {
+				if edge_is(e, at, nbr) {
+					skip = true
+					break
+				}
+			}
+			if skip {
+				continue
+			}
+			if step := dist[at] + edge_length(sp, at, nbr); step < dist[nbr] {
+				dist[nbr], prev[nbr] = step, at
+			}
+		}
+	}
+	if dist[to] >= INF {
+		return nil
+	}
+
+	hops := 1
+	for node := to; node != from; node = prev[node] {
+		hops += 1
+	}
+	out := make([]int, hops, allocator)
+	node := to
+	for i := hops - 1; i >= 0; i -= 1 {
+		out[i] = node
+		node = prev[node]
+	}
+	return out
+}
+
+// --- stages ------------------------------------------------------------------
+
+// The control point a marker stands for, faced the way the stage crosses it.
+marker_point_dir :: proc(sp: Spline, m: Road_Marker, dir: Edge_Dir) -> Point {
+	p := marker_point(sp, m)
+	return dir == .Drawn ? p : point_flipped(p)
+}
+
+@(private = "file")
+mark_name :: proc(i, count: int) -> string {
+	switch i {
+	case 0:
+		return "the start line"
+	case count - 1:
+		return "the finish line"
+	}
+	return fmt.tprintf("pin %d", i)
+}
+
+// Which control point the stage leaves a waypoint through, and which one it
+// arrives at. Crossing an edge drawn means leaving at `to`; crossing it against
+// means leaving at `from`.
+@(private = "file")
+mark_exit :: proc(m: Road_Marker, dir: Edge_Dir) -> int {
+	return dir == .Drawn ? m.to : m.from
+}
+
+@(private = "file")
+mark_entry :: proc(m: Road_Marker, dir: Edge_Dir) -> int {
+	return dir == .Drawn ? m.from : m.to
+}
+
+// One leg: the road from waypoint `a`, crossed `da`, to waypoint `b`, crossed
+// `db`. `nodes` are the control points between them, ends included, and is
+// empty when both markers sit on one edge and the stage simply carries on along
+// it. `cost` counts the part of each marker's own edge the stage drives, so
+// picking a direction at a marker near one end of its edge is not free.
+@(private = "file")
+leg_road :: proc(
+	sp: Spline,
+	a: Road_Marker, da: Edge_Dir,
+	b: Road_Marker, db: Edge_Dir,
+	allocator := context.temp_allocator,
+) -> (
+	nodes: []int,
+	cost: f32,
+	ok: bool,
+) {
+	len_a := edge_length(sp, a.from, a.to)
+	if a.from == b.from && a.to == b.to && da == db {
+		if da == .Drawn && a.t < b.t {
+			return nil, (b.t - a.t) * len_a, true
+		}
+		if da == .Against && a.t > b.t {
+			return nil, (a.t - b.t) * len_a, true
+		}
+	}
+	// The edge a leg starts on and the one it ends on are both off limits: a
+	// stage that doubles back along the road it is already on is a U-turn, not
+	// a route. Blocking them is also what sends a start-and-finish pair on one
+	// edge the long way round a loop instead of straight back down it.
+	blocked := [2]Road_Marker{{from = a.from, to = a.to}, {from = b.from, to = b.to}}
+	nodes = graph_path(sp, mark_exit(a, da), mark_entry(b, db), blocked[:], allocator)
+	if nodes == nil {
+		return nil, 0, false
+	}
+	cost = (da == .Drawn ? 1 - a.t : a.t) * len_a
+	cost += (db == .Drawn ? b.t : 1 - b.t) * edge_length(sp, b.from, b.to)
+	for i in 1 ..< len(nodes) {
+		cost += edge_length(sp, nodes[i - 1], nodes[i])
+	}
+	return nodes, cost, true
+}
+
+// The road a stage runs over, as a plain chain the exporter can take: the start
+// line, the finish line, and every pin between them in the order they were
+// placed.
 //
-// It only ever goes one way. The finish must be a descendant of the node the
-// start edge enters, so two markers on different branches of a fork never
-// compile even though the road joins at their common ancestor: the walk cannot
-// come back out of one branch and down another. The refusal then says no road
-// runs between them, which is not what the road looks like.
+// The search is undirected and shortest-first, so a stage takes the quickest
+// road from the start to the finish by default. A pin is a road the stage is
+// made to cross on the way, which is how a longer way round is asked for when
+// the venue has a shorter one. Pins are crossed in order and none of them
+// becomes a control point: a pin says which road, not where a point goes.
+//
+// A stage may cross an edge against the direction the road was drawn in — it
+// has to, to come out of one branch of a fork and go down another — so every
+// control point is turned to face the way the stage crosses it as it is copied.
+// What comes out is one consistent travel direction from end to end, which is
+// what the ribbon, the pace notes and the preview all read.
 compile_stage :: proc(
 	sp: Spline,
 	start, finish: Road_Marker,
+	pins: []Road_Marker,
 	allocator := context.allocator,
 ) -> (
 	out: Spline,
 	msg: string,
 	ok: bool,
 ) {
-	if !marker_valid(sp, start) { return out, "the start line is not on a road", false }
-	if !marker_valid(sp, finish) { return out, "the finish line is not on a road", false }
-
-	between := make([dynamic]int, context.temp_allocator)
-	if start.from == finish.from && start.to == finish.to {
-		if start.t >= finish.t {
-			return out, "the finish comes before the start on the same stretch of road", false
+	marks := make([dynamic]Road_Marker, 0, len(pins) + 2, context.temp_allocator)
+	append(&marks, start)
+	append(&marks, ..pins)
+	append(&marks, finish)
+	last := len(marks) - 1
+	for m, i in marks {
+		if !marker_valid(sp, m) {
+			return out, fmt.tprintf("%s is not on a road", mark_name(i, len(marks))), false
 		}
-	} else {
-		node := finish.from
-		for node >= 0 && node != start.to {
-			append(&between, node)
-			node = sp.points[node].parent
+	}
+	for i in 0 ..< last {
+		a, b := marks[i], marks[i + 1]
+		if a.from == b.from && a.to == b.to && abs(a.t - b.t) < MARKER_MARGIN {
+			return out, fmt.tprintf(
+				"%s and %s are on the same spot",
+				mark_name(i, len(marks)), mark_name(i + 1, len(marks)),
+			), false
 		}
-		if node != start.to {
-			return out, "no road runs from the start line to the finish line", false
-		}
-		append(&between, start.to)
-		slice.reverse(between[:])
 	}
 
+	// Each waypoint is crossed one way or the other, and that choice is not
+	// free of the next one: crossing a pin drawn means leaving it at `to`,
+	// which is where the following leg has to start. So the legs are solved
+	// together and the cheapest whole road wins.
+	INF :: max(f32)
+	best := make([][Edge_Dir]f32, len(marks), context.temp_allocator)
+	back := make([][Edge_Dir]Edge_Dir, len(marks), context.temp_allocator)
+	for &b in best {
+		b = {.Drawn = INF, .Against = INF}
+	}
+	best[0] = {.Drawn = 0, .Against = 0}
+	for i in 0 ..< last {
+		reached := false
+		for da in Edge_Dir {
+			if best[i][da] >= INF {
+				continue
+			}
+			for db in Edge_Dir {
+				_, cost, leg_ok := leg_road(sp, marks[i], da, marks[i + 1], db)
+				if !leg_ok {
+					continue
+				}
+				reached = true
+				if total := best[i][da] + cost; total < best[i + 1][db] {
+					best[i + 1][db] = total
+					back[i + 1][db] = da
+				}
+			}
+		}
+		if !reached {
+			return out, fmt.tprintf(
+				"no road runs from %s to %s",
+				mark_name(i, len(marks)), mark_name(i + 1, len(marks)),
+			), false
+		}
+	}
+
+	dirs := make([]Edge_Dir, len(marks), context.temp_allocator)
+	dirs[last] = best[last][.Drawn] <= best[last][.Against] ? .Drawn : .Against
+	for i := last; i > 0; i -= 1 {
+		dirs[i - 1] = back[i][dirs[i]]
+	}
+
+	// The control points the stage runs through, in travel order. A leg ends at
+	// one end of the next waypoint's edge and the leg after it starts at the
+	// other, so the legs join up with nothing to trim.
+	walk := make([dynamic]int, context.temp_allocator)
+	for i in 0 ..< last {
+		nodes, _, leg_ok := leg_road(sp, marks[i], dirs[i], marks[i + 1], dirs[i + 1])
+		if !leg_ok {
+			return out, "no road runs the whole way", false
+		}
+		append(&walk, ..nodes)
+	}
+
+	first_p := marker_point_dir(sp, marks[0], dirs[0])
+	last_p := marker_point_dir(sp, marks[last], dirs[last])
 	out.points = make([dynamic]Point, allocator)
-	append(&out.points, marker_point(sp, start))
-	for idx in between { append(&out.points, sp.points[idx]) }
-	append(&out.points, marker_point(sp, finish))
+	append(&out.points, first_p)
+	for nd, i in walk {
+		in_dir := dirs[0]
+		if i > 0 {
+			in_dir, _ = edge_between(sp, walk[i - 1], nd)
+		}
+		out_dir := dirs[last]
+		if i < len(walk) - 1 {
+			out_dir, _ = edge_between(sp, nd, walk[i + 1])
+		}
+		p := sp.points[nd]
+		if out_dir == .Against {
+			p = point_flipped(p)
+		}
+		if in_dir != out_dir {
+			// A point the stage turns at — the apex of a fork it comes up one
+			// branch of and leaves down another — has no tangent either edge
+			// can lend it. It takes the heading through it instead.
+			before := i == 0 ? first_p.xform.translation : sp.points[walk[i - 1]].xform.translation
+			after := i == len(walk) - 1 ? last_p.xform.translation : sp.points[walk[i + 1]].xform.translation
+			p.xform.rotation = heading_quat(before, after)
+		}
+		append(&out.points, p)
+	}
+	append(&out.points, last_p)
+
 	// A compiled stage is a chain, never a graph. Nothing downstream of here
 	// branches, and the exporter reads array order as travel order.
 	for &p, i in out.points {
 		p.parent = i - 1
 		p.weld = -1
+	}
+	if len(pins) > 0 {
+		return out, fmt.tprintf("%d control points, %d pins", len(out.points), len(pins)), true
 	}
 	return out, fmt.tprintf("%d control points", len(out.points)), true
 }

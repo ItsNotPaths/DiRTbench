@@ -46,7 +46,7 @@ Window :: struct {
 	keys_pressed: [512]bool,
 }
 
-Key :: enum i32 { ONE, TWO, S, F, DELETE, LEFT_SHIFT, RIGHT_SHIFT, LEFT_CONTROL, RIGHT_CONTROL, LEFT_ALT, RIGHT_ALT }
+Key :: enum i32 { ONE, TWO, S, F, P, DELETE, LEFT_SHIFT, RIGHT_SHIFT, LEFT_CONTROL, RIGHT_CONTROL, LEFT_ALT, RIGHT_ALT }
 MouseButton :: enum i32 { LEFT, RIGHT, MIDDLE }
 
 active_window: ^Window
@@ -59,6 +59,7 @@ key_scancode :: proc(key: Key) -> sdl.Scancode {
 	case .TWO: return ._2
 	case .S: return .S
 	case .F: return .F
+	case .P: return .P
 	case .DELETE: return .DELETE
 	case .LEFT_SHIFT: return .LSHIFT
 	case .RIGHT_SHIFT: return .RSHIFT

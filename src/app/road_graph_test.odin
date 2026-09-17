@@ -76,6 +76,46 @@ weld_closes_a_loop_without_touching_the_parent_tree :: proc(t: ^testing.T) {
 	testing.expect(t, geo.is_linear(sp), "unweld did not restore the chain")
 }
 
+// A weld edge and the parent edge into the same node share a child index, so an
+// insert that went by the child alone put the point on the other road entirely.
+@(test)
+insert_on_a_welded_stretch_stays_on_that_stretch :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+	tail := len(sp.points) - 1
+	testing.expect(t, geo.weld_points(&sp, tail, 0), "tail should weld back onto the root")
+
+	ribbon := geo.build_ribbon(sp, 4, context.allocator)
+	defer delete(ribbon)
+	frame: geo.Cross_Section
+	found := false
+	for cs in ribbon {
+		if cs.e_from == tail && cs.e_to == 0 && abs(cs.t - 0.5) < 0.01 {
+			frame, found = cs, true
+			break
+		}
+	}
+	testing.expect(t, found, "the ribbon has no sample on the weld edge"); if !found { return }
+
+	before := len(sp.points)
+	idx := geo.insert_point(&sp, frame.pos, frame)
+	testing.expect(t, idx >= 0, "insert refused a welded stretch"); if idx < 0 { return }
+	testing.expect_value(t, len(sp.points), before + 1)
+	testing.expect(t, gfx.Vector3Distance(sp.points[idx].xform.translation, frame.pos) < 0.01,
+		"the new point did not land where the road was clicked")
+	// The loop still closes, and now runs tail -> new -> root.
+	testing.expect_value(t, sp.points[idx].parent, tail)
+	testing.expect_value(t, sp.points[idx].weld, 0)
+	testing.expect_value(t, sp.points[tail].weld, -1)
+	// The road is unbroken through it: one more edge, and a stage still
+	// compiles the whole way round.
+	pins := []geo.Road_Marker{{tail, idx, 0.5}}
+	lap, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {idx, 0, 0.9}, pins, context.allocator)
+	defer delete(lap.points)
+	testing.expect(t, ok, msg)
+}
+
 @(test)
 weld_indices_survive_every_graph_edit :: proc(t: ^testing.T) {
 	sp: geo.Spline
@@ -88,7 +128,7 @@ weld_indices_survive_every_graph_edit :: proc(t: ^testing.T) {
 
 	// Inserting ahead of the weld target pushes every later index up by one.
 	frame := geo.sample_edge(sp, 0, 1, 0.5)
-	inserted := geo.insert_point(&sp, 1, frame.pos, frame)
+	inserted := geo.insert_point(&sp, frame.pos, frame)
 	testing.expect_value(t, inserted, 1)
 	testing.expect_value(t, sp.points[tail + 1].weld, 2)
 	testing.expect_value(t, sp.points[inserted].weld, -1)
@@ -132,7 +172,7 @@ compile_trims_the_road_to_the_two_markers :: proc(t: ^testing.T) {
 	seed_spline(&sp)
 
 	stage, msg, ok := geo.compile_stage(
-		sp, {0, 1, 0.5}, {2, 3, 0.5}, context.allocator,
+		sp, {0, 1, 0.5}, {2, 3, 0.5}, nil, context.allocator,
 	)
 	defer delete(stage.points)
 	testing.expect(t, ok, msg); if !ok { return }
@@ -155,52 +195,176 @@ compile_accepts_two_markers_on_one_edge :: proc(t: ^testing.T) {
 	defer delete(sp.points)
 	seed_spline(&sp)
 
-	stage, msg, ok := geo.compile_stage(sp, {1, 2, 0.2}, {1, 2, 0.8}, context.allocator)
+	stage, msg, ok := geo.compile_stage(sp, {1, 2, 0.2}, {1, 2, 0.8}, nil, context.allocator)
 	defer delete(stage.points)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, len(stage.points), 2)
 
-	_, back_msg, back_ok := geo.compile_stage(sp, {1, 2, 0.8}, {1, 2, 0.2}, context.allocator)
-	testing.expect(t, !back_ok, "a finish before the start on one edge must be refused")
-	testing.expect(t, back_msg != "")
+	// The same stretch the other way round is a stage too, and the points that
+	// come out of it face the other way.
+	back, back_msg, back_ok := geo.compile_stage(sp, {1, 2, 0.8}, {1, 2, 0.2}, nil, context.allocator)
+	defer delete(back.points)
+	testing.expect(t, back_ok, back_msg); if !back_ok { return }
+	testing.expect_value(t, len(back.points), 2)
+	dot := gfx.Vector3DotProduct(
+		geo.point_forward(stage.points[0]), geo.point_forward(back.points[0]),
+	)
+	testing.expect(t, dot < -0.5, "a stage run the other way must face the other way")
+
+	// The two lines on the same spot are no stage at all.
+	_, same_msg, same_ok := geo.compile_stage(sp, {1, 2, 0.5}, {1, 2, 0.5}, nil, context.allocator)
+	testing.expect(t, !same_ok, "a finish on top of the start must be refused")
+	testing.expect(t, same_msg != "")
 }
 
+// The whole lap is the long way round a welded loop, and a pin on the far side
+// is how it is asked for. Without one the search takes the short way, which is
+// the point of the search.
 @(test)
-compile_runs_a_loop_through_its_weld :: proc(t: ^testing.T) {
+compile_runs_a_loop_the_short_way_until_a_pin_says_otherwise :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	testing.expect(t, geo.weld_points(&sp, tail, 0), "tail should weld back onto the root")
 
-	// Start just after the root, finish on the weld edge coming back to it.
-	stage, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, context.allocator)
-	defer delete(stage.points)
+	// Start just after the root, finish on the weld edge coming back into it.
+	// Both are a few metres from node 0, the short way between them.
+	short, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, nil, context.allocator)
+	defer delete(short.points)
 	testing.expect(t, ok, msg); if !ok { return }
+	testing.expect_value(t, len(short.points), 3) // start, node 0, finish
+
+	// A pin on the far side of the loop forces the whole lap.
+	pins := []geo.Road_Marker{{1, 2, 0.5}}
+	lap, lap_msg, lap_ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, pins, context.allocator)
+	defer delete(lap.points)
+	testing.expect(t, lap_ok, lap_msg); if !lap_ok { return }
 	// Start marker, nodes 1..tail, finish marker on the closing edge.
-	testing.expect_value(t, len(stage.points), 5)
-	testing.expect(t, geo.is_linear(stage))
-	// The loop comes back to where it started.
-	first := stage.points[0].xform.translation
-	last := stage.points[len(stage.points)-1].xform.translation
+	testing.expect_value(t, len(lap.points), 5)
+	testing.expect(t, geo.is_linear(lap))
+	first := lap.points[0].xform.translation
+	last := lap.points[len(lap.points) - 1].xform.translation
 	testing.expect(t, gfx.Vector3Distance(first, last) < 20, "a closed loop should finish near its start")
+	testing.expect(t, geo.spline_length(lap) > geo.spline_length(short) * 5, "the pinned lap must be the long way")
 }
 
+// A road is not one-way. The parent pointers say which way it was drawn, not
+// which way it can be driven, so a finish upstream of the start is a stage that
+// runs back down the road.
 @(test)
-compile_refuses_a_finish_that_is_not_downstream :: proc(t: ^testing.T) {
+compile_runs_a_stage_back_down_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
 	defer delete(sp.points)
 	seed_spline(&sp)
 
-	// Backwards: start late, finish early.
-	_, msg, ok := geo.compile_stage(sp, {2, 3, 0.5}, {0, 1, 0.5}, context.allocator)
-	testing.expect(t, !ok, "a finish upstream of the start must be refused")
-	testing.expect(t, msg != "")
+	stage, msg, ok := geo.compile_stage(sp, {2, 3, 0.5}, {0, 1, 0.5}, nil, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	testing.expect_value(t, len(stage.points), 4)
+	testing.expect(t, geo.is_linear(stage))
+	// It leaves the start heading back toward node 2, not on toward node 3.
+	fwd := geo.point_forward(stage.points[0])
+	toward_2 := gfx.Vector3Normalize(sp.points[2].xform.translation - stage.points[0].xform.translation)
+	testing.expect(t, gfx.Vector3DotProduct(fwd, toward_2) > 0.5, "a backwards stage must face backwards")
+	// Every side swaps with the direction: what was the left cliff is now right.
+	testing.expect_value(t, stage.points[1].cliff_l, sp.points[2].cliff_r)
+}
+
+@(test)
+compile_refuses_a_marker_that_is_not_on_an_edge :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
 
 	// An edge that is neither a parent edge nor a weld.
-	_, bad_msg, bad_ok := geo.compile_stage(sp, {0, 3, 0.5}, {2, 3, 0.5}, context.allocator)
+	_, bad_msg, bad_ok := geo.compile_stage(sp, {0, 3, 0.5}, {2, 3, 0.5}, nil, context.allocator)
 	testing.expect(t, !bad_ok, "a marker off any edge must be refused")
 	testing.expect(t, bad_msg != "")
+}
+
+// The fork. Before the search went both ways this was the refusal that read
+// "no road runs from the start line to the finish line" about a road anyone
+// could see joining up: the walk could not come out of one branch and go down
+// another.
+@(test)
+compile_crosses_a_fork_between_two_branches :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp) // 0 -> 1 -> 2 -> 3
+	// A second child of node 1, so 1 is a fork with branches (1,2) and (1,spur).
+	spur_at := gfx.Vector3{-60, 4, 60}
+	tip_at := gfx.Vector3{-120, 6, 90}
+	spur := len(sp.points)
+	append(&sp.points, geo.make_point(
+		spur_at, geo.heading_quat(sp.points[1].xform.translation, spur_at),
+		geo.DEFAULT_WIDTH, parent = 1,
+	))
+	tip := len(sp.points)
+	append(&sp.points, geo.make_point(
+		tip_at, geo.heading_quat(spur_at, tip_at), geo.DEFAULT_WIDTH, parent = spur,
+	))
+
+	// Up one branch, through the apex, down the other.
+	stage, msg, ok := geo.compile_stage(sp, {spur, tip, 0.5}, {2, 3, 0.5}, nil, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	// Start marker, spur, node 1, node 2, finish marker.
+	testing.expect_value(t, len(stage.points), 5)
+	testing.expect(t, geo.is_linear(stage))
+	testing.expect(t, gfx.Vector3Distance(
+		stage.points[2].xform.translation, sp.points[1].xform.translation,
+	) < 0.01, "the stage must pass through the fork apex")
+	for i in 1 ..< len(stage.points) {
+		d := gfx.Vector3Distance(
+			stage.points[i - 1].xform.translation, stage.points[i].xform.translation,
+		)
+		testing.expect(t, d > 0.01, "a stage across a fork has a zero-length segment")
+	}
+	// The branch it comes up is driven against the way it was drawn, so that
+	// point faces back down the branch, toward the apex.
+	toward_apex := gfx.Vector3Normalize(
+		sp.points[1].xform.translation - sp.points[spur].xform.translation,
+	)
+	testing.expect(t, gfx.Vector3DotProduct(
+		geo.point_forward(stage.points[1]), toward_apex,
+	) > 0.5, "the branch driven backwards must face the apex")
+}
+
+// Pins are crossed in the order they were placed, so two of them on the same
+// road pick which way round it is driven.
+@(test)
+compile_takes_the_pins_in_order :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+	tail := len(sp.points) - 1
+	testing.expect(t, geo.weld_points(&sp, tail, 0))
+
+	one := geo.Road_Marker{1, 2, 0.5}
+	two := geo.Road_Marker{2, 3, 0.5}
+	fwd, fmsg, fok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, []geo.Road_Marker{one, two}, context.allocator)
+	defer delete(fwd.points)
+	testing.expect(t, fok, fmsg); if !fok { return }
+	back, bmsg, bok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, []geo.Road_Marker{two, one}, context.allocator)
+	defer delete(back.points)
+	testing.expect(t, bok, bmsg); if !bok { return }
+	// Same two roads, opposite orders: the second has to double back, so it is
+	// the longer road of the two.
+	testing.expect(t, geo.spline_length(back) > geo.spline_length(fwd), "pins out of order must not shorten the road")
+}
+
+@(test)
+compile_refuses_a_pin_that_is_not_on_an_edge :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+
+	_, msg, ok := geo.compile_stage(
+		sp, {0, 1, 0.5}, {2, 3, 0.5}, []geo.Road_Marker{{0, 3, 0.5}}, context.allocator,
+	)
+	testing.expect(t, !ok, "a pin off any edge must be refused")
+	testing.expect(t, msg != "", "a refused pin gave no reason")
 }
 
 @(test)
@@ -211,7 +375,7 @@ compile_keeps_markers_clear_of_the_nodes_they_sit_between :: proc(t: ^testing.T)
 
 	// t of exactly 1 would land the marker on node 1 and make a zero-length
 	// first segment, which has no tangent to follow.
-	stage, msg, ok := geo.compile_stage(sp, {0, 1, 1}, {2, 3, 0}, context.allocator)
+	stage, msg, ok := geo.compile_stage(sp, {0, 1, 1}, {2, 3, 0}, nil, context.allocator)
 	defer delete(stage.points)
 	testing.expect(t, ok, msg); if !ok { return }
 	for i in 1 ..< len(stage.points) {

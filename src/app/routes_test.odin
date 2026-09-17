@@ -82,6 +82,7 @@ venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 	doc.routes[0].finish = {from = 7, to = 8, t = 0.5}
 	doc.routes[1].start = {from = 3, to = 4, t = 0.125}
 	doc.routes[1].finish = {from = 9, to = 10, t = 0.875}
+	append(&doc.routes[1].pins, geo.Road_Marker{5, 6, 0.4}, geo.Road_Marker{6, 7, 0.6})
 
 	p := Venue{
 		format  = VENUE_FORMAT,
@@ -101,5 +102,11 @@ venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 		testing.expect_value(t, route.name, doc.routes[i].name)
 		testing.expect_value(t, route.start, doc.routes[i].start)
 		testing.expect_value(t, route.finish, doc.routes[i].finish)
+		// Pins are ordered: a route read back with them shuffled is a different
+		// road, so the order is part of what round-trips.
+		testing.expect_value(t, len(route.pins), len(doc.routes[i].pins))
+		for pin, j in route.pins {
+			testing.expect_value(t, pin, doc.routes[i].pins[j])
+		}
 	}
 }

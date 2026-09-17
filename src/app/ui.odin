@@ -291,6 +291,8 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 		ui.im_text_colored(WARN_COL, fmt.ctprint(msg))
 	}
 
+	draw_pins_section(ed, route)
+
 	// The gates are drawn on this stage's ribbon, but their numbers are the
 	// venue's, so a change here moves every stage's gates.
 	ui.im_text_colored(DIM_COL, "gates below are venue-wide")
@@ -299,8 +301,31 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("point at the road and press S for the start line")
-	ui.im_text("F sets the finish. The road itself is read-only here.")
+	ui.im_text("F sets the finish, P drops a pin. The road is read-only here.")
 	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")
+}
+
+// The roads the stage is made to cross on its way. With none, the compile takes
+// the shortest road from the start to the finish; each pin is one more road it
+// has to take in, which is how the long way round is asked for.
+draw_pins_section :: proc(ed: ^Editor, route: ^Venue_Route) {
+	ui.igSeparatorText("Route pins")
+	if len(route.pins) == 0 {
+		ui.im_text_colored(DIM_COL, "none — the stage takes the shortest road")
+	}
+	remove := -1
+	for pin, i in route.pins {
+		ui.im_text(fmt.ctprintf("%d.  edge %d-%d", i + 1, pin.from, pin.to))
+		ui.im_same_line()
+		if ui.im_button(fmt.ctprintf("Remove###pin_%d", i)) {
+			remove = i
+		}
+	}
+	// After the loop: removing inside it would walk a list that just moved.
+	if remove >= 0 {
+		ordered_remove(&route.pins, remove)
+		set_status(&ed.status, "pin removed", true)
+	}
 }
 
 draw_inspector :: proc(ed: ^Editor) {
