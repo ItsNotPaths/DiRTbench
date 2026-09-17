@@ -183,12 +183,12 @@ selected_point :: proc(ed: ^Editor) -> int {
 }
 
 // The selected node's index into `node_pos` (see terrain_node_world), or -1.
-selected_node :: proc(ed: ^Editor, node_pos: []rl.Vector3) -> int {
+selected_node :: proc(ed: ^Editor, node_pos: []rl.Vector3, node_active: []bool) -> int {
 	if ed.sel.kind != .Node || len(node_pos) == 0 {
 		return -1
 	}
 	i := ed.sel.side * geo.terrain_node_count(&ed.terrain) + ed.sel.idx
-	if i < 0 || i >= len(node_pos) {
+	if i < 0 || i >= len(node_pos) || (len(node_active) == len(node_pos) && !node_active[i]) {
 		return -1 // lattice was resized under the selection
 	}
 	return i
@@ -252,7 +252,11 @@ rebuild_geometry :: proc(ed: ^Editor) {
 			ed.dirty_terrain = false
 			return
 		}
+		old_node_count := geo.terrain_node_count(&ed.terrain)
 		geo.terrain_ensure(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
+		if ed.sel.kind == .Node && geo.terrain_node_count(&ed.terrain) != old_node_count {
+			ed.sel = {}
+		}
 		geo.terrain_mesh_rebuild(
 			&ed.terrain_mesh, &ed.terrain_field, &ed.terrain,
 			ed.ribbon, ed.topo, ed.roughness, ed.ribbon_gen,
@@ -685,7 +689,11 @@ main :: proc() {
 		// recomputed after the rebuild and shared by drawing, picking and the
 		// gizmo. Temp-allocated: valid for this frame only.
 		node_pos := geo.terrain_node_world(&ed.terrain, ed.ribbon, ed.topo, ed.roughness)
-		sel_node := selected_node(&ed, node_pos)
+		node_active := geo.terrain_node_active_mask(&ed.terrain, node_pos)
+		sel_node := selected_node(&ed, node_pos, node_active)
+		if ed.sel.kind == .Node && sel_node < 0 {
+			ed.sel = {}
+		}
 
 		rl.ClearBackground({26, 28, 34, 255})
 		rl.BeginMode3D(cam3d)
@@ -696,7 +704,7 @@ main :: proc() {
 		geo.veg_draw(ed.veg_cache)
 		draw_centreline(ed.ribbon)
 		draw_timing_markers(timing_markers(ed.ribbon,ed.timing))
-		geo.draw_terrain_nodes(&ed.terrain, node_pos, sel_node)
+		geo.draw_terrain_nodes(&ed.terrain, node_pos, node_active, sel_node)
 		draw_handles(ed.spline, selected_point(&ed))
 		draw_marker(ed.spline, ed.start, {110, 255, 140, 255})
 		draw_marker(ed.spline, ed.finish, {255, 110, 110, 255})
@@ -751,7 +759,7 @@ main :: proc() {
 		// so whichever handle is actually in front wins.
 		if rl.IsMouseButtonPressed(.LEFT) && !gizmo_used && !nav && !ui_mouse {
 			pi, pd := pick_point(ed.spline, ray)
-			ni, nd := geo.pick_terrain_node(node_pos, geo.terrain_node_radius(&ed.terrain), ray)
+			ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.terrain), ray)
 			switch {
 			case ni >= 0 && (pi < 0 || nd < pd):
 				count := geo.terrain_node_count(&ed.terrain)

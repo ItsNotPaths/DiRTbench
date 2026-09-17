@@ -58,8 +58,19 @@ TERRAIN_STEEP :: rl.Color{112, 104, 92, 255}
 // the same thing as a longer-wavelength surface. Tessellation is a separate
 // knob: `cell_m` decides how finely those hills are drawn.
 TERRAIN_REACH_MAX :: 400.0
-TERRAIN_ROWS_MAX :: 48
-TERRAIN_COLS_MAX :: 12
+TERRAIN_ROW_M_MIN :: 10.0
+TERRAIN_ROW_M_MAX :: 30.0
+
+// An inside offset curve develops a cusp at the centreline's radius of
+// curvature, then folds back across the road. Stop comfortably short of that
+// radius. All columns share the resulting scale, so they remain ordered.
+TERRAIN_INNER_RADIUS_FRACTION :: 0.8
+
+// Curvature used for offset collapse must describe the corner, not an
+// individual tessellation sample. Hermite segments are C1, so their second
+// derivative can jump at a control point; measuring over roughly two default
+// node intervals turns that jump into one stable corner radius.
+TERRAIN_OFFSET_CURVATURE_WINDOW_M :: 40.0
 
 // What makes a sample "another leg" of the road rather than more of the same one.
 //
@@ -105,8 +116,10 @@ Terrain :: struct {
 	reach_m: f32, // how far the ground reaches past the verge
 	blend_m: f32, // metres over which the lattice takes over from the verge seam
 	cell_m:  f32, // spacing of the interior points
-	rows:    int, // lattice stations along the road
-	cols:    int, // lattice stations across the skirt
+	row_m:   f32, // target spacing of lattice stations along the road
+	rows:    int, // derived lattice stations along the road
+	cols:    int, // lattice stations across the skirt; currently always one
+	length_m: f32, // route length represented by the current node arrays
 	// Node heights, absolute world Y, row-major [r*cols + c]. One lattice per
 	// side, mirroring how the verges are built (side 0 = +right).
 	nodes:   [2][dynamic]f32,
@@ -124,8 +137,9 @@ TERRAIN_DEFAULTS :: Terrain {
 	reach_m = 96,
 	blend_m = 48,
 	cell_m  = 8,
-	rows    = 13,
-	cols    = 3,
+	row_m   = 20,
+	rows    = 0,
+	cols    = 1,
 }
 
 terrain_delete :: proc(t: ^Terrain) {
@@ -138,6 +152,82 @@ terrain_delete :: proc(t: ^Terrain) {
 
 terrain_node_count :: proc(t: ^Terrain) -> int {
 	return t.rows * t.cols
+}
+
+// Include both route ends while keeping every interval at or below the chosen
+// spacing. Unlike a fixed row count, this keeps the sculpt equally detailed on
+// an 80 m test road and a multi-kilometre stage.
+terrain_rows_for_length :: proc(length_m, row_m: f32) -> int {
+	if length_m <= 0 {
+		return 0
+	}
+	return max(2, int(math.ceil(length_m / max(row_m, TERRAIN_ROW_M_MIN))) + 1)
+}
+
+// Usable distance beyond the verge at one sample. Positive curvature turns
+// toward side 0; negative curvature turns toward side 1. The outside of the
+// corner is an ordinary offset copy, while the inside is compressed before its
+// offset curve can cusp and fold over the road.
+terrain_offset_reach :: proc(curvature: f32, side: int, seam_offset, requested: f32) -> f32 {
+	inside := (side == 0 && curvature > 0) || (side == 1 && curvature < 0)
+	if !inside || abs(curvature) < 1e-6 {
+		return requested
+	}
+	radius := 1 / abs(curvature)
+	return clamp(radius * TERRAIN_INNER_RADIUS_FRACTION - seam_offset, 0, requested)
+}
+
+terrain_offset_point :: proc(
+	seam, outward: rl.Vector3,
+	curvature: f32,
+	side: int,
+	seam_offset, requested, fraction: f32,
+) -> rl.Vector3 {
+	u := terrain_offset_reach(curvature, side, seam_offset, requested) * clamp(fraction, 0, 1)
+	return seam + outward * u
+}
+
+// Signed horizontal turn per metre over a road-distance window. Positive is a
+// turn toward side 0, matching ribbon_curvature. Using endpoint headings makes
+// this independent of topo density and suppresses isolated curvature spikes at
+// Hermite joins—the spikes that otherwise make adjacent offset nodes explode.
+terrain_offset_curvature :: proc(
+	ribbon: []Cross_Section,
+	arc: []f32,
+	allocator := context.temp_allocator,
+) -> []f32 {
+	n := len(ribbon)
+	out := make([]f32, n, allocator)
+	if n < 2 {
+		return out
+	}
+	half := f32(TERRAIN_OFFSET_CURVATURE_WINDOW_M * 0.5)
+	lo, hi := 0, 0
+	for i in 0 ..< n {
+		for lo + 1 < i && arc[i] - arc[lo + 1] >= half {
+			lo += 1
+		}
+		hi = max(hi, i)
+		for hi + 1 < n && arc[hi + 1] - arc[i] <= half {
+			hi += 1
+		}
+		ds := arc[hi] - arc[lo]
+		if ds <= 1e-4 {
+			continue
+		}
+		a := ribbon[lo].fwd
+		b := ribbon[hi].fwd
+		la := math.sqrt(a.x * a.x + a.z * a.z)
+		lb := math.sqrt(b.x * b.x + b.z * b.z)
+		if la <= 1e-4 || lb <= 1e-4 {
+			continue
+		}
+		ax, az := a.x / la, a.z / la
+		bx, bz := b.x / lb, b.z / lb
+		turn := math.atan2(az * bx - ax * bz, ax * bx + az * bz)
+		out[i] = turn / ds
+	}
+	return out
 }
 
 // A node's height, with clamped indices so the Catmull-Rom taps below can run
@@ -162,14 +252,14 @@ catmull :: proc(p0, p1, p2, p3, t: f32) -> f32 {
 // `u` metres outward from the verge. Bicubic, because a bilinear patch creases
 // visibly along every node row — and the road it sits beside is a cubic.
 //
-// Column c sits at u = reach * (c+1)/cols, so there is no dead node pinned at
-// u=0 where the blend below would ignore it anyway.
-lattice_height :: proc(t: ^Terrain, side: int, s_frac, u: f32) -> f32 {
+// Column c sits at the corresponding fraction of the local offset curve, so
+// there is no dead node pinned at u=0 where the blend below would ignore it.
+lattice_height :: proc(t: ^Terrain, side: int, s_frac, u, local_reach: f32) -> f32 {
 	if t.rows < 1 || t.cols < 1 {
 		return 0
 	}
 	rf := clamp(s_frac, 0, 1) * f32(t.rows - 1)
-	cf := u / max(t.reach_m, 1e-3) * f32(t.cols) - 1
+	cf := u / max(local_reach, 1e-3) * f32(t.cols) - 1
 
 	r0 := int(math.floor(rf))
 	c0 := int(math.floor(cf))
@@ -198,12 +288,12 @@ lattice_height :: proc(t: ^Terrain, side: int, s_frac, u: f32) -> f32 {
 // The surface height `u` metres out from a verge seam. Blend from the **seam**,
 // never from a cliff crest's height: with a ditch the seam sits below the road,
 // and this stays correct. At u=0 the weight is zero, so the seam is reproduced.
-terrain_height :: proc(t: ^Terrain, side: int, s_frac, u, seam_y: f32) -> f32 {
+terrain_height :: proc(t: ^Terrain, side: int, s_frac, u, seam_y, local_reach: f32) -> f32 {
 	if u <= 0 {
 		return seam_y
 	}
 	w := math.smoothstep(f32(0), max(t.blend_m, 1e-3), u)
-	return seam_y + (lattice_height(t, side, s_frac, u) - seam_y) * w
+	return seam_y + (lattice_height(t, side, s_frac, u, local_reach) - seam_y) * w
 }
 
 // --- sizing and seeding -----------------------------------------------------
@@ -237,6 +327,7 @@ terrain_reset :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughne
 	arc := ribbon_arc(ribbon)
 	ds := sample_spacing(ribbon)
 	total := arc[n - 1]
+	t.length_m = total
 	vrows := verge_rows(topo)
 
 	for r in 0 ..< t.rows {
@@ -262,18 +353,61 @@ terrain_invalidate :: proc(t: ^Terrain) {
 	for &side in t.nodes {
 		clear(&side)
 	}
+	t.length_m = 0
 }
 
-// Resize after a rows/cols change, and seed if the lattice is empty. Resizing
-// discards the sculpt: the nodes are indexed, not positioned, so there is no
-// meaning-preserving way to reinterpret them at a different resolution.
+// Keep row density stable as the route grows. When crossing a row boundary,
+// resample the authored heights by distance along the previous route instead
+// of throwing the sculpt away; newly appended road is seeded from its verge.
 terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughness: f32) {
 	if !t.enabled {
 		return
 	}
+	// One editable offset curve on either side is enough to shape the terrain;
+	// extra cross-road rows crowd tight corners and make the controls ambiguous.
+	if t.cols != 1 {
+		t.cols = 1
+		terrain_invalidate(t)
+	}
+	if len(ribbon) < 2 {
+		return
+	}
+	arc := ribbon_arc(ribbon)
+	total := arc[len(arc) - 1]
+	wanted_rows := terrain_rows_for_length(total, t.row_m)
+	if wanted_rows != t.rows && t.cols > 0 && len(t.nodes[0]) == t.rows * t.cols && len(t.nodes[1]) == t.rows * t.cols && t.rows >= 2 && t.length_m > 0 {
+		old_rows := t.rows
+		old_length := t.length_m
+		old := t.nodes
+		t.nodes = {}
+		t.rows = wanted_rows
+		terrain_reset(t, ribbon, topo, roughness)
+		for side in 0 ..< 2 {
+			for r in 0 ..< t.rows {
+				s := total * f32(r) / f32(max(t.rows - 1, 1))
+				if s > old_length {
+					continue
+				}
+				rf := s / old_length * f32(old_rows - 1)
+				r0 := clamp(int(math.floor(rf)), 0, old_rows - 1)
+				r1 := min(r0 + 1, old_rows - 1)
+				w := rf - f32(r0)
+				for col in 0 ..< t.cols {
+					a := old[side][r0 * t.cols + col]
+					b := old[side][r1 * t.cols + col]
+					t.nodes[side][r * t.cols + col] = a + (b - a) * w
+				}
+			}
+			delete(old[side])
+		}
+		return
+	}
+	t.rows = wanted_rows
 	count := terrain_node_count(t)
 	if len(t.nodes[0]) != count || len(t.nodes[1]) != count {
 		terrain_reset(t, ribbon, topo, roughness)
+	} else {
+		t.length_m = total
 	}
 }
 
@@ -312,6 +446,7 @@ Field_Sample :: struct {
 	seam:   [2][2]f32, // seam XZ per side
 	seam_y: [2]f32,
 	e:      [2]f32, // the seam's outward offset from the centreline, per side
+	reach:  [2]f32, // usable offset before an inside-corner curve folds
 	s_frac: f32,
 	arc:    f32,
 	ds:     f32,
@@ -323,6 +458,7 @@ Terrain_Leg :: struct {
 	u:      f32, // metres outward from that leg's seam; never negative
 	seam_y: f32,
 	w:      f32, // normalised blend weight
+	reach:  f32, // local width of this offset copy
 	side:   int,
 }
 
@@ -332,10 +468,12 @@ field_samples :: proc(
 	ds: []f32,
 	topo: c.int,
 	roughness: f32,
+	reach_m: f32,
 	allocator := context.temp_allocator,
 ) -> []Field_Sample {
 	n := len(ribbon)
 	total := arc[n - 1]
+	curvature := terrain_offset_curvature(ribbon, arc)
 	vrows := verge_rows(topo)
 	out := make([]Field_Sample, n, allocator)
 
@@ -362,6 +500,7 @@ field_samples :: proc(
 			s.seam_y[side] = seam.y
 			// How far out the seam sits: half-width plus the verge's horizontal run.
 			s.e[side] = (seam.x - cs.pos.x) * out_dir.x + (seam.z - cs.pos.z) * out_dir.z
+			s.reach[side] = terrain_offset_reach(curvature[i], side, s.e[side], reach_m)
 		}
 		out[i] = s
 	}
@@ -513,6 +652,7 @@ terrain_near_other :: proc(
 // endpoint and it lies past it, so there is no road here to skirt.
 Field_Probe :: struct {
 	su:     f32,
+	reach:  f32,
 	beyond: bool,
 	ok:     bool,
 }
@@ -549,6 +689,11 @@ field_seam_offset :: proc(fs: []Field_Sample, i: int, fr: Field_Frame) -> f32 {
 	return e + (fs[fr.j].e[fr.side] - e) * fr.tt
 }
 
+field_reach :: proc(fs: []Field_Sample, i: int, fr: Field_Frame) -> f32 {
+	r := fs[i].reach[fr.side]
+	return r + (fs[fr.j].reach[fr.side] - r) * fr.tt
+}
+
 field_probe :: proc(h: Sample_Hash, fs: []Field_Sample, p: [2]f32, limit: f32) -> Field_Probe {
 	i0, _ := hash_nearest(h, fs, p, limit)
 	if i0 < 0 {
@@ -556,7 +701,12 @@ field_probe :: proc(h: Sample_Hash, fs: []Field_Sample, p: [2]f32, limit: f32) -
 	}
 	fr := field_project(fs, i0, p)
 	beyond := (i0 == 0 && fr.fwd < 0) || (i0 == len(fs) - 1 && fr.fwd > 0)
-	return {su = abs(fr.lateral) - field_seam_offset(fs, i0, fr), beyond = beyond, ok = true}
+	return {
+		su = abs(fr.lateral) - field_seam_offset(fs, i0, fr),
+		reach = field_reach(fs, i0, fr),
+		beyond = beyond,
+		ok = true,
+	}
 }
 
 // One leg's contribution at world point `p`.
@@ -574,6 +724,7 @@ field_leg_at :: proc(fs: []Field_Sample, i: int, p: [2]f32) -> (leg: Terrain_Leg
 	leg.seam_y = s.seam_y[fr.side] + (sj.seam_y[fr.side] - s.seam_y[fr.side]) * fr.tt
 	leg.s_frac = s.s_frac + (sj.s_frac - s.s_frac) * fr.tt
 	leg.u = max(0, abs(fr.lateral) - field_seam_offset(fs, i, fr))
+	leg.reach = field_reach(fs, i, fr)
 	return
 }
 
@@ -688,7 +839,8 @@ terrain_field_build :: proc(
 		return
 	}
 
-	fs := field_samples(ribbon, arc, ds, topo, roughness)
+	fs := field_samples(ribbon, arc, ds, topo, roughness, t.reach_m)
+	curvature := terrain_offset_curvature(ribbon, arc)
 	lo := [2]f32{max(f32), max(f32)}
 	hi := [2]f32{min(f32), min(f32)}
 	for s in fs {
@@ -727,7 +879,7 @@ terrain_field_build :: proc(
 		reach, margin, limit: f32,
 	) {
 		pr := field_probe(hash, fs, p, limit)
-		if !pr.ok || pr.beyond || pr.su < margin || pr.su > reach {
+		if !pr.ok || pr.beyond || pr.su < margin || pr.su > min(reach, pr.reach) {
 			return
 		}
 		if !dedupe_add(seen, p[0], p[1]) {
@@ -766,7 +918,8 @@ terrain_field_build :: proc(
 			for i := 0; i < n; i += step {
 				seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
 				o := terrain_outward(ribbon[i], side)
-				p := [2]f32{seam.x + o.x * u, seam.z + o.z * u}
+				world := terrain_offset_point(seam, o, curvature[i], side, fs[i].e[side], u, 1)
+				p := [2]f32{world.x, world.z}
 				add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
 			}
 		}
@@ -780,7 +933,8 @@ terrain_field_build :: proc(
 		for i := 0; i < n; i += step {
 			seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
 			o := terrain_outward(ribbon[i], side)
-			p := [2]f32{seam.x + o.x * t.reach_m, seam.z + o.z * t.reach_m}
+			world := terrain_offset_point(seam, o, curvature[i], side, fs[i].e[side], t.reach_m, 1)
+			p := [2]f32{world.x, world.z}
 			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
 		}
 	}
@@ -831,7 +985,7 @@ terrain_field_build :: proc(
 		}
 		centroid := [2]f32{(a.x + b.x + cp.x) / 3, (a.z + b.z + cp.z) / 3}
 		pr := field_probe(hash, fs, centroid, limit)
-		if !pr.ok || pr.beyond || pr.su <= -TERRAIN_SU_EPS || pr.su > t.reach_m {
+		if !pr.ok || pr.beyond || pr.su <= -TERRAIN_SU_EPS || pr.su > min(t.reach_m, pr.reach) {
 			continue
 		}
 		append(&f.tris, tri)
@@ -871,7 +1025,7 @@ field_y :: proc(t: ^Terrain, v: Terrain_Point) -> f32 {
 	y: f32
 	for k in 0 ..< v.n {
 		l := v.legs[k]
-		y += l.w * terrain_height(t, l.side, l.s_frac, l.u, l.seam_y)
+		y += l.w * terrain_height(t, l.side, l.s_frac, l.u, l.seam_y, min(t.reach_m, l.reach))
 	}
 	return y
 }
@@ -952,6 +1106,7 @@ terrain_node_world :: proc(
 		return nil
 	}
 	ds := sample_spacing(ribbon)
+	curvature := terrain_offset_curvature(ribbon, arc)
 	vrows := verge_rows(topo)
 
 	out := make([]rl.Vector3, 2 * count, allocator)
@@ -960,9 +1115,10 @@ terrain_node_world :: proc(
 			i := arc_sample(arc, total * f32(r) / f32(t.rows - 1))
 			seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
 			outward := terrain_outward(ribbon[i], side)
+			seam_offset := rl.Vector3DotProduct(seam - ribbon[i].pos, outward)
 			for col in 0 ..< t.cols {
-				u := t.reach_m * f32(col + 1) / f32(t.cols)
-				p := seam + outward * u
+				fraction := f32(col + 1) / f32(t.cols)
+				p := terrain_offset_point(seam, outward, curvature[i], side, seam_offset, t.reach_m, fraction)
 				p.y = terrain_node(t, side, r, col)
 				out[side * count + r * t.cols + col] = p
 			}
@@ -971,11 +1127,60 @@ terrain_node_world :: proc(
 	return out
 }
 
+// Which lattice rows deserve an editable handle. On an inside corner the
+// offset copy is shorter than the road, sometimes dramatically so; retaining
+// every road-distance row there produces dense knots of overlapping gizmos.
+// Greedily collapse rows until the offset curve has travelled 10 m, preserving
+// both ends. The height samples remain in the lattice for smooth interpolation;
+// this mask only removes redundant controls from drawing and picking.
+terrain_node_active_mask :: proc(
+	t: ^Terrain,
+	pos: []rl.Vector3,
+	allocator := context.temp_allocator,
+) -> []bool {
+	count := terrain_node_count(t)
+	out := make([]bool, len(pos), allocator)
+	if count == 0 || len(pos) != 2 * count {
+		return out
+	}
+	distance_xz := proc(a, b: rl.Vector3) -> f32 {
+		dx, dz := b.x - a.x, b.z - a.z
+		return math.sqrt(dx * dx + dz * dz)
+	}
+	for side in 0 ..< 2 {
+		base := side * count
+		out[base] = true
+		last := 0
+		for r in 1 ..< t.rows {
+			if distance_xz(pos[base + last], pos[base + r]) >= TERRAIN_ROW_M_MIN {
+				out[base + r] = true
+				last = r
+			}
+		}
+		end := t.rows - 1
+		if last != end {
+			// Prefer the real route endpoint to a retained row sitting almost on it.
+			for last > 0 && distance_xz(pos[base + last], pos[base + end]) < TERRAIN_ROW_M_MIN {
+				out[base + last] = false
+				last -= 1
+				for last > 0 && !out[base + last] {
+					last -= 1
+				}
+			}
+			out[base + end] = true
+		}
+	}
+	return out
+}
+
 // Nearest node the ray strikes, as an index into terrain_node_world, or -1.
-pick_terrain_node :: proc(pos: []rl.Vector3, radius: f32, ray: rl.Ray) -> (idx: int, dist: f32) {
+pick_terrain_node :: proc(pos: []rl.Vector3, active: []bool, radius: f32, ray: rl.Ray) -> (idx: int, dist: f32) {
 	idx = -1
 	dist = max(f32)
 	for p, i in pos {
+		if len(active) == len(pos) && !active[i] {
+			continue
+		}
 		if hit := rl.GetRayCollisionSphere(ray, p, radius); hit.hit && hit.distance < dist {
 			dist = hit.distance
 			idx = i
@@ -986,7 +1191,7 @@ pick_terrain_node :: proc(pos: []rl.Vector3, radius: f32, ray: rl.Ray) -> (idx: 
 
 // The lattice, drawn as handles joined along rows and columns. `selected` is an
 // index into `pos`, or -1.
-draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, selected: int) {
+draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, active: []bool, selected: int) {
 	if len(pos) == 0 {
 		return
 	}
@@ -996,17 +1201,23 @@ draw_terrain_nodes :: proc(t: ^Terrain, pos: []rl.Vector3, selected: int) {
 
 	for side in 0 ..< 2 {
 		base := side * count
-		for r in 0 ..< t.rows {
-			for col in 0 ..< t.cols - 1 {
-				rl.DrawLine3D(pos[base + r * t.cols + col], pos[base + r * t.cols + col + 1], grid)
-			}
-		}
 		for col in 0 ..< t.cols {
-			for r in 0 ..< t.rows - 1 {
-				rl.DrawLine3D(pos[base + r * t.cols + col], pos[base + (r + 1) * t.cols + col], grid)
+			previous := -1
+			for r in 0 ..< t.rows {
+				i := base + r * t.cols + col
+				if len(active) == len(pos) && !active[i] {
+					continue
+				}
+				if previous >= 0 {
+					rl.DrawLine3D(pos[previous], pos[i], grid)
+				}
+				previous = i
 			}
 		}
 		for i in 0 ..< count {
+			if len(active) == len(pos) && !active[base + i] {
+				continue
+			}
 			hcol := base + i == selected ? rl.Color{255, 120, 60, 255} : rl.Color{150, 230, 180, 255}
 			// Low-poly: a maxed-out lattice is hundreds of handles a side.
 			rl.DrawSphereEx(pos[base + i], radius, 6, 6, hcol)

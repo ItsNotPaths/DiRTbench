@@ -183,7 +183,7 @@ veg_field_make :: proc(
 	if t == nil || !t.enabled || len(ribbon) < 2 {
 		return {}
 	}
-	fs := field_samples(ribbon, arc, ds, topo, roughness)
+	fs := field_samples(ribbon, arc, ds, topo, roughness, t.reach_m)
 	lo := [2]f32{max(f32), max(f32)}
 	hi := [2]f32{min(f32), min(f32)}
 	for s in fs {
@@ -205,13 +205,13 @@ veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 		return 0, true
 	}
 	pr := field_probe(vf.hash, vf.fs, p, vf.limit)
-	if !pr.ok || pr.beyond || pr.su <= 0 || pr.su > vf.t.reach_m {
+	if !pr.ok || pr.beyond || pr.su <= 0 || pr.su > min(vf.t.reach_m, pr.reach) {
 		return 0, false
 	}
 	legs, n := field_legs(vf.hash, vf.fs, vf.near_other, p, vf.limit)
 	for k in 0 ..< n {
 		l := legs[k]
-		y += l.w * terrain_height(vf.t, l.side, l.s_frac, l.u, l.seam_y)
+		y += l.w * terrain_height(vf.t, l.side, l.s_frac, l.u, l.seam_y, min(vf.t.reach_m, l.reach))
 	}
 	return y, true
 }

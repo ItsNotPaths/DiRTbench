@@ -351,9 +351,8 @@ draw_terrain_section :: proc(ed: ^Editor) {
 	draw_terrain_mesh_section(ed)
 }
 
-// The out-of-stage mesh. Rows and columns resize the lattice, which discards
-// the sculpt — the nodes are indexed rather than positioned, so there is no
-// meaning-preserving way to reinterpret them at another resolution.
+// The out-of-stage mesh. Along-road nodes are specified as a spacing so long
+// routes gain control rows instead of stretching a fixed-size lattice.
 draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	t := &ed.terrain
 	if ui.igCheckbox("terrain", &t.enabled) {
@@ -388,18 +387,11 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	ui.igBeginDisabled(ed.gizmo_active)
 	defer ui.igEndDisabled()
 
-	rows := c.int(t.rows)
-	cols := c.int(t.cols)
-	if ui.igSliderInt("nodes along", &rows, 2, geo.TERRAIN_ROWS_MAX, "%d", ui.IM_SLIDER_NONE) {
-		t.rows = int(rows)
-		geo.terrain_invalidate(t)
+	if ui.igSliderFloat("node spacing", &t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX, "%.0f m along", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed)
 	}
-	if ui.igSliderInt("nodes across", &cols, 1, geo.TERRAIN_COLS_MAX, "%d", ui.IM_SLIDER_NONE) {
-		t.cols = int(cols)
-		geo.terrain_invalidate(t)
-		mark_terrain_dirty(ed)
-	}
+	ui.im_same_line()
+	ui.im_text(fmt.ctprintf("(%d rows)", t.rows))
 
 	if ui.im_button("Flatten to verge") {
 		geo.terrain_invalidate(t)
