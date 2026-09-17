@@ -12,11 +12,9 @@ import "core:strings"
 // line endings, no trailing newline, a fixed header and footer, and a flat
 // list of records in between. A hand-built parser/emitter round-trips a real
 // stock file byte-for-byte, which is what `d3_ens_parse`/`d3_ens_emit` below
-// do — see `docs/dirt3-odin-roadmap.md` and `docs/roadmap-venues.md` for the
-// byte-level evidence and the live-drive confirmations. Static scenery is
-// deliberately duplicated: trees.bin/ornaments.bin place its render copy,
-// while a matching ENS instance places its objecttypes.pssg rigid body. See
-// docs/dirt3-static-object-collision.md.
+// do. Static scenery is duplicated on purpose: trees.bin/ornaments.bin place
+// the render copy, a matching ENS instance places the objecttypes.pssg rigid
+// body. Emptying the binaries leaves the collision standing.
 //
 // Five record shapes appear, and every one fits one of three generic shapes
 // rather than needing its own struct: self-closing (`TEMPLATEENTITYREFERENCE`,
@@ -61,7 +59,8 @@ ens_attr :: proc(node: Ens_Node, name: string) -> (value: string, ok: bool) {
 // Real per-tag `track.vis` ids for a route's `staticVis="1"` entities, read
 // straight off the file's own `instanceID` attribute. Confirmed exact against
 // every stock route's own `track.vis` tag-2 section, game-wide, across every
-// venue sampled — see docs/dirt3-vis-format.md, "The ornaments crash".
+// venue sampled. Ordinary dynamic ENS drawables are not in that section and
+// must not be given a box there: it overflows a render-bucket copy.
 d3_ens_static_vis_ids :: proc(nodes: []Ens_Node, allocator := context.allocator) -> (ids: []u32, ok: bool) {
 	out := make([dynamic]u32, allocator)
 	for node in nodes {

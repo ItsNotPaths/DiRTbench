@@ -10,7 +10,7 @@ package d3
 // Dirt Rally, but the differences (material count, sheet support, sign of the
 // material count) are not ours to carry.
 //
-// Layout is in docs/dirt3-target.md. Derived from EgoEngineLibrary, MIT,
+// Derived from EgoEngineLibrary, MIT,
 // github.com/EgoEngineModding/Ego-Engine-Modding.
 //
 // The archive is little-endian. Inside a chunk the packed vertex, node and

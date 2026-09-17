@@ -12,8 +12,8 @@ package main
 //   orphan    a directory nobody registered, or a registration with no files.
 //             Greyed and flagged. A stock install has five of them.
 //
-// Nothing on this screen touches the game. Deploying a venue into it is a
-// separate, explicit step that does not exist yet; see docs/venue-projects.md.
+// Drawing this screen touches nothing. Deploy is a separate button, and its
+// preflight is read-only: applying is the opt-in.
 
 import "core:fmt"
 import "core:os"

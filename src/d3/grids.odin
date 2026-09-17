@@ -15,11 +15,9 @@ import "core:fmt"
 import "core:math"
 import "core:mem/virtual"
 
-// Every one of the 106 stock grids.pssg files also carries a `grid_service`
-// node with 3 slots. That grid is presentational: it is where the car stands in
-// the intro and the entrants and tune menus, so it has no required place on the
-// route. This writer emits the standing grid alone and has not been driven yet.
-// See docs/dirt3-binary-notes.md.
+// All 106 stock grids.pssg carry a `grid_service` node, so we emit one too. It
+// looks presentational but creates a route-localized participant: left at a
+// donor's position it crashed a drive. Co-located with the standing grid.
 D3_GRID_SLOTS :: 8
 D3_GRID_SERVICE_SLOTS :: 3       // every stock grids.pssg carries exactly 3
 D3_GRID_SERVICE_SPACING :: f32(3) // metres between service slots, line abreast

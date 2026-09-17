@@ -152,7 +152,6 @@ d3_write_collision :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg
 // does not exist here rather than back onto ours — which looks exactly like
 // falling through the floor, and is not a collision-archive bug at all. The
 // game tolerates both files being absent outright, so omit rather than stub.
-// See docs/venue-synthesis.md, "The line in the sand".
 D3_OMITTED_ROUTE_FILES :: []string{"resetlines.cqtc", "boundarylines.cqtc"}
 
 d3_omit_stale_route_files :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {

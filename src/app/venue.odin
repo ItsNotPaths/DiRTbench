@@ -18,7 +18,7 @@ package main
 // borrows everything else — terrain, objects, sky, lighting — from a vanilla
 // base venue. Deploying one clones the base's `track_model` row and hardlinks
 // the base's 127 MB of venue-wide art, which is why a base is not optional.
-// Fully custom venues come later; see docs/venue-projects.md.
+// Fully custom venues come later.
 //
 // Nothing in this file touches the game.
 

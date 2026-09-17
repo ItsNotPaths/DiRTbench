@@ -3,8 +3,7 @@ package d3
 // Valid-but-empty forms of route files whose content describes the *old*
 // road. A stub is only safe when a real stock route already ships one this
 // way — every form here matches the smallest instance of its file across
-// all playable venues. See docs/venue-synthesis.md §4-5 for the survey and
-// the manifest this feeds.
+// all playable venues, byte for byte.
 
 D3_STUB_LIGHT_PLACEMENT :: "<light_placement />"
 D3_STUB_INTERACTIVE_WATER :: "<interactiveWater />"
@@ -49,8 +48,8 @@ D3_STUB_CQTC_LEAF := [54]u8{
 }
 
 // `tag` is exactly 4 bytes: `RESD` for cameralines, `BARR` for barrierlines.
-// `resetlines.cqtc` (`RESE`) is the out-of-bounds test and is omitted rather
-// than stubbed — see docs/venue-projects.md.
+// `resetlines.cqtc` (`RESE`) is the out-of-bounds test, omitted rather than
+// stubbed: that is what permits movement away from the base venue's road.
 d3_stub_cqtc :: proc(tag: string, lo, hi: [3]f32, allocator := context.allocator) -> []u8 {
 	out := make([]u8, 56+len(D3_STUB_CQTC_LEAF), allocator)
 	for k in 0 ..< 3 { binary_store_f32(out, k*4, lo[k]) }

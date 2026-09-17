@@ -11,8 +11,7 @@ import "core:strings"
 // reference's filename, addressed by *absolute file offset*.
 //
 // Every core field below is verified against the plain XML sibling files
-// (`trees.xml`/`ornaments.xml`), field by field. See
-// docs/dirt3-placement-synthesis.md for the full header/reference map.
+// (`trees.xml`/`ornaments.xml`), field by field.
 
 D3_Placement_Format :: enum { Trees, Ornaments }
 

@@ -217,8 +217,8 @@ d3_quantize_pos :: proc(p: [3]f32) -> [3]i32 {
 	return {i32(math.round(p[0]*10000)), i32(math.round(p[1]*10000)), i32(math.round(p[2]*10000))}
 }
 
-// docs/dirt3-target.md records the real per-chunk budget every stock DiRT 3
-// .vcqtc was built to: 1565 triangles, 929 vertices (materials already
+// The real per-chunk budget every stock DiRT 3 .vcqtc was built to:
+// 1565 triangles, 929 vertices (materials already
 // capped at 16 below). Vertex 0 of a packed triangle has only 10 bits, so
 // 1024 unique vertices is the hard ceiling regardless -- but nothing shipped
 // ever gets within 95 of it. d3_vcqtc_write's own PatchUp pass only reorders
@@ -282,8 +282,7 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 		// to one root .vcqtc entry loads and validates fine but the game never
 		// finds it — the car falls through everything. Below-threshold input
 		// (a small custom stage, unlike any stock route) used to hit exactly
-		// that shape silently. See docs/dirt3-target.md, "archive topology
-		// matters".
+		// that shape silently.
 		if c.level>0 && !d3_partition_should_split(input,c.tris) { append(&leaves,qi); continue }
 		if c.level>=16 { return nil,fmt.tprintf("%s still exceeds a chunk limit at level 16",c.name),false }
 		mid:=(c.lo+c.hi)/2

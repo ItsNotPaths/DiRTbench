@@ -13,7 +13,7 @@ package d3
 // directory is a broken menu entry. On a stock install the two disagree in both
 // directions — three registered venues have no files, and dev leftovers sit on
 // disk unregistered — so this reads both and reports where they differ rather
-// than picking one and looking confident. See docs/venue-projects.md.
+// than picking one and looking confident.
 //
 // A location groups venues that share terrain (`finland` holds `finland_rally`
 // and `finland_trail`); a venue owns `tracksplit.pssg`, `track.vis`, the object

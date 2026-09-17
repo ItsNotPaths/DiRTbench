@@ -1,11 +1,10 @@
 package d3
 
 // Dirt 3 visibility file, single-cell fallback shape: one view cell over
-// every object's bounds, one group, every bit set. See
-// docs/dirt3-vis-format.md, "The fallback: one view cell, everything
-// visible" — no BSP, no PVS. Section 3's boxes still gate visibility on their
-// own regardless of the mask, so a correct box and a correct per-tag
-// registration index matter even in this shape.
+// every object's bounds, one group, every bit set. A section-1 list opening
+// with a zero gives one cell over the whole route, so there is no BSP or PVS to
+// generate. Section 3's boxes still cull independently of the mask, so a
+// correct box and per-tag registration index matter even in this shape.
 
 import "core:fmt"
 
@@ -46,9 +45,9 @@ d3_vis_tag_span :: proc(counts: [16]u32) -> int {
 // Every object of `tag` in a real (possibly multi-group) track.vis, keyed by
 // its per-tag id. Section 3 chains every group in the file through its own
 // "offset of the next group" field regardless of tree nesting, so following
-// that chain visits every object without needing to walk the BSP itself — see
-// docs/dirt3-vis-format.md, "Section 3: the objects". Used to borrow a real
-// box for an id this codebase can derive independently of `ornaments.bin` —
+// that chain visits every object without needing to walk the BSP itself. Used
+// to borrow a real box for an id this codebase can derive independently of
+// `ornaments.bin` —
 // see vis_allvisible.odin's objects.ens objects.
 d3_vis_read_tag_boxes :: proc(data: []u8, tag: u32, allocator := context.allocator) -> (boxes: map[u32]D3_Tile_Box, ok: bool) {
 	if len(data) < D3_VIS_HEADER_SIZE { return nil, false }
@@ -76,10 +75,9 @@ d3_vis_read_tag_boxes :: proc(data: []u8, tag: u32, allocator := context.allocat
 // `header_floor` raises a tag's header count (0x40+tag*4) to at least this
 // value even when `objects` holds fewer of that tag. The game reads that
 // count to size an allocation it fills from its own independently-built
-// per-tag item list, with no bound check against the size — see
-// docs/dirt3-vis-format.md, "Header 0x40..0x7F". A floor borrowed from a
-// donor file's real count is a safety margin for a tag this codebase cannot
-// yet derive a correct count for on its own.
+// per-tag item list, with no bound check against the size. A floor borrowed
+// from a donor file's real count is a safety margin for a tag this codebase
+// cannot yet derive a correct count for on its own.
 d3_vis_build_single_cell :: proc(objects: []D3_Vis_Object, header_floor := [16]u32{}, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
 	if len(objects) == 0 { return nil, "Dirt 3 VIS needs at least one object", false }
 	if len(objects) > 65535 { return nil, "Dirt 3 VIS has too many objects for one group", false }
