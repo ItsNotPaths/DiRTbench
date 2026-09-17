@@ -78,18 +78,6 @@ draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 	}
 }
 
-// Every stage's lines. The selected one is drawn bright and the rest dim, so a
-// new stage is placed against the ones already using this road.
-draw_route_markers :: proc(ed: ^Editor) {
-	for route, i in ed.doc.routes {
-		lit := i == ed.route_sel
-		start := gfx.Color{110, 255, 140, 255} if lit else {60, 120, 80, 255}
-		finish := gfx.Color{255, 110, 110, 255} if lit else {120, 60, 60, 255}
-		draw_marker(ed.doc.spline, route.start, start)
-		draw_marker(ed.doc.spline, route.finish, finish)
-	}
-}
-
 // A start or finish line, drawn across the road where it sits.
 draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: gfx.Color) {
 	if !geo.marker_valid(sp, m) {
@@ -157,24 +145,26 @@ draw_venue_scene :: proc(
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
 	draw_world(ed)
-	draw_timing_markers(timing_markers(ed.doc.ribbon,ed.doc.timing))
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
-	draw_route_markers(ed)
 	if ed.previewing {
 		gfx.DrawSphere(ed.preview_pos, 2.0, {255, 210, 80, 255})
 	}
 	gfx.EndMode3D()
 }
 
-// A stage window's pass: the venue road with this stage lit up on it. The
-// timing gates come off the compiled ribbon, which is the road the game will
-// actually time, rather than off the whole graph.
+// A stage window's pass: the venue road with this stage lit up on it. Only this
+// stage's lines are drawn — the others belong to their own windows. The timing
+// gates come off the compiled ribbon, which is the road the game will actually
+// time, rather than off the whole graph.
 draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
 	draw_world(ed)
-	draw_route_markers(ed)
+	if route := selected_route(ed); route != nil {
+		draw_marker(ed.doc.spline, route.start, {110, 255, 140, 255})
+		draw_marker(ed.doc.spline, route.finish, {255, 110, 110, 255})
+	}
 	if ed.stage.state == .Ready {
 		draw_ribbon_edges(ed.stage.ribbon, {255, 235, 120, 255})
 		draw_timing_markers(timing_markers(ed.stage.ribbon, ed.doc.timing))

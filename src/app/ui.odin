@@ -37,7 +37,7 @@ do_save :: proc(ed: ^Editor) {
 			msg, ok = venue_routes_save(ed.doc.open_venue, ed.doc.routes[:])
 		}
 		if ok {
-			msg = fmt.tprintf("saved %s road network and stage lines", ed.doc.open_venue)
+			msg = fmt.tprintf("saved %s", ed.doc.open_venue)
 		}
 		set_status(&ed.status, msg, ok)
 		return
@@ -158,7 +158,7 @@ draw_menubar :: proc(ed: ^Editor) {
 		ui.igEndMenu()
 	}
 	if ui.igBeginMenu("View", true) {
-		if ed.kind == .Venue && ui.igMenuItem_Bool("Stage generator", nil, ed.show_gen, true) {
+		if ed.kind == .Venue && ui.igMenuItem_Bool("Road generator", nil, ed.show_gen, true) {
 			ed.show_gen = !ed.show_gen
 		}
 		ui.igSeparator()
@@ -182,39 +182,6 @@ draw_status_text :: proc(s: ^Status) {
 	ui.im_text_colored(s.ok ? green : red, msg)
 }
 
-// The venue's stage list: which stages use this road, and whether each has its
-// lines yet. The selected one is drawn lit, so a new stage is placed against
-// the ones already here. A stage's name and lines belong to its own window.
-//
-// Radio buttons rather than a list box: a venue holds a handful of stages, and
-// this needs no cimgui binding that is not already here.
-draw_stages :: proc(ed: ^Editor) {
-	ui.igSeparatorText("Stages")
-	if len(ed.doc.routes) == 0 {
-		ui.im_text("no stages yet")
-	}
-	for route, i in ed.doc.routes {
-		if ui.igRadioButton_Bool(fmt.ctprintf("%s##route%d", route.name, i), i == ed.route_sel) {
-			select_route(ed, i)
-		}
-		ui.im_same_line()
-		ui.im_text_colored(
-			route_has_markers(route) ? ui.Im_Vec4{0.45, 0.85, 0.5, 1} : ui.Im_Vec4{0.75, 0.7, 0.45, 1},
-			route_has_markers(route) ? fmt.ctprintf("%s", route.id) : fmt.ctprintf("%s, no lines", route.id),
-		)
-	}
-
-	if ui.im_button("Add stage") {
-		add_route(ed)
-	}
-	ui.im_same_line()
-	ui.igBeginDisabled(selected_route(ed) == nil)
-	if ui.im_button("Remove") {
-		remove_route(ed, ed.route_sel)
-	}
-	ui.igEndDisabled()
-}
-
 // A floating, closable panel: `igBegin` with a p_open gives it an X, and the
 // menubar toggle brings it back. Not drawn at all while closed.
 draw_generator :: proc(ed: ^Editor) {
@@ -223,13 +190,13 @@ draw_generator :: proc(ed: ^Editor) {
 	}
 	ui.igSetNextWindowPos({330, 34}, .FirstUseEver, {0, 0})
 	ui.igSetNextWindowSize({340, 0}, .FirstUseEver)
-	if !ui.igBegin("Stage generator", &ed.show_gen, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
+	if !ui.igBegin("Road generator", &ed.show_gen, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
 		ui.igEnd() // still required when collapsed
 		return
 	}
 	defer ui.igEnd()
 
-	ui.im_text("Same seed and settings always give the same stage.")
+	ui.im_text("Same seed and settings always give the same road.")
 	ui.igSpacing()
 
 	// `changed` must not short-circuit: every widget has to be drawn every
@@ -303,12 +270,8 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 		return
 	}
 
-	ui.igSeparatorText("Stage")
+	ui.igSeparatorText(fmt.ctprint(route.name))
 	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s / %s", ed.doc.open_venue, route.id))
-	if ui.igInputText("name", raw_data(ed.route_name[:]), len(ed.route_name), {}, nil, nil) {
-		delete(route.name)
-		route.name = strings.clone(buf_text(ed.route_name[:]))
-	}
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)
@@ -328,6 +291,9 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 		ui.im_text_colored(WARN_COL, fmt.ctprint(msg))
 	}
 
+	// The gates are drawn on this stage's ribbon, but their numbers are the
+	// venue's, so a change here moves every stage's gates.
+	ui.im_text_colored(DIM_COL, "gates below are venue-wide")
 	draw_timing_section(ed)
 
 	ui.igSeparatorText("Controls")
@@ -374,10 +340,6 @@ draw_inspector :: proc(ed: ^Editor) {
 
 	draw_status_text(&ed.status)
 
-	if ed.doc.open_venue != "" {
-		draw_stages(ed)
-	}
-
 	ui.igSeparatorText("Gizmo")
 	if ui.igRadioButton_Bool("Move (1)", ed.gizmo_mode == .Move) {
 		ed.gizmo_mode = .Move
@@ -389,7 +351,6 @@ draw_inspector :: proc(ed: ^Editor) {
 
 	draw_terrain_section(ed)
 	draw_point_section(ed)
-	draw_timing_section(ed)
 	draw_pace_section(ed)
 	draw_veg_section(ed)
 
@@ -402,9 +363,10 @@ draw_inspector :: proc(ed: ^Editor) {
 	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")
 }
 
+// Gates are spread along one compiled stage, so this is a stage window's panel.
+// The numbers behind it are the venue's, in road.json.
 draw_timing_section :: proc(ed:^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Timing gates",ui.IM_TREE_NODE_DEFAULT_OPEN) { return }
-	ui.im_text_colored(DIM_COL, "venue-wide, every stage")
 	ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE)
 	ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE)
 }

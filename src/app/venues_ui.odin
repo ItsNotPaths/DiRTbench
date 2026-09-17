@@ -26,6 +26,15 @@ DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}
 MINE_COL :: ui.Im_Vec4{0.58, 0.82, 0.62, 1.0}
 
+// One stage's editable name. ImGui edits a fixed buffer in place, so the screen
+// keeps one per stage rather than re-reading the name out of the document every
+// frame, which would wipe whatever is half typed.
+Stage_Row :: struct {
+	venue: string, // both owned; together they are the row's identity
+	route: string,
+	name:  [64]u8,
+}
+
 // What the screen is doing. The new-venue form is modal in spirit: while it is
 // up, the list is still drawn but nothing else is actionable.
 Venues_Screen :: struct {
@@ -38,6 +47,12 @@ Venues_Screen :: struct {
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
 	delete_ready: string, // second click confirms project deletion
+	stage_ready:  string, // "<venue>/<route>" whose removal a second click confirms
+	stages_open:  string, // the one venue showing its stage list, "" for none
+	rows:         [dynamic]Stage_Row,
+	// Re-read `venues` between frames. Reloading mid-frame frees the array the
+	// row loop is walking.
+	reload_pending: bool,
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
@@ -50,6 +65,13 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	delete(ps.error)
 	delete(ps.deploy_ready)
 	delete(ps.delete_ready)
+	delete(ps.stage_ready)
+	delete(ps.stages_open)
+	for row in ps.rows {
+		delete(row.venue)
+		delete(row.route)
+	}
+	delete(ps.rows)
 	ps^ = {}
 }
 
@@ -107,7 +129,7 @@ draw_venues_screen :: proc(app: ^App) {
 	}
 	if ui.im_button("Rescan") {
 		install_scan_rescan(vs)
-		venues_screen_reload(ps)
+		ps.reload_pending = true
 	}
 	ui.im_same_line()
 	if ui.im_button(ps.adding ? "Cancel" : "New venue...") {
@@ -121,6 +143,7 @@ draw_venues_screen :: proc(app: ^App) {
 	}
 
 	ui.igSeparatorText("Yours")
+	stage_rows_sweep(app)
 	mine := 0
 	for &p in ps.venues {
 		draw_venue_row(app, &p)
@@ -236,41 +259,184 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 			set_status(&app.status, msg, ok)
 			delete(ps.delete_ready)
 			ps.delete_ready = ""
-			if ok { venues_screen_reload(ps) }
+			ps.reload_pending = ok
 		}
 	}
 	draw_venue_stages(app, p)
 	ui.igSpacing()
 }
 
-// One button per stage, opening that stage in a window of its own. This is the
-// only way into a stage.
+// The stage list, and the only place stages are listed or edited. A venue
+// window edits the road; it says nothing about the stages that use it.
 //
-// The names come from the open document when there is one, so a stage added but
-// not yet saved is here too — venue.json is only reloaded on a rescan.
-@(private = "file")
-draw_venue_stages :: proc(app: ^App, p: ^Venue) {
-	routes := p.routes
-	if doc := venue_doc_for(app, p.id); doc != nil {
-		routes = doc.routes[:]
+// The list comes from the open document when a window has one, because that is
+// the copy being edited. venue.json otherwise.
+venue_stages :: proc(app: ^App, venue_id: string) -> []Venue_Route {
+	if doc := venue_doc_for(app, venue_id); doc != nil {
+		return doc.routes[:]
 	}
-	if len(routes) == 0 {
-		ui.im_text_colored(DIM_COL, "no stages yet — add one in the road network window")
+	for &p in app.screen.venues {
+		if p.id == venue_id {
+			return p.routes
+		}
+	}
+	return nil
+}
+
+// The name buffer for this stage, seeded from the list the first time it is
+// asked for. Seeded once and not again: after that the buffer is what the user
+// is typing, and the list is what they last committed.
+@(private = "file")
+stage_row :: proc(ps: ^Venues_Screen, venue_id: string, route: Venue_Route) -> ^Stage_Row {
+	for &row in ps.rows {
+		if row.venue == venue_id && row.route == route.id {
+			return &row
+		}
+	}
+	append(&ps.rows, Stage_Row{venue = strings.clone(venue_id), route = strings.clone(route.id)})
+	row := &ps.rows[len(ps.rows) - 1]
+	set_buf(row.name[:], route.name)
+	return row
+}
+
+// Drop the buffers of stages that are gone, so a re-used id gets a fresh one.
+@(private = "file")
+stage_rows_sweep :: proc(app: ^App) {
+	ps := &app.screen
+	for i := len(ps.rows) - 1; i >= 0; i -= 1 {
+		row := ps.rows[i]
+		if route_index(venue_stages(app, row.venue), row.route) >= 0 {
+			continue
+		}
+		delete(row.venue)
+		delete(row.route)
+		unordered_remove(&ps.rows, i)
+	}
+}
+
+// Where a stage-list edit lands. Each verb below takes one of two paths:
+//
+//   a window is open   the document takes it, live in every window on that
+//                      venue. Its save writes road.json and venue.json as a
+//                      pair, which is what stops a marker reaching venue.json
+//                      ahead of the road it was placed on.
+//   no window          nothing else holds the list, so venue.json is written
+//                      now, off a temp copy. The strings in that copy belong to
+//                      the venue list, and the temp allocator frees nothing, so
+//                      the edit verbs can delete into it freely.
+@(private = "file")
+stage_list_copy :: proc(p: ^Venue) -> [dynamic]Venue_Route {
+	out := make([dynamic]Venue_Route, 0, len(p.routes) + 1, context.temp_allocator)
+	append(&out, ..p.routes)
+	return out
+}
+
+// Persist an edit made on a temp copy, and re-read the screen from disk.
+@(private = "file")
+stage_list_write :: proc(app: ^App, venue_id: string, routes: []Venue_Route) {
+	msg, ok := venue_routes_save(venue_id, routes)
+	if ok {
+		msg = fmt.tprintf("%s now has %d stages", venue_id, len(routes))
+	}
+	set_status(&app.status, msg, ok)
+	app.screen.reload_pending = ok
+}
+
+@(private = "file")
+stage_add :: proc(app: ^App, p: ^Venue) {
+	if doc := venue_doc_for(app, p.id); doc != nil {
+		routes_add(&doc.routes)
+		set_status(&app.status, fmt.tprintf("added a stage to %s, not saved yet", p.id), true)
 		return
 	}
-	for route in routes {
-		open := venue_window(app, p.id, .Stage, route.id) != nil
-		if ui.im_button(fmt.ctprintf("%s###stage_%s_%s", route.name, p.id, route.id)) {
-			open_window_request(app, p.id, route.id)
-		}
-		ui.im_same_line()
-		switch {
-		case !route_has_markers(route):
-			ui.im_text_colored(WARN_COL, fmt.ctprintf("%s, no lines", route.id))
-		case open:
-			ui.im_text_colored(MINE_COL, fmt.ctprintf("%s, open", route.id))
-		case:
-			ui.im_text_colored(DIM_COL, fmt.ctprint(route.id))
+	routes := stage_list_copy(p)
+	routes_add(&routes, context.temp_allocator)
+	stage_list_write(app, p.id, routes[:])
+}
+
+@(private = "file")
+stage_remove :: proc(app: ^App, p: ^Venue, route_id: string) {
+	if doc := venue_doc_for(app, p.id); doc != nil {
+		routes_remove(&doc.routes, route_index(doc.routes[:], route_id))
+		set_status(&app.status, fmt.tprintf("removed %s from %s, not saved yet", route_id, p.id), true)
+		return
+	}
+	routes := stage_list_copy(p)
+	routes_remove(&routes, route_index(routes[:], route_id), context.temp_allocator)
+	stage_list_write(app, p.id, routes[:])
+}
+
+@(private = "file")
+stage_rename :: proc(app: ^App, p: ^Venue, route_id, name: string) {
+	if doc := venue_doc_for(app, p.id); doc != nil {
+		route_rename(&doc.routes, route_index(doc.routes[:], route_id), name)
+		set_status(&app.status, fmt.tprintf("renamed %s, not saved yet", route_id), true)
+		return
+	}
+	routes := stage_list_copy(p)
+	route_rename(&routes, route_index(routes[:], route_id), name, context.temp_allocator)
+	stage_list_write(app, p.id, routes[:])
+}
+
+// One arrow drops the stage list open. One venue's list at a time: the manager
+// lists every venue, and several lists open at once buries the row below.
+@(private = "file")
+draw_venue_stages :: proc(app: ^App, p: ^Venue) {
+	ps := &app.screen
+	shown := ps.stages_open == p.id
+	if ui.igArrowButton(fmt.ctprintf("###stages_%s", p.id), shown ? .Up : .Down) {
+		delete(ps.stages_open)
+		ps.stages_open = shown ? "" : strings.clone(p.id)
+		shown = !shown
+	}
+	if !shown {
+		return
+	}
+	for route in venue_stages(app, p.id) {
+		draw_stage_row(app, p, route)
+	}
+	if ui.im_button(fmt.ctprintf("Add stage###add_stage_%s", p.id)) {
+		stage_add(app, p)
+	}
+}
+
+// Open, rename, state, remove. A name commits when the field loses focus or
+// Enter is pressed, not per keystroke: without a window open every commit is a
+// write to venue.json.
+@(private = "file")
+draw_stage_row :: proc(app: ^App, p: ^Venue, route: Venue_Route) {
+	ps := &app.screen
+	open := venue_window(app, p.id, .Stage, route.id) != nil
+	if ui.im_button(fmt.ctprintf("%s###open_stage_%s_%s", open ? "Show" : "Edit", p.id, route.id)) {
+		open_window_request(app, p.id, route.id)
+	}
+	ui.im_same_line()
+
+	row := stage_row(ps, p.id, route)
+	ui.igSetNextItemWidth(170)
+	ui.igInputText(
+		fmt.ctprintf("###name_%s_%s", p.id, route.id),
+		raw_data(row.name[:]), len(row.name), ui.IM_INPUT_TEXT_NONE, nil, nil,
+	)
+	if ui.igIsItemDeactivatedAfterEdit() {
+		stage_rename(app, p, route.id, buf_text(row.name[:]))
+	}
+	ui.im_same_line()
+	ui.im_text_colored(
+		route_has_markers(route) ? (open ? MINE_COL : DIM_COL) : WARN_COL,
+		route_has_markers(route) ? fmt.ctprint(route.id) : fmt.ctprintf("%s, no lines", route.id),
+	)
+
+	ui.im_same_line()
+	key := fmt.tprintf("%s/%s", p.id, route.id)
+	confirming := ps.stage_ready == key
+	if ui.im_button(fmt.ctprintf("%s###del_stage_%s_%s", confirming ? "Sure?" : "Remove", p.id, route.id)) {
+		delete(ps.stage_ready)
+		ps.stage_ready = ""
+		if confirming {
+			stage_remove(app, p, route.id)
+		} else {
+			ps.stage_ready = strings.clone(key)
 		}
 	}
 }
@@ -360,7 +526,7 @@ draw_new_venue :: proc(app: ^App) {
 			venue_free(p)
 			ps.adding = false
 			ps.name_buf, ps.display_buf = {}, {}
-			venues_screen_reload(ps)
+			ps.reload_pending = true
 			set_status(&app.status, fmt.tprintf("created %s from %s", id, spec), true)
 		}
 	}
@@ -539,12 +705,10 @@ open_venue_window :: proc(app: ^App, p: ^Venue) {
 		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
 		return
 	}
-	ed := editor_open(app, doc, .Venue, fmt.ctprintf("dirtbench — %s", p.id))
-	if ed == nil {
+	if editor_open(app, doc, .Venue, fmt.ctprintf("dirtbench — %s", p.id)) == nil {
 		venue_doc_release(app, doc)
 		return
 	}
-	select_route(ed, len(doc.routes) > 0 ? 0 : -1)
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.id), true)
 }
 
@@ -590,6 +754,11 @@ venues_editors_reap :: proc(app: ^App) {
 // with panels swapped: there is no camera, no gizmo and no geometry here, and a
 // window that shares a loop with the editor ends up sharing its state too.
 draw_venues_frame :: proc(app: ^App) {
+	// Between frames: a reload frees the venue array the row loop is walking.
+	if app.screen.reload_pending {
+		venues_screen_reload(&app.screen)
+		app.screen.reload_pending = false
+	}
 	gfx.BeginWindowFrame(&app.window)
 	gfx.ClearBackground({22, 24, 29, 255})
 
@@ -614,7 +783,7 @@ draw_venues_menubar :: proc(app: ^App) {
 	if ui.igBeginMenu("File", true) {
 		if ui.igMenuItem_Bool("Rescan install", nil, false, true) {
 			install_scan_rescan(&app.install)
-			venues_screen_reload(&app.screen)
+			app.screen.reload_pending = true
 			set_status(&app.status, install_scan_status_text(&app.install), app.install.found)
 		}
 		ui.igSeparator()

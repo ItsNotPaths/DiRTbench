@@ -4,15 +4,12 @@ import "core:encoding/json"
 import "core:testing"
 import "../geo"
 
-// A window with a document behind it, which is the only shape the route
-// helpers work on: the stage list belongs to the document and the selection
-// belongs to the window.
+// The stage list belongs to the document. The project manager edits it there
+// when a window has the venue open, and on a temp copy of venue.json when not.
 @(private = "file")
-seed_routes :: proc(ed: ^Editor, doc: ^Venue_Doc, n: int) {
-	ed.doc = doc
-	ed.route_sel = -1
+seed_routes :: proc(routes: ^[dynamic]Venue_Route, n: int) {
 	for _ in 0 ..< n {
-		add_route(ed)
+		routes_add(routes)
 	}
 }
 
@@ -21,83 +18,76 @@ seed_routes :: proc(ed: ^Editor, doc: ^Venue_Doc, n: int) {
 // The gap a removal leaves is the next id handed out, and nothing else shifts.
 @(test)
 route_ids_fill_gaps_and_never_renumber :: proc(t: ^testing.T) {
-	ed, doc := Editor{}, Venue_Doc{}
+	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&ed, &doc, 3)
-	testing.expect_value(t, ed.doc.routes[0].id, "route_0")
-	testing.expect_value(t, ed.doc.routes[1].id, "route_1")
-	testing.expect_value(t, ed.doc.routes[2].id, "route_2")
+	seed_routes(&doc.routes, 3)
+	testing.expect_value(t, doc.routes[0].id, "route_0")
+	testing.expect_value(t, doc.routes[1].id, "route_1")
+	testing.expect_value(t, doc.routes[2].id, "route_2")
 
-	remove_route(&ed, 1)
-	testing.expect_value(t, len(ed.doc.routes), 2)
-	testing.expect_value(t, ed.doc.routes[0].id, "route_0")
-	testing.expect_value(t, ed.doc.routes[1].id, "route_2")
+	routes_remove(&doc.routes, 1)
+	testing.expect_value(t, len(doc.routes), 2)
+	testing.expect_value(t, doc.routes[0].id, "route_0")
+	testing.expect_value(t, doc.routes[1].id, "route_2")
 
-	add_route(&ed)
-	testing.expect_value(t, ed.doc.routes[2].id, "route_1")
-	testing.expect_value(t, ed.route_sel, 2)
+	routes_add(&doc.routes)
+	testing.expect_value(t, doc.routes[2].id, "route_1")
 }
 
-// Removing the last stage must leave the selection off the end of the list, not
-// pointing past it, or the marker keys write into freed memory.
+// Every stage-list edit is addressed by id, because the row the button sits in
+// is drawn from a list the document may have changed since.
 @(test)
-removing_the_last_stage_clears_the_selection :: proc(t: ^testing.T) {
-	ed, doc := Editor{}, Venue_Doc{}
+stage_edits_land_on_the_stage_they_name :: proc(t: ^testing.T) {
+	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&ed, &doc, 1)
-	testing.expect(t, selected_route(&ed) != nil)
+	seed_routes(&doc.routes, 3)
 
-	remove_route(&ed, 0)
-	testing.expect_value(t, ed.route_sel, -1)
-	testing.expect(t, selected_route(&ed) == nil, "a removed stage is still selected")
+	route_rename(&doc.routes, route_index(doc.routes[:], "route_1"), "MOOSE LOOP")
+	testing.expect_value(t, doc.routes[1].name, "MOOSE LOOP")
+
+	routes_remove(&doc.routes, route_index(doc.routes[:], "route_0"))
+	testing.expect_value(t, len(doc.routes), 2)
+	testing.expect_value(t, doc.routes[0].name, "MOOSE LOOP")
+	testing.expect_value(t, route_index(doc.routes[:], "route_0"), -1)
+
+	// A name that is not there must move nothing, not the first or last stage.
+	route_rename(&doc.routes, route_index(doc.routes[:], "route_9"), "NOWHERE")
+	testing.expect_value(t, doc.routes[0].name, "MOOSE LOOP")
 }
 
-// The name field is the only editable copy of a stage name, so it has to follow
-// the selection. Left stale, a rename lands on whichever stage was shown last.
+// A stage with one line is not half ready, it is not ready. Compiling it would
+// walk from a marker that is not on the road.
 @(test)
-the_name_field_follows_the_stage_selection :: proc(t: ^testing.T) {
-	ed, doc := Editor{}, Venue_Doc{}
+a_stage_needs_both_lines_to_read_as_complete :: proc(t: ^testing.T) {
+	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&ed, &doc, 2)
-	testing.expect_value(t, buf_text(ed.route_name[:]), ed.doc.routes[1].name)
+	seed_routes(&doc.routes, 1)
+	testing.expect(t, !route_has_markers(doc.routes[0]), "a fresh stage reads as complete")
 
-	select_route(&ed, 0)
-	testing.expect_value(t, buf_text(ed.route_name[:]), ed.doc.routes[0].name)
-}
+	doc.routes[0].start = geo.Road_Marker{from = 1, to = 2, t = 0.25}
+	testing.expect(t, !route_has_markers(doc.routes[0]), "a stage with no finish reads as complete")
 
-@(test)
-markers_belong_to_the_stage_they_were_placed_on :: proc(t: ^testing.T) {
-	ed, doc := Editor{}, Venue_Doc{}
-	defer routes_free(&doc.routes)
-	seed_routes(&ed, &doc, 2)
-
-	select_route(&ed, 0)
-	selected_route(&ed).start = geo.Road_Marker{from = 1, to = 2, t = 0.25}
-	select_route(&ed, 1)
-	selected_route(&ed).start = geo.Road_Marker{from = 5, to = 6, t = 0.75}
-
-	testing.expect_value(t, ed.doc.routes[0].start.from, 1)
-	testing.expect_value(t, ed.doc.routes[1].start.from, 5)
-	testing.expect(t, !route_has_markers(ed.doc.routes[0]), "a stage with no finish reads as complete")
+	doc.routes[0].finish = geo.Road_Marker{from = 7, to = 8, t = 0.5}
+	testing.expect(t, route_has_markers(doc.routes[0]))
 }
 
 // venue.json carries every stage's markers. This is the format claim on its
 // own, without the directory layout venue_save needs.
 @(test)
 venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
-	ed, doc := Editor{}, Venue_Doc{}
+	doc := Venue_Doc{}
 	defer routes_free(&doc.routes)
-	seed_routes(&ed, &doc, 2)
-	ed.doc.routes[0].start = {from = 1, to = 2, t = 0.25}
-	ed.doc.routes[0].finish = {from = 7, to = 8, t = 0.5}
-	ed.doc.routes[1].start = {from = 3, to = 4, t = 0.125}
-	ed.doc.routes[1].finish = {from = 9, to = 10, t = 0.875}
+	seed_routes(&doc.routes, 2)
+	doc.routes[0].start = {from = 1, to = 2, t = 0.25}
+	doc.routes[0].finish = {from = 7, to = 8, t = 0.5}
+	doc.routes[1].start = {from = 3, to = 4, t = 0.125}
+	doc.routes[1].finish = {from = 9, to = 10, t = 0.875}
 
 	p := Venue{
 		format  = VENUE_FORMAT,
 		version = VENUE_VERSION,
 		id      = "moose_loop",
-		routes  = ed.doc.routes[:],
+		routes  = doc.routes[:],
 	}
 	data, merr := json.marshal(p, {}, context.temp_allocator)
 	testing.expect(t, merr == nil, "could not encode the venue"); if merr != nil { return }
@@ -107,9 +97,9 @@ venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 	testing.expect(t, uerr == nil, "could not parse the venue back"); if uerr != nil { return }
 	testing.expect_value(t, len(back.routes), 2)
 	for route, i in back.routes {
-		testing.expect_value(t, route.id, ed.doc.routes[i].id)
-		testing.expect_value(t, route.name, ed.doc.routes[i].name)
-		testing.expect_value(t, route.start, ed.doc.routes[i].start)
-		testing.expect_value(t, route.finish, ed.doc.routes[i].finish)
+		testing.expect_value(t, route.id, doc.routes[i].id)
+		testing.expect_value(t, route.name, doc.routes[i].name)
+		testing.expect_value(t, route.start, doc.routes[i].start)
+		testing.expect_value(t, route.finish, doc.routes[i].finish)
 	}
 }

@@ -58,6 +58,14 @@ Im_Tree_Node_Flags :: distinct c.int
 IM_TREE_NODE_NONE :: Im_Tree_Node_Flags(0)
 IM_TREE_NODE_DEFAULT_OPEN :: Im_Tree_Node_Flags(1 << 5)
 
+// ImGuiDir_, for the arrow a button draws.
+Im_Dir :: enum c.int {
+	Left  = 0,
+	Right = 1,
+	Up    = 2,
+	Down  = 3,
+}
+
 // Style slots, from the head of ImGuiCol_ in cimgui.h. Only what we restyle.
 Im_Col :: enum c.int {
 	Text = 0,
@@ -152,6 +160,9 @@ foreign imgui {
 	igPopStyleColor :: proc(count: c.int) ---
 
 	igButton :: proc(label: cstring, size: Im_Vec2) -> bool ---
+	// A square button holding nothing but an arrow. `str_id` is the id, not a
+	// label, so nothing is drawn beside it.
+	igArrowButton :: proc(str_id: cstring, dir: Im_Dir) -> bool ---
 	igRadioButton_Bool :: proc(label: cstring, active: bool) -> bool ---
 	igCheckbox :: proc(label: cstring, v: ^bool) -> bool ---
 	// `v` is C `float[3]`; gfx.Vector3 is a distinct [3]f32, so cast into it.
@@ -163,6 +174,12 @@ foreign imgui {
 
 	// True when the header is expanded; draw its contents then.
 	igCollapsingHeader_TreeNodeFlags :: proc(label: cstring, flags: Im_Tree_Node_Flags) -> bool ---
+	// Width of the next widget in pixels. Without it an unlabelled field takes
+	// 65% of the window and pushes whatever shares its line off the edge.
+	igSetNextItemWidth :: proc(item_width: f32) ---
+	// True on the frame a field that was edited loses focus, which Enter also
+	// does. This is the commit signal: a text field reports every keystroke.
+	igIsItemDeactivatedAfterEdit :: proc() -> bool ---
 	// `buf` is an in/out NUL-terminated C string of capacity `buf_size`; ImGui
 	// edits it in place. Pass nil for the callback we do not use.
 	igInputText :: proc(label: cstring, buf: [^]u8, buf_size: uint, flags: Im_Input_Text_Flags, callback: rawptr, user_data: rawptr) -> bool ---

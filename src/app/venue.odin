@@ -507,6 +507,38 @@ venue_compile_route :: proc(
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
 }
 
+// Append a stage: a name, and no markers yet. The id is the directory the game
+// reads, so it comes from route_id_free and is never one another stage holds.
+routes_add :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocator) {
+	append(routes, Venue_Route{
+		id     = route_id_free(routes[:], allocator),
+		name   = strings.clone(fmt.tprintf("STAGE %d", len(routes) + 1), allocator),
+		start  = {from = -1, to = -1},
+		finish = {from = -1, to = -1},
+	})
+}
+
+// Ordered, so the stages keep the order the game's menu shows them in.
+routes_remove :: proc(routes: ^[dynamic]Venue_Route, i: int, allocator := context.allocator) {
+	if i < 0 || i >= len(routes) {
+		return
+	}
+	delete(routes[i].id, allocator)
+	delete(routes[i].name, allocator)
+	ordered_remove(routes, i)
+}
+
+// The menu text only. An id is never renamed.
+route_rename :: proc(
+	routes: ^[dynamic]Venue_Route, i: int, name: string, allocator := context.allocator,
+) {
+	if i < 0 || i >= len(routes) {
+		return
+	}
+	delete(routes[i].name, allocator)
+	routes[i].name = strings.clone(name, allocator)
+}
+
 // The venue's stage list, cloned for the editor to hold and edit.
 venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue_Route {
 	out := make([dynamic]Venue_Route, 0, len(p.routes), allocator)

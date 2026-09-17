@@ -32,7 +32,8 @@ Venue_Doc :: struct {
 	open_venue:    string,
 	open_stage:    string,
 	// The venue's stage list. It belongs to venue.json and is written back when
-	// the road is saved. A view's `route_sel` indexes it.
+	// the road is saved. The project manager edits it here while a window has
+	// the venue open; a stage window's `route_sel` indexes it.
 	routes:        [dynamic]Venue_Route,
 	spline:        geo.Spline,
 	// The one scan of the game install, borrowed. The app owns it and every

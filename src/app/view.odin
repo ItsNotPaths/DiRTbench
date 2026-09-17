@@ -14,7 +14,6 @@ package main
 import "core:c"
 import "core:fmt"
 import "core:math"
-import "core:strings"
 import "../geo"
 import "../ui"
 import "../gfx"
@@ -120,10 +119,10 @@ Editor :: struct {
 	app:           ^App,
 	doc:           ^Venue_Doc,
 	kind:          View_Kind,
-	// Which stage this window acts on, or -1. Indexes `doc.routes`.
-	route_sel:     int,
-	// A stage window's stage, by id. `stage_resync` turns it into `route_sel`.
+	// A stage window's stage: by id, resolved to an index into `doc.routes` by
+	// `stage_resync`. A venue window has neither; it never mentions stages.
 	stage_id:      string,
+	route_sel:     int,
 	stage:         Stage_Cache,
 	cam:           Orbit_Camera,
 	sel:           Selection,
@@ -152,7 +151,6 @@ Editor :: struct {
 	preview_next:  int, // index of the next note to fire
 	preview_last:  int, // index of the last note fired (for the HUD), or -1
 
-	route_name:    [64]u8,
 	status:        Status,
 }
 
@@ -165,40 +163,6 @@ selected_route :: proc(ed: ^Editor) -> ^Venue_Route {
 		return nil
 	}
 	return &ed.doc.routes[ed.route_sel]
-}
-
-// Point the stage list at `i`, and refresh the name field from whatever is
-// there now. The field is the only editable copy of the name, so it has to
-// follow the selection or a rename lands on the wrong stage.
-select_route :: proc(ed: ^Editor, i: int) {
-	ed.route_sel = i
-	if r := selected_route(ed); r != nil {
-		set_buf(ed.route_name[:], r.name)
-	} else {
-		ed.route_name = {}
-	}
-}
-
-add_route :: proc(ed: ^Editor) {
-	append(&ed.doc.routes, Venue_Route{
-		id     = route_id_free(ed.doc.routes[:], context.allocator),
-		name   = strings.clone(fmt.tprintf("STAGE %d", len(ed.doc.routes) + 1)),
-		start  = {from = -1, to = -1},
-		finish = {from = -1, to = -1},
-	})
-	select_route(ed, len(ed.doc.routes) - 1)
-}
-
-// Ordered, so the stages keep the order the menu will show them in. The id is
-// not reused until route_id_free hands it out again.
-remove_route :: proc(ed: ^Editor, i: int) {
-	if i < 0 || i >= len(ed.doc.routes) {
-		return
-	}
-	delete(ed.doc.routes[i].id)
-	delete(ed.doc.routes[i].name)
-	ordered_remove(&ed.doc.routes, i)
-	select_route(ed, min(i, len(ed.doc.routes) - 1))
 }
 
 // The selected control point, or -1. Validates the index: an edit or a load can
@@ -258,11 +222,8 @@ terrain_brush_snapshot :: proc(ed: ^Editor) {
 // a different stage without anything looking wrong. Returns false once the
 // stage is gone.
 stage_resync :: proc(ed: ^Editor) -> bool {
-	i := route_index(ed.doc.routes[:], ed.stage_id)
-	if i != ed.route_sel {
-		select_route(ed, i)
-	}
-	return i >= 0
+	ed.route_sel = route_index(ed.doc.routes[:], ed.stage_id)
+	return ed.route_sel >= 0
 }
 
 stage_cache_clear :: proc(ed: ^Editor) {
