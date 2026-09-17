@@ -770,13 +770,19 @@ main :: proc() {
 		ui.gizmo_set_orthographic(false)
 		ui.gizmo_set_rect(0, 0, f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight()))
 
-		gizmo_used := false
+		// ImGuizmo answers gizmo_is_over out of the state its last manipulate call
+		// left behind, so with nothing selected it keeps reporting a hover over the
+		// gizmo that used to be there — right on top of the handle just deselected,
+		// which would then refuse every click that tries to select it again.
+		gizmo_used, gizmo_shown := false, false
 		if pi := selected_point(&ed); pi >= 0 && !ed.stage_mode {
+			gizmo_shown = true
 			gizmo_used = gizmo_manipulate(&ed.spline.points[pi], cam3d, ed.gizmo_mode)
 			if gizmo_used {
 				mark_dirty(&ed) // dragging moves a point, so the mesh is stale
 			}
 		} else if sel_node >= 0 {
+			gizmo_shown = true
 			mouse := rl.GetMousePosition()
 			left_down := rl.IsMouseButtonDown(.LEFT)
 			right_down := rl.IsMouseButtonDown(.RIGHT)
@@ -850,7 +856,7 @@ main :: proc() {
 			}
 		}
 		ed.gizmo_active = gizmo_used
-		ed.gizmo_hovered = ui.gizmo_is_over()
+		ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
 
 		draw_menubar(&ed)
 		draw_inspector(&ed)
