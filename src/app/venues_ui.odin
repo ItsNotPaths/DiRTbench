@@ -26,6 +26,11 @@ DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}
 MINE_COL :: ui.Im_Vec4{0.58, 0.82, 0.62, 1.0}
 
+Venue_Editor_Process :: struct {
+	venue_id: string,
+	process:  os.Process,
+}
+
 // What the screen is doing. The new-venue form is modal in spirit: while it is
 // up, the list is still drawn but nothing else is actionable.
 Venues_Screen :: struct {
@@ -38,6 +43,7 @@ Venues_Screen :: struct {
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
 	delete_ready: string, // second click confirms project deletion
+	editors:      [dynamic]Venue_Editor_Process,
 }
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
@@ -50,6 +56,10 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	delete(ps.error)
 	delete(ps.deploy_ready)
 	delete(ps.delete_ready)
+	for editor in ps.editors {
+		delete(editor.venue_id)
+	}
+	delete(ps.editors)
 	ps^ = {}
 }
 
@@ -79,8 +89,10 @@ draw_venues_screen :: proc(ed: ^Editor) {
 	vs := &ed.install
 
 	ui.igSetNextWindowPos({0, 22}, .Always, {0, 0})
-	ui.igSetNextWindowSize({520, 0}, .FirstUseEver)
-	if !ui.igBegin("Install_Scan", nil, ui.IM_WINDOW_NONE) {
+	ui.igSetNextWindowSize({f32(rl.GetScreenWidth()), f32(rl.GetScreenHeight() - 22)}, .Always)
+	flags := ui.IM_WINDOW_NO_TITLE_BAR | ui.IM_WINDOW_NO_RESIZE |
+	         ui.IM_WINDOW_NO_MOVE | ui.IM_WINDOW_NO_COLLAPSE
+	if !ui.igBegin("Project manager", nil, flags) {
 		ui.igEnd()
 		return
 	}
@@ -217,9 +229,12 @@ draw_venue_row :: proc(ed: ^Editor, p: ^Venue) {
 		deployed ? "deployed" : "not deployed",
 	)
 
-	if ui.im_button(fmt.ctprintf("Edit road network###open_%s", p.id)) {
-		open_venue(ed, p)
+	active := venue_editor_running(ps, p.id)
+	ui.igBeginDisabled(active)
+	if ui.im_button(fmt.ctprintf("%s###open_%s", active ? "Editor open" : "Edit road network", p.id)) {
+		launch_venue_editor(ed, p.id)
 	}
+	ui.igEndDisabled()
 	ui.im_same_line()
 	draw_venue_deployment(ed, p, deployed)
 	ui.im_same_line()
@@ -355,7 +370,7 @@ buf_text :: proc(buf: []u8) -> string {
 
 // --- opening -----------------------------------------------------------------
 
-open_venue :: proc(ed: ^Editor, p: ^Venue) {
+open_venue_editor :: proc(ed: ^Editor, p: ^Venue) -> bool {
 	path := venue_road_path(p.id)
 	migrating := false
 	// One-time compatibility bridge for projects made before venues owned a
@@ -366,19 +381,19 @@ open_venue :: proc(ed: ^Editor, p: ^Venue) {
 	}
 	if msg, ok := load_stage_from(&ed.spline, path, &ed.veg, &ed.timing); !ok {
 		set_status(ed, msg, false)
-		return
+		return false
 	}
 	ed.start, ed.finish = venue_markers(p^)
 	ed.stage_mode = false
 	if migrating {
 		if msg, ok := save_stage_to(ed.spline, venue_road_path(p.id), ed.veg, ed.timing); !ok {
 			set_status(ed, fmt.tprintf("opened old road but could not migrate it: %s", msg), false)
-			return
+			return false
 		}
 		p.version = VENUE_VERSION
 		if msg, ok := venue_save(p^); !ok {
 			set_status(ed, fmt.tprintf("migrated road but could not update venue: %s", msg), false)
-			return
+			return false
 		}
 	}
 	delete(ed.open_venue)
@@ -386,9 +401,52 @@ open_venue :: proc(ed: ^Editor, p: ^Venue) {
 	ed.open_venue = strings.clone(p.id)
 	ed.open_stage = ""
 	set_stage_name(ed, p.id)
-	ed.mode = .Editor
 	mark_dirty(ed)
 	set_status(ed, fmt.tprintf("editing %s road network", p.id), true)
+	return true
+}
+
+venue_editor_running :: proc(ps: ^Venues_Screen, venue_id: string) -> bool {
+	for editor in ps.editors {
+		if editor.venue_id == venue_id {
+			return true
+		}
+	}
+	return false
+}
+
+// Argument slices avoid platform-specific shell quoting.
+launch_venue_editor :: proc(ed: ^Editor, venue_id: string) {
+	if venue_editor_running(&ed.screen, venue_id) {
+		set_status(ed, fmt.tprintf("%s already has an editor open", venue_id), false)
+		return
+	}
+	exe, err := os.get_executable_path(context.temp_allocator)
+	if err != nil {
+		set_status(ed, fmt.tprintf("could not locate dirtbench: %v", err), false)
+		return
+	}
+	command := []string{exe, "--editor", venue_id}
+	process, start_err := os.process_start({command = command})
+	if start_err != nil {
+		set_status(ed, fmt.tprintf("could not launch editor: %v", start_err), false)
+		return
+	}
+	append(
+		&ed.screen.editors,
+		Venue_Editor_Process{venue_id = strings.clone(venue_id), process = process},
+	)
+	set_status(ed, fmt.tprintf("opened %s in a new editor window", venue_id), true)
+}
+
+venues_editors_reap :: proc(ps: ^Venues_Screen) {
+	for i := len(ps.editors) - 1; i >= 0; i -= 1 {
+		state, err := os.process_wait(ps.editors[i].process, timeout = 0)
+		if err == nil && state.exited {
+			delete(ps.editors[i].venue_id)
+			unordered_remove(&ps.editors, i)
+		}
+	}
 }
 
 // One frame of the venue screen. Deliberately not the editor's frame with

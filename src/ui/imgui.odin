@@ -43,6 +43,10 @@ Im_Cond :: enum c.int {
 
 Im_Window_Flags :: distinct c.int
 IM_WINDOW_NONE :: Im_Window_Flags(0)
+IM_WINDOW_NO_TITLE_BAR :: Im_Window_Flags(1 << 0)
+IM_WINDOW_NO_RESIZE :: Im_Window_Flags(1 << 1)
+IM_WINDOW_NO_MOVE :: Im_Window_Flags(1 << 2)
+IM_WINDOW_NO_COLLAPSE :: Im_Window_Flags(1 << 5)
 IM_WINDOW_ALWAYS_AUTO_RESIZE :: Im_Window_Flags(1 << 6)
 
 Im_Slider_Flags :: distinct c.int

@@ -9,14 +9,15 @@ package main
 // Right-click inserts a point into the road under the cursor, or appends one on
 // open ground. Panels are Dear ImGui, through ui/imgui.odin.
 //
-// dirtbench boots into the venue screen (venues_ui.odin), not here: a road
-// with no venue around it is what produced every runtime failure so far, so
-// picking the world comes before drawing in it. A finished road goes to an
-// export target (export.odin), and the editor does not know which game that is.
+// dirtbench boots into the project manager (venues_ui.odin). It launches this
+// editor as a separate `--editor <venue>` process: picking the world comes
+// before drawing a road in it. A finished road goes to an export target
+// (export.odin), and the editor does not know which game that is.
 
 import "core:c"
 import "core:fmt"
 import "core:math"
+import "core:os"
 import "../geo"
 import "../ui"
 import rl "vendor:raylib"
@@ -24,6 +25,8 @@ import "vendor:raylib/rlgl"
 
 WINDOW_W :: 1280
 WINDOW_H :: 800
+PROJECT_MANAGER_W :: 560
+PROJECT_MANAGER_H :: 720
 
 GROUND_Y :: 0.0
 
@@ -75,13 +78,6 @@ Selection :: struct {
 	side: int,
 }
 
-// What the window is showing. Boot is Venues; the editor is what you get
-// after opening a route inside a venue.
-App_Mode :: enum {
-	Venues,
-	Editor,
-}
-
 // How long a save/load result stays on screen, seconds.
 STATUS_LINGER :: 8.0
 
@@ -91,7 +87,6 @@ TOPO_MIN :: 2
 TOPO_MAX :: 48
 
 Editor :: struct {
-	mode:          App_Mode,
 	screen:        Venues_Screen,
 	// Which venue stage the editor has open, "" when it is a loose stage out of
 	// maps/. Saving writes back to the venue.
@@ -528,8 +523,20 @@ main :: proc() {
 	if run_cli() {
 		return
 	}
+	editor_venue := ""
+	if len(os.args) > 1 && os.args[1] == "--editor" {
+		if len(os.args) != 3 {
+			fmt.println("usage: dirtbench --editor <venue-id>")
+			os.exit(2)
+		}
+		editor_venue = os.args[2]
+	}
 	rl.SetConfigFlags({.MSAA_4X_HINT, .WINDOW_RESIZABLE})
-	rl.InitWindow(WINDOW_W, WINDOW_H, "dirtbench")
+	if editor_venue == "" {
+		rl.InitWindow(PROJECT_MANAGER_W, PROJECT_MANAGER_H, "dirtbench — project manager")
+	} else {
+		rl.InitWindow(WINDOW_W, WINDOW_H, "dirtbench — editor")
+	}
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 	// Must come after InitWindow: rlgl installs its defaults there.
@@ -537,6 +544,23 @@ main :: proc() {
 
 	ui.rlImGuiSetup(true) // dark theme
 	defer ui.rlImGuiShutdown()
+
+	// The default process is only the project manager. In particular, it does
+	// not initialize audio, seed an editor document, or allocate GPU geometry.
+	// Editors are separate `--editor <venue>` processes launched by it.
+	if editor_venue == "" {
+		ed := Editor{}
+		install_scan_init(&ed.install)
+		defer install_scan_delete(&ed.install)
+		venues_screen_init(&ed.screen)
+		defer venues_screen_delete(&ed.screen)
+		for !rl.WindowShouldClose() && !ed.quit {
+			venues_editors_reap(&ed.screen)
+			draw_venues_frame(&ed)
+			free_all(context.temp_allocator)
+		}
+		return
+	}
 
 	// Audio must come up before LoadSound. The pace-note clips are decoded here.
 	rl.InitAudioDevice()
@@ -564,13 +588,22 @@ main :: proc() {
 
 	install_scan_init(&ed.install)
 	defer install_scan_delete(&ed.install)
-	venues_screen_init(&ed.screen)
-	defer venues_screen_delete(&ed.screen)
 	defer delete(ed.open_venue)
 	defer delete(ed.open_stage)
 	set_stage_name(&ed, "untitled")
 	seed_spline(&ed.spline)
 	defer delete(ed.spline.points)
+	p, load_msg, loaded := venue_load(editor_venue)
+	if !loaded {
+		fmt.printfln("could not open venue %q: %s", editor_venue, load_msg)
+		return
+	}
+	defer venue_free(p)
+	if !open_venue_editor(&ed, &p) {
+		status, _ := status_text(&ed)
+		fmt.printfln("could not open venue %q: %s", editor_venue, status)
+		return
+	}
 
 	ed.material = rl.LoadMaterialDefault()
 	defer rl.UnloadMaterial(ed.material)
@@ -583,14 +616,6 @@ main :: proc() {
 	mark_dirty(&ed)
 
 	for !rl.WindowShouldClose() && !ed.quit {
-		// The venue screen is its own frame: no viewport, no camera, no
-		// geometry rebuild. Opening a route switches the mode and the next
-		// frame is the editor's.
-		if ed.mode == .Venues {
-			draw_venues_frame(&ed)
-			continue
-		}
-
 		// ImGui gets first refusal on input: a click on a panel, or a keypress
 		// into a text field, must never also reach the viewport behind it.
 		ui_mouse := ui.imgui_want_capture_mouse()

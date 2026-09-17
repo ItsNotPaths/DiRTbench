@@ -19,8 +19,10 @@ value runs to the end of the line:
 install_dir = /path/to/DiRT 3 Complete Edition
 ```
 
-dirtbench boots into the **venue screen**, which lists what the game holds and
-what you have made. Stock venues are read-only and nothing here writes into one.
+dirtbench boots into a small **project manager** window, which lists what the
+game holds and what you have made. Opening a venue launches its editor in a
+separate process (`dirtbench --editor <venue-id>`). Stock venues are read-only
+and nothing here writes into one.
 
 What the game holds comes from `database/database.bin`, not from the directory
 listing: the game finds a venue through its `track_model` row, so a directory

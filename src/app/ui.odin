@@ -105,9 +105,8 @@ draw_menubar :: proc(ed: ^Editor) {
 	defer ui.igEndMainMenuBar()
 
 	if ui.igBeginMenu("File", true) {
-		if ed.open_venue != "" && ui.igMenuItem_Bool("Back to project manager", nil, false, true) {
-			ed.mode = .Venues
-			venues_screen_reload(&ed.screen)
+		if ed.open_venue != "" && ui.igMenuItem_Bool("Close editor", nil, false, true) {
+			ed.quit = true
 		}
 		if ed.open_venue != "" {
 			label: cstring = ed.stage_mode ? "Edit venue geometry" : "Edit stage start/finish"
@@ -163,10 +162,6 @@ draw_menubar :: proc(ed: ^Editor) {
 		ui.igEndMenu()
 	}
 	if ui.igBeginMenu("Dirt 3", true) {
-		if ui.igMenuItem_Bool("Project manager", nil, false, true) {
-			ed.mode = .Venues
-			venues_screen_reload(&ed.screen)
-		}
 		if ui.igMenuItem_Bool("Rescan install", nil, false, true) {
 			install_scan_rescan(&ed.install)
 			set_status(ed, install_scan_status_text(&ed.install), ed.install.found)
