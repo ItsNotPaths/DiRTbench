@@ -165,14 +165,10 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 	testing.expect_value(t, buried, 0)
 }
 
-// Trees keep off every leg of the route, sculpted terrain or not. A candidate is
-// cast outward from one leg's verge, which on a branched route aims it straight at
-// the carriageway of another — so the road corridor has to reject it whether or
-// not the terrain is switched on.
-@(test)
-vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer delete(sp.points)
+// A road that forks and doubles back alongside itself: the shape a bug that only
+// shows up between two legs needs.
+@(private = "file")
+branched_road :: proc() -> (sp: geo.Spline) {
 	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},
@@ -187,6 +183,104 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 		}
 		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
+	return
+}
+
+// A straight road of the same width: the control. It cannot overlap itself, so
+// whatever it scatters is what an honest density looks like.
+@(private = "file")
+straight_road :: proc() -> (sp: geo.Spline) {
+	for z in ([]f32{0, 80, 160, 240, 320}) {
+		geo.spline_push(
+			&sp,
+			geo.make_point({0, 0, z}, gfx.Quaternion(1), geo.DEFAULT_WIDTH, parent = len(sp.points) - 1),
+		)
+	}
+	return
+}
+
+// Trees per 8 m square of ground, at the busiest square.
+@(private = "file")
+thickest_patch :: proc(trees: []geo.Veg_Instance) -> (worst: int) {
+	cells := make(map[[2]i32]int, 0, context.temp_allocator)
+	defer delete(cells)
+	for it in trees {
+		cell := [2]i32{i32(math.floor(it.pos.x / 8)), i32(math.floor(it.pos.z / 8))}
+		cells[cell] += 1
+		worst = max(worst, cells[cell])
+	}
+	return
+}
+
+// Rows are spaced in metres of road, and on a branched route the ribbon is a set
+// of disjoint edges in one array: the step from one edge's last sample to the
+// next edge's first is a jump across the map, not road. Spacing rows along the
+// arc table walks straight through that jump and lands every row of it on the
+// junction — a slab of trees across the road, which is the bug this holds shut.
+@(test)
+vegetation_rows_stay_on_the_road :: proc(t: ^testing.T) {
+	sp := branched_road()
+	defer delete(sp.points)
+	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
+	defer delete(ribbon)
+	arc := geo.ribbon_arc(ribbon, context.allocator)
+	defer delete(arc)
+
+	// Coarser than the tessellation (~5.7 m here), so two rows may share a sample
+	// and no honest spacing can put a third on it.
+	SPACING :: f32(10)
+	rng := geo.rng_init(7)
+	rows := geo.veg_rows(ribbon, arc, SPACING, &rng, context.allocator)
+	defer delete(rows)
+
+	per_sample := make(map[int]int, 0, context.temp_allocator)
+	defer delete(per_sample)
+	worst, worst_at := 0, 0
+	for i in rows {
+		per_sample[i] += 1
+		if per_sample[i] > worst {
+			worst, worst_at = per_sample[i], i
+		}
+	}
+	testing.expectf(t, worst <= 2,
+		"%d of %d rows stand on ribbon sample %d — they were spaced across an edge jump",
+		worst, len(rows), worst_at)
+}
+
+// And the scatter that comes out of those rows, against the straight control. The
+// legs meeting at a junction cover the same ground, so a branch is where two
+// stands can end up planted in one place.
+@(test)
+vegetation_does_not_thicken_at_a_branch :: proc(t: ^testing.T) {
+	veg := geo.Veg_Params{enabled = true, density = 1, seed = 7}
+	patch :: proc(sp: geo.Spline, veg: geo.Veg_Params) -> int {
+		ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
+		defer delete(ribbon)
+		terrain := geo.TERRAIN_DEFAULTS
+		defer geo.terrain_delete(&terrain)
+		trees := geo.veg_generate(ribbon, &terrain, veg, geo.SAMPLES_PER_SEG, 0)
+		defer delete(trees)
+		return thickest_patch(trees)
+	}
+
+	forked, plain := branched_road(), straight_road()
+	defer delete(forked.points)
+	defer delete(plain.points)
+
+	branch_worst, straight_worst := patch(forked, veg), patch(plain, veg)
+	testing.expectf(t, branch_worst <= straight_worst + 2,
+		"a branch packs %d trees into 8 m of ground where a straight road packs %d",
+		branch_worst, straight_worst)
+}
+
+// Trees keep off every leg of the route, sculpted terrain or not. A candidate is
+// cast outward from one leg's verge, which on a branched route aims it straight at
+// the carriageway of another — so the road corridor has to reject it whether or
+// not the terrain is switched on.
+@(test)
+vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
+	sp := branched_road()
+	defer delete(sp.points)
 
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)

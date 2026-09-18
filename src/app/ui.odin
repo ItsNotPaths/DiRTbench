@@ -615,16 +615,9 @@ draw_veg_section :: proc(ed: ^Editor) {
 		return
 	}
 
-	// Preset: which stock species pool the scatter draws from.
-	for p in geo.Veg_Preset {
-		if ui.igRadioButton_Bool(geo.VEG_PRESET_NAMES[p], v.preset == p) {
-			v.preset = p
-			mark_veg_dirty(ed.doc)
-		}
-		if p != max(geo.Veg_Preset) {
-			ui.im_same_line()
-		}
-	}
+	// Which species, and why it is not a choice: they belong to the base venue's
+	// art, and a venue derives its art wholesale.
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s (from the base venue)", geo.VEG_PRESET_NAMES[v.preset]))
 
 	if ui.igSliderFloat("density", &v.density, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
 		mark_veg_dirty(ed.doc)

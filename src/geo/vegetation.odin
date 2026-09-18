@@ -9,7 +9,12 @@ package geo
 // space, one candidate per cell, seeded so a given stage scatters the same way
 // every time. Density sets the grid spacing; `road_bias` thins the far edge only
 // slightly, so the verge reads a touch busier than the tree line without the road
-// ending up in a tunnel of trunks.
+// ending up in a tunnel of trunks. Rows are measured run by run and no two trees
+// share a cell, because a road graph is not one road: see veg_rows and VEG_GAP.
+//
+// Which species is not a knob. A venue derives its art from a base venue, and the
+// trees come with it — firs in Finland, thorn trees in Kenya — so the preset is
+// read off the base (veg_preset_for_base) and the stage file does not store it.
 //
 // Ground height comes from the same terrain field the mesh is built from
 // (terrain.odin), so a tree sits on the sculpted surface, not on a flat plane. If
@@ -18,20 +23,41 @@ package geo
 
 import "core:c"
 import "core:math"
+import "core:strings"
 import "../gfx"
 
-// The stock species families offered as presets. The enum value is stable — it is
-// persisted in the stage file — so only ever append.
+// The species families. Not a choice: a venue derives its art from a base venue,
+// and the trees are part of that art, so the preset is read off the base (see
+// veg_preset_for_base). The name is shown, never picked.
 Veg_Preset :: enum i32 {
-	Firs  = 0, // conifers, the default rally backdrop
+	Firs  = 0, // conifers, the northern forest
 	Oaks,      // leafy broadleaf
 	Snowy,     // frosted firs and bare trees, for a winter stage
+	Acacia,    // flat-topped thorn trees and scrub, for the savannah
 }
 
 VEG_PRESET_NAMES := [Veg_Preset]cstring {
-	.Firs  = "Firs",
-	.Oaks  = "Oaks",
-	.Snowy = "Snowy",
+	.Firs   = "Firs",
+	.Oaks   = "Oaks",
+	.Snowy  = "Snowy",
+	.Acacia = "Acacia",
+}
+
+// Which family a base venue's art calls for. `base` is the "<location>/<venue>"
+// a venue derives from (venue.odin); an unknown one falls back to firs, which
+// suits any northern forest.
+veg_preset_for_base :: proc(base: string) -> Veg_Preset {
+	venue := base
+	if slash := strings.last_index_byte(base, '/'); slash >= 0 {
+		venue = base[slash + 1:]
+	}
+	switch {
+	case strings.has_prefix(venue, "kenya"):       return .Acacia
+	case strings.has_prefix(venue, "norway"):      return .Snowy
+	case strings.has_prefix(venue, "monte_carlo"): return .Snowy
+	case strings.has_prefix(venue, "michigan"):    return .Oaks
+	}
+	return .Firs
 }
 
 // What a scatter prop *is*, independent of any game. An export target maps each
@@ -49,6 +75,9 @@ Prop_Kind :: enum u8 {
 	Broadleaf_Medium,
 	Broadleaf_Bare_Medium,
 	Broadleaf_Bare_Small,
+	Acacia_Big,
+	Acacia_Medium,
+	Thorn_Bush,
 }
 
 // How a species reads as a viewport placeholder. The game item is the real thing;
@@ -78,9 +107,10 @@ Veg_Species :: struct {
 // Alpha is baked in; the trunk has its own colour in veg_draw.
 veg_canopy_col :: proc(p: Veg_Preset) -> gfx.Color {
 	switch p {
-	case .Firs:  return {46, 104, 58, 150}
-	case .Oaks:  return {84, 148, 66, 150}
-	case .Snowy: return {188, 208, 198, 160}
+	case .Firs:   return {46, 104, 58, 150}
+	case .Oaks:   return {84, 148, 66, 150}
+	case .Snowy:  return {188, 208, 198, 160}
+	case .Acacia: return {118, 132, 82, 150}
 	}
 	return {84, 148, 66, 150}
 }
@@ -103,16 +133,27 @@ veg_pool :: proc(p: Veg_Preset) -> []Veg_Species {
 		{.Broadleaf_Bare_Medium, 0.7, 0.9, 1.2, .Broadleaf, 0, 2.6, 3.2},
 		{.Broadleaf_Bare_Small, 0.5, 0.9, 1.1, .Broadleaf, 0, 2.1, 2.6},
 	}
+	// Flat-topped and lifted: a wide, shallow canopy on a long bare trunk, with
+	// scrub between the trees. The shapes are the same two the rest of the pools
+	// use; only the proportions say savannah.
+	@(static) acacia := []Veg_Species {
+		{.Acacia_Big, 0.8, 0.9, 1.15, .Broadleaf, 0, 5.0, 6.0},
+		{.Acacia_Medium, 1.0, 0.9, 1.2, .Broadleaf, 0, 3.8, 4.5},
+		{.Thorn_Bush, 1.6, 0.8, 1.3, .Bush, 0, 1.4, 0},
+	}
 	switch p {
-	case .Firs:  return firs
-	case .Oaks:  return oaks
-	case .Snowy: return snowy
+	case .Firs:   return firs
+	case .Oaks:   return oaks
+	case .Snowy:  return snowy
+	case .Acacia: return acacia
 	}
 	return firs
 }
 
 // The knobs, persisted per stage. `road_bias` is intentionally gentle by default:
-// the brief is "prioritise near the road, only slightly".
+// the brief is "prioritise near the road, only slightly". `preset` is the one
+// field nobody types: it comes off the venue's base and is set when the venue is
+// opened, so it is not saved with the rest.
 Veg_Params :: struct {
 	enabled:   bool,
 	preset:    Veg_Preset,
@@ -144,6 +185,11 @@ VEG_CLEAR :: f32(2)
 VEG_REACH_NO_TERRAIN :: f32(60)
 // A hard cap so a huge stage at max density cannot emit an unbounded item list.
 VEG_MAX :: 20000
+// Closest two trees may stand, as a fraction of the row spacing. Each edge of the
+// road graph scatters over its own verge, and the edges meeting at a junction
+// cover the same ground, so without this a branch grows two or three stands in
+// one place.
+VEG_GAP :: f32(0.6)
 
 // One placed tree, in world space. `kind`/`pos`/`yaw`/`scale` are what the export
 // needs; the rest is the pre-scaled viewport placeholder (veg_draw draws it) so
@@ -240,16 +286,64 @@ veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 
 // --- the scatter -------------------------------------------------------------
 
-// Nearest ribbon sample to an arc station, by linear scan of the cumulative arc.
+// One continuous edge of the ribbon, as an inclusive index span.
+//
+// A branched road is sampled edge by edge into one array (build_ribbon), and the
+// step from an edge's last sample to the next edge's first is a jump across the
+// map, not road. The arc table counts that jump as length, so a row placed by arc
+// station anywhere inside it lands on the junction: every one of them, side by
+// side, across the road. That is the blob. Rows are laid inside a run instead,
+// where every metre of arc is a metre of road.
+Ribbon_Run :: struct {
+	lo, hi: int,
+}
+
+ribbon_runs :: proc(ribbon: []Cross_Section, allocator := context.temp_allocator) -> []Ribbon_Run {
+	out := make([dynamic]Ribbon_Run, allocator)
+	for cs, i in ribbon {
+		if i > 0 && !cs.break_before {
+			out[len(out) - 1].hi = i
+			continue
+		}
+		append(&out, Ribbon_Run{i, i})
+	}
+	return out[:]
+}
+
+// Nearest ribbon sample to an arc station, by linear scan inside one run.
 // `arc` is monotonic, so the first sample whose arc passes the target brackets it.
-veg_sample_at_arc :: proc(arc: []f32, target: f32) -> int {
-	for i in 1 ..< len(arc) {
+veg_sample_at_arc :: proc(arc: []f32, run: Ribbon_Run, target: f32) -> int {
+	for i in run.lo + 1 ..= run.hi {
 		if arc[i] >= target {
 			// Pick whichever of the bracketing pair is closer.
 			return target - arc[i - 1] < arc[i] - target ? i - 1 : i
 		}
 	}
-	return len(arc) - 1
+	return run.hi
+}
+
+// The ribbon sample every row of the scatter stands on: one row per `spacing`
+// metres of road, jittered inside its own cell so the rows do not stripe. Run by
+// run, so a row is never spaced across the jump between two edges.
+veg_rows :: proc(
+	ribbon: []Cross_Section,
+	arc: []f32,
+	spacing: f32,
+	rng: ^Rng,
+	allocator := context.temp_allocator,
+) -> []int {
+	out := make([dynamic]int, allocator)
+	for run in ribbon_runs(ribbon) {
+		if run.hi <= run.lo {
+			continue
+		}
+		lo, hi := arc[run.lo], arc[run.hi]
+		for r in 0 ..< max(int((hi - lo) / spacing), 1) {
+			s := lo + (f32(r) + 0.5 + rng_range(rng, -0.4, 0.4)) * spacing
+			append(&out, veg_sample_at_arc(arc, run, clamp(s, lo, hi)))
+		}
+	}
+	return out[:]
 }
 
 // Weighted pick from a pool. `pool` is never empty (veg_pool guarantees it).
@@ -307,14 +401,16 @@ veg_generate :: proc(
 	canopy := veg_canopy_col(veg.preset)
 	out := make([dynamic]Veg_Instance, allocator)
 
-	rows := max(int(total / spacing), 1)
-	for r in 0 ..< rows {
+	// One tree per cell of a coarse world grid, so two edges covering the same
+	// ground near a junction plant one stand between them rather than one each.
+	gap := max(spacing * VEG_GAP, 0.5)
+	taken := make(map[[2]i32]bool, 0, context.temp_allocator)
+	defer delete(taken)
+
+	for i in veg_rows(ribbon, arc, spacing, &rng) {
 		if len(out) >= VEG_MAX {
 			break
 		}
-		// Centre of the row's arc cell, jittered within it so rows do not stripe.
-		s := (f32(r) + 0.5 + rng_range(&rng, -0.4, 0.4)) * spacing
-		i := veg_sample_at_arc(arc, clamp(s, 0, total))
 		cs := ribbon[i]
 
 		// Flattened travel direction, for the along-road jitter.
@@ -355,6 +451,12 @@ veg_generate :: proc(
 				if !vf.heights {
 					y = seam.y // no terrain: ride the verge-seam height
 				}
+
+				cell := [2]i32{i32(math.floor(px / gap)), i32(math.floor(pz / gap))}
+				if cell in taken {
+					continue
+				}
+				taken[cell] = true
 
 				sp := veg_pick(&rng, pool)
 				sc := rng_range(&rng, sp.scale_min, sp.scale_max)

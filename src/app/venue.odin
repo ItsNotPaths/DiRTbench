@@ -543,6 +543,7 @@ venue_compile_route :: proc(
 		if load_msg, loaded := load_road(doc, venue_road_path(p.id)); !loaded {
 			return out, load_msg, false
 		}
+		doc.veg.preset = geo.veg_preset_for_base(p.base)
 		return geo.compile_stage(doc.spline, route.start, route.finish, route.pins[:], allocator)
 	}
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false

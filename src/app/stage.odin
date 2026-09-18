@@ -66,9 +66,11 @@ Stage_Point :: struct {
 // The stage-global vegetation block (v4). Absent in older files, where every field
 // unmarshals to zero — enabled=false, so an old stage simply carries no vegetation
 // until the user turns it on, at which point the defaults below fill in.
+// No species here: they belong to the venue's base art, and are read off it every
+// time the venue is opened (geo.veg_preset_for_base). A v4..v9 file that still
+// carries a `preset` key is ignored, not migrated.
 Stage_Veg :: struct {
 	enabled:   bool,
-	preset:    i32, // Veg_Preset ordinal
 	density:   f32,
 	road_bias: f32,
 	seed:      i32,
@@ -207,7 +209,6 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 		points  = pts,
 		veg     = {
 			enabled   = veg.enabled,
-			preset    = i32(veg.preset),
 			density   = veg.density,
 			road_bias = veg.road_bias,
 			seed      = i32(veg.seed),
@@ -346,18 +347,20 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 	}
 
 	{
+		// The species are the venue's, taken from its base art, so a load leaves
+		// them exactly as the venue set them. The file has no say in it.
+		preset := veg.preset
 		if stage.version < 4 {
 			veg^ = geo.VEG_DEFAULTS // predates the block; start it off, with sane knobs
 		} else {
-			preset := geo.Veg_Preset(clamp(stage.veg.preset, i32(min(geo.Veg_Preset)), i32(max(geo.Veg_Preset))))
 			veg^ = geo.Veg_Params {
 				enabled   = stage.veg.enabled,
-				preset    = preset,
 				density   = stage.veg.density,
 				road_bias = stage.veg.road_bias,
 				seed      = c.int(stage.veg.seed),
 			}
 		}
+		veg.preset = preset
 	}
 	{
 		if stage.version<5 { timing^=TIMING_DEFAULTS } else {
