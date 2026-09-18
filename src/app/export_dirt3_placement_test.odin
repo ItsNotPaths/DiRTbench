@@ -173,3 +173,17 @@ prop_instances_number_densely_and_carry_yaw_and_scale :: proc(t: ^testing.T) {
 	testing.expect(t, abs(tree.basis[0][2] - -2) < 1e-5 && abs(tree.basis[2][0] - 2) < 1e-5)
 	testing.expect_value(t, tree.basis[1][1], f32(2))
 }
+
+// Camera and cutscene idents are built from this, and the global cutscene
+// files substitute it, so a wrong number aims a route at another's cameras.
+@(test)
+route_number_reads_the_id_and_falls_back_to_zero :: proc(t: ^testing.T) {
+	testing.expect_value(t, route_number("route_0"), 0)
+	testing.expect_value(t, route_number("route_3"), 3)
+	testing.expect_value(t, route_number("route_12"), 12)
+	// A loose road out of maps/ has no stage id.
+	testing.expect_value(t, route_number(""), 0)
+	testing.expect_value(t, route_number("demo-rally"), 0)
+	testing.expect_value(t, route_number("route_x"), 0)
+	testing.expect_value(t, route_number("route_-1"), 0)
+}

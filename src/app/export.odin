@@ -22,6 +22,7 @@ package main
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:strconv"
 import "core:strings"
 import d3 "../d3"
 import "../geo"
@@ -30,6 +31,49 @@ import "../geo"
 // precision at range, small enough that the step where the route's coverage
 // ends is not a cliff.
 D3_VENUE_LOD_DROP :: f32(2)
+
+// A ground skirt around the venue LOD, because open sky where the ground
+// should be blows the auto-exposure out and the screen goes black. Stock gives
+// about 2 km in every direction — Finland's tracksplit spans 4600 by 2300 m
+// for a road far smaller — so the skirt reaches well past the road network.
+//
+// Venue LOD only, so it is drawn and not driveable, like the rest of that
+// layer. Deliberately coarse: it is horizon filler, and at this range the cell
+// size costs nothing.
+D3_VENUE_SKIRT_MARGIN :: f32(2000)
+D3_VENUE_SKIRT_CELL :: f32(200)
+// Gentle relief, so a 4 km plane does not read as a table top.
+D3_VENUE_SKIRT_RELIEF :: f32(6)
+
+// A tiled ground plane covering `lo`..`hi`, sunk to `y`, with deterministic
+// per-corner relief so neighbouring cells share their edge heights.
+venue_skirt :: proc(lo, hi: [2]f32, y: f32, allocator := context.temp_allocator) -> []d3.Collision_Triangle {
+	nx := max(1, int((hi[0]-lo[0])/D3_VENUE_SKIRT_CELL))
+	nz := max(1, int((hi[1]-lo[1])/D3_VENUE_SKIRT_CELL))
+	height :: proc(ix, iz: int, y: f32) -> f32 {
+		h := u32(ix)*73856093 ~ u32(iz)*19349663
+		h ~= h >> 13
+		h *= 1274126177
+		h ~= h >> 16
+		return y + (f32(h & 0xffff)/65535 - 0.5)*D3_VENUE_SKIRT_RELIEF
+	}
+	out := make([dynamic]d3.Collision_Triangle, 0, nx*nz*2, allocator)
+	for iz in 0 ..< nz {
+		z0 := lo[1] + (hi[1]-lo[1])*f32(iz)/f32(nz)
+		z1 := lo[1] + (hi[1]-lo[1])*f32(iz+1)/f32(nz)
+		for ix in 0 ..< nx {
+			x0 := lo[0] + (hi[0]-lo[0])*f32(ix)/f32(nx)
+			x1 := lo[0] + (hi[0]-lo[0])*f32(ix+1)/f32(nx)
+			a := [3]f32{x0, height(ix, iz, y), z0}
+			b := [3]f32{x1, height(ix+1, iz, y), z0}
+			c := [3]f32{x1, height(ix+1, iz+1, y), z1}
+			d := [3]f32{x0, height(ix, iz+1, y), z1}
+			append(&out, d3.Collision_Triangle{Points = {a, c, b}, Material = .Terrain})
+			append(&out, d3.Collision_Triangle{Points = {a, d, c}, Material = .Terrain})
+		}
+	}
+	return out[:]
+}
 
 // The base venue's own `tracksplit.pssg`, whose art the splice keeps. A
 // deployed venue starts as a hardlink to it, and `d3_backup_once` leaves a
@@ -64,12 +108,31 @@ export_dirt3_tracksplit :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	// stock's per-cell mask draws only one of them. A single all-visible cell
 	// cannot choose, so the two would z-fight; sinking the LOD lets the route
 	// win everywhere it reaches. Remove this once the VIS has real cells.
-	collision := collision_from_mesh(job.venue.mesh, job.venue.order, context.temp_allocator)
-	for &triangle in collision {
+	network := collision_from_mesh(job.venue.mesh, job.venue.order, context.temp_allocator)
+	for &triangle in network {
 		for &point in triangle.Points {
 			point[1] -= D3_VENUE_LOD_DROP
 		}
 	}
+
+	lo, hi := [2]f32{max(f32), max(f32)}, [2]f32{min(f32), min(f32)}
+	floor := max(f32)
+	for triangle in network {
+		for point in triangle.Points {
+			lo[0] = min(lo[0], point[0]); hi[0] = max(hi[0], point[0])
+			lo[1] = min(lo[1], point[2]); hi[1] = max(hi[1], point[2])
+			floor = min(floor, point[1])
+		}
+	}
+	skirt := venue_skirt(
+		{lo[0]-D3_VENUE_SKIRT_MARGIN, lo[1]-D3_VENUE_SKIRT_MARGIN},
+		{hi[0]+D3_VENUE_SKIRT_MARGIN, hi[1]+D3_VENUE_SKIRT_MARGIN},
+		floor-D3_VENUE_LOD_DROP,
+	)
+	collision := make([]d3.Collision_Triangle, len(network)+len(skirt), context.temp_allocator)
+	copy(collision, network)
+	copy(collision[len(network):], skirt)
+
 	return d3.Export_Venue_Geometry(&d3.Export_Job{
 		Out       = job.venue_dir,
 		Backup    = job.installing,
@@ -130,6 +193,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		Name = job.name, Out = job.out, Backup = job.installing,
 		Route = route, Markers = markers, Collision = collision,
 		Profile = job.profile, Venue_Dir = job.venue_dir,
+		Route_Index = job.route_index,
 	}
 	// Before the route files: track.vis censuses trees.bin for its tag-3
 	// objects, so the trees have to be the ones this stage actually has.
@@ -188,6 +252,9 @@ Export_Job :: struct {
 	// so a failure to resolve one is carried rather than raised.
 	profile:     ^d3.Venue_Profile,
 	profile_msg: string,
+	// Which route of its venue this is, parsed from a `route_n` id. Camera and
+	// cutscene idents are built from it.
+	route_index:     int,
 	// See export_venue_dirs.
 	venue_dir:       string,
 	template_dir:    string,
@@ -484,6 +551,17 @@ export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (ve
 	return
 }
 
+// The `n` of a `route_n` id. Zero for a loose road out of maps/, which has no
+// stage id and lands in whatever install route was selected.
+route_number :: proc(stage_id: string) -> int {
+	digits := strings.trim_prefix(stage_id, "route_")
+	if digits == stage_id {
+		return 0
+	}
+	n, parsed := strconv.parse_int(digits, 10)
+	return parsed && n >= 0 ? n : 0
+}
+
 // Build the job and hand it to one target. Returns a status-line message.
 //
 // `stage` is the one chain being exported, compiled out of the venue's road
@@ -506,6 +584,7 @@ export_stage :: proc(
 		return dmsg, false
 	}
 	job.out, job.installing = dest, installing
+	job.route_index = route_number(stage_id)
 	job.venue_dir, job.template_dir, job.donor_route_dir = export_venue_dirs(doc, dest, installing)
 	had_orig := false
 	if installing {

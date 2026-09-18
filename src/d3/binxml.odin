@@ -62,6 +62,14 @@ bxml_node :: proc(name: string, attrs: []Bxml_Attr = nil, children: []^Bxml_Node
 	return n
 }
 
+// Attributes as a call rather than a slice literal, so a node reads on one
+// line. `bxml_node` copies, so the returned slice is the caller's to drop.
+bxml_attrs :: proc(pairs: ..Bxml_Attr, allocator := context.temp_allocator) -> []Bxml_Attr {
+	out := make([]Bxml_Attr, len(pairs), allocator)
+	copy(out, pairs)
+	return out
+}
+
 bxml_text :: proc(name, text: string, attrs: []Bxml_Attr = nil, allocator := context.temp_allocator) -> ^Bxml_Node {
 	n := bxml_node(name, attrs, nil, allocator)
 	n.text, n.content = text, .Text

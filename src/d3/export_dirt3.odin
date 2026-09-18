@@ -226,17 +226,22 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !grid_ok {
 		return grid_msg, false
 	}
+	camera_msg, camera_ok := d3_write_replay_cameras(job)
+	if !camera_ok {
+		return camera_msg, false
+	}
 	omit_msg, omit_ok := d3_omit_stale_route_files(job)
 	if !omit_ok {
 		return omit_msg, false
 	}
 	return fmt.tprintf(
-		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; %s",
+		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; cameras: %s; %s",
 		track_msg,
 		collision_msg,
 		visual_msg,
 		vis_msg,
 		grid_msg,
+		camera_msg,
 		omit_msg,
 	), true
 }

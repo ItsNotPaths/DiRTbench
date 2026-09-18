@@ -53,6 +53,10 @@ Export_Job :: struct {
 	// route. `track.vis` censuses that file together with the route's own
 	// routesplit, because the engine numbers venue tiles before route tiles.
 	Venue_Dir: string,
+	// Which route of its venue this is, the `n` of `route_n`. Camera and
+	// cutscene idents are built from it, and the global cutscene files
+	// substitute it into names like `start_camera_r[route]`.
+	Route_Index: int,
 }
 
 // Public entry points used by the editor's headless CLI. The implementation
