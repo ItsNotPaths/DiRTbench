@@ -66,3 +66,30 @@ perspective_maps_vulkan_ndc :: proc(t: ^testing.T) {
 	testing.expect(t, abs(ndc(project(m, {1, 0, -1})).x - 1) < 1e-5)
 	testing.expect(t, abs(ndc(project(m, {0, 1, -1})).y - 1) < 1e-5)
 }
+
+@(test)
+ray_box_reports_the_face_it_enters :: proc(t: ^testing.T) {
+	lo, hi := Vector3{-1, 0, -1}, Vector3{1, 4, 1}
+
+	hit := GetRayCollisionBox({position = {0, 2, -10}, direction = {0, 0, 1}}, lo, hi)
+	testing.expect(t, hit.hit)
+	testing.expect_value(t, hit.distance, f32(9))
+	testing.expect_value(t, hit.normal, Vector3{0, 0, -1})
+
+	// Distance is in metres whatever the direction is scaled to, like the sphere.
+	non_unit := GetRayCollisionBox({position = {0, 2, -10}, direction = {0, 0, 3}}, lo, hi)
+	testing.expect_value(t, non_unit.distance, f32(9))
+
+	over := GetRayCollisionBox({position = {0, 9, -10}, direction = {0, 0, 1}}, lo, hi)
+	testing.expect(t, !over.hit)
+
+	behind := GetRayCollisionBox({position = {0, 2, -10}, direction = {0, 0, -1}}, lo, hi)
+	testing.expect(t, !behind.hit)
+
+	// Started inside: the near hit is where the ray already is.
+	inside := GetRayCollisionBox({position = {0, 2, 0}, direction = {1, 0, 0}}, lo, hi)
+	testing.expect(t, inside.hit)
+	testing.expect_value(t, inside.distance, f32(0))
+
+	testing.expect(t, !GetRayCollisionBox({}, lo, hi).hit)
+}

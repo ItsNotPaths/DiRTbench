@@ -141,6 +141,33 @@ GetRayCollisionTriangle :: proc(ray: Ray, a, b, c: Vector3) -> RayCollision {
 	return ray_triangle(ray, a, b, c)
 }
 
+// Slab test against an axis-aligned box. A ray that starts inside it hits at
+// distance zero, with no face to take a normal from.
+GetRayCollisionBox :: proc(ray: Ray, lo, hi: Vector3) -> RayCollision {
+	ray, valid := normalized_ray(ray)
+	if !valid { return {} }
+	near, far := f32(0), max(f32)
+	entry := -1
+	for axis in 0 ..< 3 {
+		o, d := ray.position[axis], ray.direction[axis]
+		if abs(d) < 1e-9 {
+			// Parallel to this pair of faces: inside them or nowhere.
+			if o < lo[axis] || o > hi[axis] { return {} }
+			continue
+		}
+		t0, t1 := (lo[axis] - o) / d, (hi[axis] - o) / d
+		if t0 > t1 { t0, t1 = t1, t0 }
+		if t0 > near { near, entry = t0, axis }
+		far = min(far, t1)
+		if near > far { return {} }
+	}
+	hit := RayCollision{hit = true, distance = near, point = ray.position + ray.direction * near}
+	if entry >= 0 {
+		hit.normal[entry] = ray.direction[entry] < 0 ? 1 : -1
+	}
+	return hit
+}
+
 GetRayCollisionQuad :: proc(ray: Ray, a, b, c, d: Vector3) -> RayCollision {
 	ray, valid := normalized_ray(ray)
 	if !valid { return {} }

@@ -64,6 +64,15 @@ Im_Child_Flags :: distinct c.int
 IM_CHILD_NONE :: Im_Child_Flags(0)
 IM_CHILD_BORDERS :: Im_Child_Flags(1 << 0)
 
+Im_Selectable_Flags :: distinct c.int
+IM_SELECTABLE_NONE :: Im_Selectable_Flags(0)
+
+Im_Button_Flags :: distinct c.int
+IM_BUTTON_NONE :: Im_Button_Flags(0)
+
+Im_Hovered_Flags :: distinct c.int
+IM_HOVERED_NONE :: Im_Hovered_Flags(0)
+
 // ImGuiDir_, for the arrow a button draws.
 Im_Dir :: enum c.int {
 	Left  = 0,
@@ -211,7 +220,36 @@ foreign imgui {
 	// edits it in place. Pass nil for the callback we do not use.
 	igInputText :: proc(label: cstring, buf: [^]u8, buf_size: uint, flags: Im_Input_Text_Flags, callback: rawptr, user_data: rawptr) -> bool ---
 
+	// A row that spans the width and reports its own click. `selected` only
+	// colours it; holding the selection is the caller's job.
+	igSelectable_Bool :: proc(label: cstring, selected: bool, flags: Im_Selectable_Flags, size: Im_Vec2) -> bool ---
+	// A button that draws nothing. This is how a panel claims a rectangle to
+	// paint into by hand, and still gets hover and drag reported to it.
+	igInvisibleButton :: proc(str_id: cstring, size: Im_Vec2, flags: Im_Button_Flags) -> bool ---
+	igIsItemActive :: proc() -> bool ---
+	igIsItemHovered :: proc(flags: Im_Hovered_Flags) -> bool ---
+	// Where the next widget will be drawn, in screen pixels — which is the space
+	// a draw list speaks, unlike everything else here.
+	igGetCursorScreenPos :: proc() -> Im_Vec2 ---
+
+	// The current window's draw list: raw shapes, clipped to the window, drawn
+	// in call order over whatever the window has already drawn.
+	igGetWindowDrawList :: proc() -> rawptr ---
+	ImDrawList_AddLine :: proc(self: rawptr, p1, p2: Im_Vec2, col: u32, thickness: f32) ---
+	ImDrawList_AddRectFilled :: proc(self: rawptr, p_min, p_max: Im_Vec2, col: u32, rounding: f32, flags: c.int) ---
+	ImDrawList_AddTriangleFilled :: proc(self: rawptr, p1, p2, p3: Im_Vec2, col: u32) ---
+	// Owed a matching pop. Without it a shape drawn past the panel edge is drawn
+	// over whatever is beside the panel.
+	ImDrawList_PushClipRect :: proc(self: rawptr, clip_min, clip_max: Im_Vec2, intersect_with_current: bool) ---
+	ImDrawList_PopClipRect :: proc(self: rawptr) ---
+
 	igShowDemoWindow :: proc(p_open: ^bool) ---
+}
+
+// ImGui packs a colour as ABGR, which is the reverse of how an RGBA literal
+// reads. One place knows that.
+im_col32 :: proc(r, g, b, a: u8) -> u32 {
+	return u32(a) << 24 | u32(b) << 16 | u32(g) << 8 | u32(r)
 }
 
 // Defaults that keep call sites readable: cimgui has no default arguments.
