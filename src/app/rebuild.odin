@@ -183,6 +183,7 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 	geo.tri_mesh_delete(&j.veg_mesh)
 	delete(j.spline.points)
 	delete(j.terrain.controls)
+	geo.floors_delete(&j.terrain)
 	j^ = {}
 	sync.atomic_store(&r.state, Rebuild_State.Idle)
 	return
@@ -225,6 +226,7 @@ rebuild_land_controls :: proc(doc: ^Venue_Doc, j: ^Rebuild_Job) -> (moved: bool)
 terrain_snapshot :: proc(t: geo.Terrain) -> (out: geo.Terrain) {
 	out = t
 	out.controls = slice.clone_to_dynamic(t.controls[:])
+	geo.floors_copy(&out, t)
 	return
 }
 

@@ -286,11 +286,24 @@ veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 	if !pr.ok || pr.su <= VEG_CLEAR || pr.su > vf.reach {
 		return 0, false
 	}
+	// A pad that clears its own foliage is off the terrain as far as the scatter
+	// is concerned, which is the same answer as the road corridor gets. Tested
+	// before the height work below, so a rejected candidate costs less, not more.
+	if terrain_floor_clears_veg(vf.t, p) {
+		return 0, false
+	}
 	if !vf.heights {
 		return 0, true
 	}
 	legs, n := field_legs(vf.hash, vf.fs, vf.near_other, p, vf.limit)
-	return terrain_world_height(vf.t, p, legs, n), true
+	y = terrain_world_height(vf.t, p, legs, n)
+	// A pad cuts the ground the trees stand on. The ceiling only, never the
+	// divot lift: that needs neighbours (floor.odin) and a scatter point has
+	// none, and being under the pad by less than a metre is not visible.
+	if level, _, ok := terrain_floor_level(vf.t, p, y); ok && level < y {
+		y = level
+	}
+	return y, true
 }
 
 // --- the scatter -------------------------------------------------------------

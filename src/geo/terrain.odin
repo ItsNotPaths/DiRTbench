@@ -108,6 +108,12 @@ Terrain :: struct {
 	row_m:   f32, // target world-space distance between sculpt controls
 	controls: [dynamic]Terrain_Control,
 	controls_gen: u64,
+	// Flat pads cut into the ground (floor.odin). Authored and world-space, so
+	// unlike the controls they are never re-derived and a road edit leaves them
+	// alone. Both arrays are owned: copy them with floors_copy, free with
+	// floors_delete.
+	floors:    [dynamic]Floor,
+	floor_pts: [dynamic][2]f32,
 	controls_reach, controls_cell, controls_spacing: f32,
 }
 
@@ -124,6 +130,7 @@ TERRAIN_DEFAULTS :: Terrain {
 
 terrain_delete :: proc(t: ^Terrain) {
 	delete(t.controls)
+	floors_delete(t)
 }
 
 // --- controls ---------------------------------------------------------------
@@ -165,6 +172,11 @@ terrain_reset :: proc(t: ^Terrain) {
 	t.enabled = d.enabled
 	t.reach_m, t.blend_m, t.cell_m, t.row_m = d.reach_m, d.blend_m, d.cell_m, d.row_m
 	terrain_invalidate(t)
+	// The pads go with it. terrain_invalidate deliberately keeps them: they are
+	// world-space and owe the road nothing, so replacing the spline must not
+	// throw away ground the user shaped by hand.
+	clear(&t.floors)
+	clear(&t.floor_pts)
 }
 
 // The control set, for saving. **Every control, not only the moved ones.**
@@ -204,6 +216,7 @@ terrain_clone :: proc(t: ^Terrain) -> (out: Terrain) {
 	out = t^
 	out.controls = nil
 	terrain_sculpt_load(&out, terrain_sculpt(t))
+	floors_copy(&out, t^)
 	return
 }
 
@@ -641,6 +654,10 @@ Terrain_Field :: struct {
 	valid: bool,
 	pts:   [dynamic]Terrain_Point,
 	tris:  [dynamic][3]u32,
+	// Y per point as of the last mesh build — sculpt, floors and all. Outside
+	// `sig` on purpose: it tracks the control heights, which the signature
+	// deliberately ignores. Picking reads it, so it is what was last drawn.
+	ys:    [dynamic]f32,
 }
 
 terrain_control_base_y :: proc(v: Terrain_Point) -> f32 {
@@ -744,6 +761,7 @@ terrain_controls_ensure :: proc(t: ^Terrain, f: ^Terrain_Field) {
 terrain_field_delete :: proc(f: ^Terrain_Field) {
 	delete(f.pts)
 	delete(f.tris)
+	delete(f.ys)
 }
 
 // Quantised key, so a hairpin pinch that brings two rims into contact does not
@@ -769,6 +787,7 @@ terrain_field_build :: proc(
 ) {
 	clear(&f.pts)
 	clear(&f.tris)
+	clear(&f.ys)
 	n := len(ribbon)
 	if n < 2 {
 		return
@@ -1131,10 +1150,16 @@ build_terrain_mesh :: proc(
 	ribbon: []Cross_Section,
 	roughness: f32,
 ) {
+	// Heights for the whole point set at once: a floor's divot pass needs its
+	// neighbours (floor.odin), and a vertex is shared by about six triangles.
+	ys := terrain_floor_heights(t, f)
+	at :: proc(f: ^Terrain_Field, ys: []f32, i: u32) -> gfx.Vector3 {
+		return {f.pts[i].x, ys[i], f.pts[i].z}
+	}
 	for tri in f.tris {
-		a := field_point(t, f.pts[tri[0]])
-		b := field_point(t, f.pts[tri[1]])
-		cp := field_point(t, f.pts[tri[2]])
+		a := at(f, ys, tri[0])
+		b := at(f, ys, tri[1])
+		cp := at(f, ys, tri[2])
 
 		// The terrain is a height field over XZ, so every face points up. Delaunay
 		// gives no orientation guarantee, so read the normal and flip the winding
