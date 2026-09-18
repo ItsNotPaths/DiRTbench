@@ -198,6 +198,17 @@ selected_node :: proc(ed: ^Editor, node_pos: []gfx.Vector3, node_active: []bool)
 	return i
 }
 
+// The selected node, with a stale selection dropped. Controls are regenerated
+// every frame, so the one under the selection can vanish between them.
+resolve_node_selection :: proc(ed: ^Editor, node_pos: []gfx.Vector3, node_active: []bool) -> int {
+	sel_node := selected_node(ed, node_pos, node_active)
+	if ed.sel.kind == .Node && sel_node < 0 {
+		ed.sel = {}
+		terrain_brush_clear(ed)
+	}
+	return sel_node
+}
+
 terrain_brush_clear :: proc(ed: ^Editor) {
 	ed.terrain_brush_phase = .None
 	clear(&ed.terrain_brush_mask)
@@ -218,6 +229,33 @@ terrain_brush_select :: proc(ed: ^Editor, node_pos: []gfx.Vector3, selected: int
 		dx, dz := p.x - centre.x, p.z - centre.z
 		ed.terrain_brush_mask[i] = i == selected || dx * dx + dz * dz <= r2
 	}
+}
+
+// Every masked control back to its snapshot height, plus dy. The bounds hold
+// against a rebuild that resized the controls under a live brush.
+terrain_brush_apply :: proc(ed: ^Editor, dy: f32) {
+	for &c, i in ed.doc.terrain.controls {
+		if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
+		   ed.terrain_brush_mask[i] {
+			c.offset = ed.terrain_brush_offsets[i] + dy
+		}
+	}
+	mark_terrain_dirty(ed.doc)
+}
+
+// The live brush's control count and radius, over the viewport.
+terrain_brush_overlay :: proc(ed: ^Editor) {
+	if ed.terrain_brush_phase == .None {
+		return
+	}
+	count := 0
+	for selected in ed.terrain_brush_mask {
+		if selected {
+			count += 1
+		}
+	}
+	txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", count, ed.terrain_brush_radius)
+	ui.draw_overlay_text_centered(txt, 40, 72, f32(gfx.GetScreenWidth()), 0xff50beff)
 }
 
 terrain_brush_snapshot :: proc(ed: ^Editor) {
@@ -363,6 +401,15 @@ update_camera :: proc(oc: ^Orbit_Camera) {
 	}
 }
 
+// Alt owns the mouse for navigation, so the camera still moves mid-gizmo then.
+// A panel under the cursor, or a live gizmo drag, keeps it still. A stage
+// window never runs a gizmo, so gizmo_active is false there throughout.
+camera_step :: proc(ed: ^Editor, ui_mouse, nav: bool) {
+	if !ui_mouse && (nav || !ed.gizmo_active) {
+		update_camera(&ed.cam)
+	}
+}
+
 // A fresh window's own state. The document it looks at is set separately.
 view_defaults :: proc() -> Editor {
 	return Editor{
@@ -421,9 +468,7 @@ terrain_brush_gizmo :: proc(
 		if !left_down {
 			terrain_brush_clear(ed)
 		} else if right_down {
-			world_per_pixel := ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
-				f32(max(gfx.GetScreenHeight(), 1))
-			brush_per_pixel := clamp(world_per_pixel * 2, f32(0.1), f32(2))
+			brush_per_pixel := clamp(world_per_pixel(ed, cam3d) * 2, f32(0.1), f32(2))
 			ed.terrain_brush_radius = clamp(ed.terrain_brush_radius_start +
 				(ed.terrain_brush_mouse_y - mouse.y) * brush_per_pixel,
 				f32(0), ed.doc.terrain.reach_m * 4)
@@ -439,14 +484,7 @@ terrain_brush_gizmo :: proc(
 			terrain_brush_clear(ed)
 		} else {
 			move_per_pixel := clamp(world_per_pixel(ed, cam3d), f32(0.01), f32(1))
-			dy := (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel
-			for &c, i in ed.doc.terrain.controls {
-				if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
-				   ed.terrain_brush_mask[i] {
-					c.offset = ed.terrain_brush_offsets[i] + dy
-				}
-			}
-			mark_terrain_dirty(ed.doc)
+			terrain_brush_apply(ed, (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel)
 		}
 	case .None:
 		// Height only, so an ordinary LMB drag keeps the single-control gizmo.
@@ -472,24 +510,27 @@ terrain_brush_gizmo :: proc(
 // would then refuse every click that tries to select it again. Hence
 // `gizmo_shown`.
 editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3, sel_node: int) -> bool {
-	focused := gfx.WindowFocused(&ed.window)
 	ui.gizmo_begin_frame()
 	ui.gizmo_set_orthographic(false)
 	ui.gizmo_set_rect(0, 0, f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight()))
 
+	// An unfocused window manipulates nothing and drops any brush it held.
+	if !gfx.WindowFocused(&ed.window) {
+		terrain_brush_clear(ed)
+		ed.gizmo_active, ed.gizmo_hovered = false, false
+		return false
+	}
+
 	gizmo_used, gizmo_shown := false, false
-	if pi := selected_point(ed); pi >= 0 && focused {
+	if pi := selected_point(ed); pi >= 0 {
 		gizmo_shown = true
 		gizmo_used = gizmo_manipulate(&ed.doc.spline.points[pi], cam3d, ed.gizmo_mode)
 		if gizmo_used {
 			mark_dirty(ed.doc) // dragging moves a point, so the mesh is stale
 		}
-	} else if sel_node >= 0 && focused {
+	} else if sel_node >= 0 {
 		gizmo_shown = true
 		gizmo_used = terrain_brush_gizmo(ed, node_pos, sel_node, cam3d)
-	}
-	if !focused && ed.terrain_brush_phase != .None {
-		terrain_brush_clear(ed)
 	}
 	ed.gizmo_active = gizmo_used
 	ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
@@ -548,6 +589,23 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	line^ = at
 	mark_edited(ed.doc)
 	set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
+}
+
+// Shift + grabbing the gizmo extrudes: duplicate the selected point and drag
+// the copy outward, growing the spline at its ends. This must run before
+// gizmo_manipulate, which processes the press later in the frame, so the drag
+// latches onto the copy. gizmo_hovered is last frame's probe, which is accurate
+// at the instant of the press.
+try_extrude :: proc(ed: ^Editor, nav, ui_mouse: bool) {
+	if nav || ui_mouse || ed.gizmo_active || !ed.gizmo_hovered {
+		return
+	}
+	shift := gfx.IsKeyDown(.LEFT_SHIFT) || gfx.IsKeyDown(.RIGHT_SHIFT)
+	if !shift || !gfx.IsMouseButtonPressed(.LEFT) || selected_point(ed) < 0 {
+		return
+	}
+	ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.doc.spline, ed.sel.idx)}
+	mark_dirty(ed.doc)
 }
 
 // Right-click, in priority order: another control point welds the selection
@@ -643,9 +701,7 @@ stage_frame :: proc(ed: ^Editor) {
 	editor_hotkeys(ed, ui_keys)
 
 	nav := alt_held()
-	if !ui_mouse {
-		update_camera(&ed.cam)
-	}
+	camera_step(ed, ui_mouse, nav)
 
 	stage_resync(ed)
 	stage_cache_refresh(ed)
@@ -692,36 +748,18 @@ venue_frame :: proc(ed: ^Editor) {
 	// Alt owns the mouse for camera navigation; the gizmo must not grab it.
 	nav := alt_held()
 	ui.gizmo_enable(!nav)
-	if !ui_mouse && (nav || !ed.gizmo_active) {
-		update_camera(&ed.cam)
-	}
+	camera_step(ed, ui_mouse, nav)
 	cam3d := to_camera3d(ed.cam)
 	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
 
-	// Shift + grabbing the gizmo extrudes: duplicate the selected point and
-	// drag the copy outward, growing the spline at its ends. This must run
-	// before gizmo_manipulate, which processes the press later this frame,
-	// so the drag latches onto the copy. gizmo_hovered is last frame's
-	// probe, which is accurate at the instant of the press.
-	shift := gfx.IsKeyDown(.LEFT_SHIFT) || gfx.IsKeyDown(.RIGHT_SHIFT)
-	if gfx.IsMouseButtonPressed(.LEFT) &&
-	   shift && !nav && !ui_mouse && !ed.gizmo_active &&
-	   selected_point(ed) >= 0 &&
-	   ed.gizmo_hovered {
-		ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.doc.spline, ed.sel.idx)}
-		mark_dirty(ed.doc)
-	}
+	try_extrude(ed, nav, ui_mouse)
 
 	// Node handles come from the world-space terrain controls, so they are
 	// recomputed after the rebuild and shared by drawing, picking and the
 	// gizmo. Temp-allocated: valid for this frame only.
 	node_pos := geo.terrain_node_world(&ed.doc.terrain, ed.doc.ribbon, ed.doc.topo, ed.doc.roughness)
 	node_active := geo.terrain_node_active_mask(&ed.doc.terrain, node_pos)
-	sel_node := selected_node(ed, node_pos, node_active)
-	if ed.sel.kind == .Node && sel_node < 0 {
-		ed.sel = {}
-		terrain_brush_clear(ed)
-	}
+	sel_node := resolve_node_selection(ed, node_pos, node_active)
 
 	draw_venue_scene(ed, cam3d, node_pos, node_active, sel_node)
 
@@ -729,15 +767,7 @@ venue_frame :: proc(ed: ^Editor) {
 	// ImGuizmo draws into an ImGui draw list, so it lives here rather than
 	// inside BeginMode3D, and projects itself with the camera's matrices.
 	ui.imgui_backend_begin()
-	if ed.terrain_brush_phase != .None {
-		brush_count := 0
-		for selected in ed.terrain_brush_mask {
-			if selected { brush_count += 1 }
-		}
-		txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", brush_count, ed.terrain_brush_radius)
-		ui.draw_overlay_text_centered(txt, 40, 72, f32(gfx.GetScreenWidth()), 0xff50beff)
-	}
-	// ImGuizmo holds one file-static drag state for the whole process, so only
+	terrain_brush_overlay(ed)
 	gizmo_used := editor_gizmos(ed, cam3d, node_pos, sel_node)
 
 	draw_menubar(ed)
