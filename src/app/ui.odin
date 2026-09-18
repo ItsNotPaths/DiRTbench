@@ -399,6 +399,18 @@ draw_inspector :: proc(ed: ^Editor) {
 		return
 	}
 
+	// The selection block is held at the foot of the dock and everything else
+	// scrolls under it, so what is selected is always in front of you and never
+	// behind a collapsed header.
+	foot := selection_block_height(ed)
+	if ui.igBeginChild_Str("inspector_body", {0, -foot}, ui.IM_CHILD_NONE, ui.IM_WINDOW_NONE) {
+		draw_inspector_body(ed)
+	}
+	ui.igEndChild()
+	draw_selection_block(ed)
+}
+
+draw_inspector_body :: proc(ed: ^Editor) {
 	ui.igSeparatorText(ed.doc.open_venue != "" ? "Venue road network" : "Stage")
 	if ed.doc.open_venue != "" {
 		ui.im_text(fmt.ctprint(ed.doc.open_venue))
@@ -441,7 +453,6 @@ draw_inspector :: proc(ed: ^Editor) {
 	}
 
 	draw_terrain_section(ed)
-	draw_point_section(ed)
 	draw_veg_section(ed)
 
 	ui.igSeparatorText("Controls")
@@ -528,8 +539,8 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	draw_floor_section(ed)
 }
 
-// Flat pads (geo/floor.odin). A pad is a ceiling on the ground, so the only
-// numbers it carries are the height it holds and how far out it blends.
+// Drawing a floor, and the count of them. What one selected floor is worth
+// tweaking lives in the selection block.
 draw_floor_section :: proc(ed: ^Editor) {
 	t := &ed.doc.terrain
 	ui.igSeparatorText("Floors")
@@ -552,16 +563,67 @@ draw_floor_section :: proc(ed: ^Editor) {
 	}
 	ui.im_same_line()
 	ui.im_text(fmt.ctprintf("%d placed", len(t.floors)))
-
-	fi := selected_floor(ed)
-	if fi < 0 {
+	if selected_floor(ed) < 0 {
 		ui.im_text_colored(DIM_COL, "click one to select it")
+	}
+}
+
+// --- the selection block ------------------------------------------------------
+
+// What the block draws, in widget rows, so the dock knows how much to hold back
+// for it. It is positioned before it is drawn and so cannot be measured; keep
+// these in step with draw_selection_block.
+@(rodata)
+SEL_ROWS := [Sel_Kind]f32{
+	.None       = 2,
+	.Point      = 15,
+	.Node       = 3,
+	.Floor      = 7,
+	.Floor_Vert = 7,
+}
+
+// Never more than half the dock: a fifteen-row point on a short window would
+// otherwise leave nothing above it to scroll.
+selection_block_height :: proc(ed: ^Editor) -> f32 {
+	avail := ui.igGetContentRegionAvail()
+	return min(SEL_ROWS[ed.sel.kind] * ui.igGetFrameHeightWithSpacing(), avail.y * 0.5)
+}
+
+// The foot of the Inspector: whatever is selected, and the numbers that belong
+// to it. One arm per Sel_Kind, and each is the only place its controls live —
+// the sections above own the document, this owns the selection.
+draw_selection_block :: proc(ed: ^Editor) {
+	if !ui.igBeginChild_Str("selection", {0, 0}, ui.IM_CHILD_BORDERS, ui.IM_WINDOW_NONE) {
+		ui.igEndChild()
 		return
 	}
-	f := &t.floors[fi]
+	defer ui.igEndChild()
+
+	switch ed.sel.kind {
+	case .None:
+		ui.igSeparatorText("Nothing selected")
+		ui.im_text_colored(DIM_COL, "click a road point, a terrain node or a floor")
+	case .Point:
+		draw_point_selection(ed)
+	case .Node:
+		ui.igSeparatorText("Terrain control")
+		ui.im_text_colored(DIM_COL, "drag its vertical handle to sculpt")
+	case .Floor, .Floor_Vert:
+		draw_floor_selection(ed)
+	}
+}
+
+// Flat pads (geo/floor.odin). A pad is a ceiling on the ground, so the only
+// numbers it carries are the height it holds and how far out it blends.
+draw_floor_selection :: proc(ed: ^Editor) {
+	fi := selected_floor(ed)
+	if fi < 0 {
+		return // deleted or reloaded under the selection
+	}
+	f := &ed.doc.terrain.floors[fi]
 	_, v := selected_floor_vert(ed)
-	ui.im_text(fmt.ctprintf("floor %d: %d corners%s", fi, f.count,
-		v >= 0 ? fmt.ctprintf(", corner %d", v) : ""))
+	ui.igSeparatorText(fmt.ctprintf("Floor %d", fi))
+	ui.im_text(fmt.ctprintf("%d corners%s", f.count, v >= 0 ? fmt.ctprintf(", corner %d", v) : ""))
 	if ui.igDragFloat("height", &f.y, 0.1, 0, 0, "%.1f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)
 	}
@@ -581,24 +643,13 @@ draw_floor_section :: proc(ed: ^Editor) {
 }
 
 // Everything that belongs to the one selected control point.
-draw_point_section :: proc(ed: ^Editor) {
-	if !ui.igCollapsingHeader_TreeNodeFlags("Selected point", ui.IM_TREE_NODE_DEFAULT_OPEN) {
-		return
-	}
+draw_point_selection :: proc(ed: ^Editor) {
 	sel := selected_point(ed)
 	if sel < 0 {
-		if ed.sel.kind == .Node {
-			ui.im_text("terrain control selected")
-			ui.im_text("drag its vertical handle to sculpt")
-		} else if selected_floor(ed) >= 0 {
-			ui.im_text("floor selected: see the Terrain panel")
-		} else {
-			ui.im_text("no point selected")
-		}
-		return
+		return // the spline shrank under the selection
 	}
 	p := &ed.doc.spline.points[sel]
-	ui.im_text(fmt.ctprintf("point %d of %d", sel, len(ed.doc.spline.points)))
+	ui.igSeparatorText(fmt.ctprintf("Point %d of %d", sel, len(ed.doc.spline.points)))
 
 	if ui.igDragFloat3("position", cast(^[3]f32)&p.xform.translation, 0.1, 0, 0, "%.2f m", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
