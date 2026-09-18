@@ -174,9 +174,10 @@ d3_vis_build_single_cell :: proc(objects: []D3_Vis_Object, header_floor := [16]u
 // load. Tag 0 addresses surfaces by slot position, so this is the number that
 // decides whether the terrain draws at all.
 
-// Every `trees.bin` instance as a tag-3 object, indexed by its cooked id.
+// Every instance of a placement file as an object of `tag`, indexed by its
+// cooked id: trees are tag 3, ornaments tag 2.
 @(private = "file")
-d3_vis_append_trees :: proc(out: ^[dynamic]D3_Vis_Object, path: string) -> (added: int, msg: string, ok: bool) {
+d3_vis_append_placements :: proc(out: ^[dynamic]D3_Vis_Object, path: string, tag: u32) -> (added: int, msg: string, ok: bool) {
 	data, read_err := os.read_entire_file(path, context.temp_allocator)
 	if read_err != nil { return 0, fmt.tprintf("could not read %s: %v", path, read_err), false }
 	layout, layout_ok := d3_placement_layout(data)
@@ -188,7 +189,7 @@ d3_vis_append_trees :: proc(out: ^[dynamic]D3_Vis_Object, path: string) -> (adde
 		if !box_ok {
 			return added, fmt.tprintf("%s: instance %d names an unknown reference %d", path, i, inst.reference_id), false
 		}
-		append(out, D3_Vis_Object{tag = 3, index = inst.instance_id, lo = lo, hi = hi})
+		append(out, D3_Vis_Object{tag = tag, index = inst.instance_id, lo = lo, hi = hi})
 		added += 1
 	}
 	return added, "", true
@@ -196,8 +197,7 @@ d3_vis_append_trees :: proc(out: ^[dynamic]D3_Vis_Object, path: string) -> (adde
 
 // Every drawable this route registers, in the engine's own registration order.
 // `venue_dir` holds `tracksplit.pssg`; `route_dir` holds `routesplit.pssg` and
-// `trees.bin`. A route without trees is not an error — 14 stock routes ship
-// none — so a missing `trees.bin` contributes nothing.
+// the two placement files.
 d3_vis_census_objects :: proc(
 	route_dir, venue_dir: string,
 	allocator := context.allocator,
@@ -226,18 +226,21 @@ d3_vis_census_objects :: proc(
 		}
 	}
 
-	trees_path, _ := filepath.join({route_dir, "trees.bin"}, context.temp_allocator)
-	trees := 0
-	if os.exists(trees_path) {
-		added, trees_msg, trees_ok := d3_vis_append_trees(&out, trees_path)
-		if !trees_ok { return nil, trees_msg, false }
-		trees = added
+	// A route without either file is not an error — 14 stock routes ship no
+	// trees — so a missing one contributes nothing.
+	counted: [2]int
+	for file, i in ([]struct{name: string, tag: u32}{{"ornaments.bin", 2}, {"trees.bin", 3}}) {
+		path, _ := filepath.join({route_dir, file.name}, context.temp_allocator)
+		if !os.exists(path) { continue }
+		added, add_msg, add_ok := d3_vis_append_placements(&out, path, file.tag)
+		if !add_ok { return nil, add_msg, false }
+		counted[i] = added
 	}
 
 	if len(out) == 0 { return nil, "found no drawables to make visible", false }
 	return out[:], fmt.tprintf(
-		"tag 0: %d venue tiles + %d route tiles; tag 3: %d trees",
-		venue_tiles, route_tiles, trees,
+		"tag 0: %d venue tiles + %d route tiles; tag 2: %d ornaments; tag 3: %d trees",
+		venue_tiles, route_tiles, counted[0], counted[1],
 	), true
 }
 
@@ -259,10 +262,10 @@ d3_vis_census_build :: proc(
 		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", donor, read_err), false }
 		counts, counts_ok := d3_vis_read_header_tag_counts(data)
 		if !counts_ok { return nil, fmt.tprintf("%s: too short to hold a Dirt 3 VIS header", donor), false }
-		// Tags 0 and 3 are ours: we write both PSSGs and trees.bin, so our
-		// counts are the true ones. Every other tag keeps the donor's count —
-		// tag 2 included, even though ornaments.bin is rewritten, because the
-		// game sizes allocations off the header count (see the census note).
+		// We write both PSSGs and both placement files, so tags 0, 2 and 3 are
+		// counted from what we wrote. The donor's count is still the floor on
+		// tag 2: dynamic ENS drawables consume registration slots that receive
+		// no box, and the game sizes its allocations off the header count.
 		for tag in 0..<16 {
 			if tag == 0 || tag == 3 { continue }
 			floor[tag] = counts[tag]
