@@ -410,3 +410,135 @@ old_projects_migrate_their_stage_names_into_routes :: proc(t: ^testing.T) {
 	testing.expect_value(t, kept.routes[0].id, "route_9")
 	testing.expect(t, route_has_markers(kept.routes[0]))
 }
+
+// --- cliffs over the graph ----------------------------------------------------
+
+// A straight road along +Z, every point facing the way it runs, so arc length
+// between two nodes is exactly their spacing and a span can be asserted in
+// metres.
+@(private = "file")
+straight_road :: proc(sp: ^geo.Spline, count: int, spacing: f32) {
+	clear(&sp.points)
+	for i in 0 ..< count {
+		pos := gfx.Vector3{0, 0, f32(i) * spacing}
+		geo.spline_push(sp, geo.make_point(pos, gfx.Quaternion(1), geo.DEFAULT_WIDTH, parent = i - 1))
+	}
+}
+
+// The right cliff on whichever sample is nearest `at`.
+@(private = "file")
+cliff_r_near :: proc(ribbon: []geo.Cross_Section, at: gfx.Vector3) -> f32 {
+	best, h := max(f32), f32(0)
+	for cs in ribbon {
+		if d := gfx.Vector3Distance(cs.pos, at); d < best {
+			best, h = d, cs.cliff_r
+		}
+	}
+	return h
+}
+
+// The tallest right cliff anywhere on the edge `from` -> `to`.
+@(private = "file")
+cliff_r_on_edge :: proc(ribbon: []geo.Cross_Section, from, to: int) -> f32 {
+	h: f32
+	for cs in ribbon {
+		if cs.e_from == from && cs.e_to == to {
+			h = max(h, cs.cliff_r)
+		}
+	}
+	return h
+}
+
+// A span is metres of road, and a road forks. This is the bug the dirtbench_1
+// venue showed: on a branched road the ribbon lerped each edge between its two
+// ends, so a cliff was stuck on the two edges either side of its own point and
+// the span and taper sliders did nothing at all.
+@(test)
+cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 5, 40) // nodes at z = 0, 40, 80, 120, 160
+
+	// A branch off node 3, far enough past it that no lerp between two ends
+	// could ever reach it.
+	branch := geo.extrude_point(&sp, 3)
+	sp.points[branch].xform.translation = {30, 0, 150}
+	testing.expect(t, !geo.is_linear(sp), "the test road must take the graph sampler")
+
+	sp.points[2].cliff_r = 5     // at z = 80
+	sp.points[2].cliff_taper = 0 // square ends, so the span is exactly readable
+	sp.points[2].span_r = 60     // 30 m either way: z = 50 .. 110
+
+	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
+	testing.expect_value(t, cliff_r_near(ribbon, {0, 0, 80}), 5)
+	testing.expect_value(t, cliff_r_near(ribbon, {0, 0, 60}), 5)
+	testing.expect_value(t, cliff_r_near(ribbon, {0, 0, 20}), 0)
+	testing.expect_value(t, cliff_r_near(ribbon, {0, 0, 140}), 0)
+	testing.expect_value(t, cliff_r_on_edge(ribbon, 3, branch), 0)
+
+	// Widen it past the fork and it runs into the branch, which is the whole
+	// point of walking the road: 40 m to node 3, then 20 m down the branch.
+	sp.points[2].span_r = 120 // 60 m either way, so z = 20 .. 140
+	wide := geo.build_ribbon(sp, 14, context.temp_allocator)
+	testing.expect_value(t, cliff_r_near(wide, {0, 0, 130}), 5)
+	testing.expect(t, cliff_r_on_edge(wide, 3, branch) > 0, "a span past a fork must reach into the branch")
+	// It stops inside the branch rather than covering it whole.
+	tip := sp.points[branch].xform.translation
+	testing.expect_value(t, cliff_r_near(wide, tip), 0)
+
+	// And it comes back when the span is taken away again.
+	sp.points[2].span_r = 0
+	none := geo.build_ribbon(sp, 14, context.temp_allocator)
+	testing.expect_value(t, cliff_r_near(none, {0, 0, 80}), 0)
+}
+
+// The editor draws the venue road and the game drives a compiled stage, and a
+// stage is a chain where the venue is a graph. Both must stand the cliff in the
+// same place, or the window is lying about what ships.
+@(test)
+a_stage_carries_the_cliff_the_venue_shows :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 5, 40)
+	branch := geo.extrude_point(&sp, 3)
+	sp.points[branch].xform.translation = {30, 0, 150}
+
+	sp.points[2].cliff_r = 4
+	sp.points[2].cliff_taper = 10
+	sp.points[2].span_r = 100
+
+	venue := geo.build_ribbon(sp, 14, context.temp_allocator)
+
+	// Drawn direction, so no side swaps: from the first edge to the last of the
+	// main chain.
+	stage, msg, ok := geo.compile_stage(sp, {0, 1, 0.5}, {3, 4, 0.5}, nil, context.allocator)
+	defer delete(stage.points)
+	testing.expect(t, ok, msg); if !ok { return }
+	compiled := geo.build_ribbon(stage, 14, context.temp_allocator)
+
+	for z in ([]f32{40, 60, 80, 100, 120}) {
+		at := gfx.Vector3{0, 0, z}
+		v, c := cliff_r_near(venue, at), cliff_r_near(compiled, at)
+		testing.expectf(t, abs(v - c) < 0.05, "at z=%.0f the venue says %.2f m and the stage says %.2f m", z, v, c)
+	}
+}
+
+// The walk the cliffs and the stage search share. Distance is metres of road,
+// not hops, and it stops where it is told to.
+@(test)
+graph_reach_measures_the_road_in_metres :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 5, 40)
+
+	near := geo.graph_reach(sp, 2, 50)
+	testing.expect_value(t, near[2], 0)
+	testing.expect_value(t, near[1], 40)
+	testing.expect_value(t, near[3], 40)
+	// Node 0 is 80 m away, past the limit, so it is never settled.
+	testing.expect(t, near[0] > 50, "the walk settled a point past its limit")
+
+	far := geo.graph_reach(sp, 2, 1000)
+	testing.expect_value(t, far[0], 80)
+	testing.expect_value(t, far[4], 80)
+}

@@ -342,8 +342,6 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
 		width = p0.width + (p1.width-p0.width)*t,
 		e_from = parent, e_to = child, t = t,
-		cliff_l = p0.cliff_l+(p1.cliff_l-p0.cliff_l)*t,
-		cliff_r = p0.cliff_r+(p1.cliff_r-p0.cliff_r)*t,
 		cliff_angle = p0.cliff_angle+(p1.cliff_angle-p0.cliff_angle)*t,
 		roughness = p0.roughness+(p1.roughness-p0.roughness)*t,
 	}
@@ -387,11 +385,7 @@ build_ribbon :: proc(
 				append(&out, cs)
 			}
 		}
-		// NOTE: no resolve_cliffs here. The graph sampler lerps cliff heights
-		// between the two endpoints, where the linear one leaves them at zero
-		// and resolve_cliffs fills the tapered envelope. Two cliff models, and
-		// resolve_cliffs maps control point i to sample i*spp, which the graph
-		// layout does not satisfy. Unifying them is its own job.
+		resolve_cliffs(sp, out[:])
 		return out[:]
 	}
 	for seg in 0 ..< nseg {
@@ -402,7 +396,7 @@ build_ribbon :: proc(
 		}
 	}
 	append(&out, sample_at(sp, nseg - 1, 1.0))
-	resolve_cliffs(sp, out[:], spp)
+	resolve_cliffs(sp, out[:])
 	return out[:]
 }
 
@@ -477,43 +471,47 @@ cliff_envelope :: proc(d, span, taper: f32) -> f32 {
 }
 
 // Resolve each slice's cliff height from every control point whose span reaches
-// it.
+// it, measured along the road rather than along the array.
+//
+// Distance is the road walk the stage search uses, so a span runs past a fork
+// into both of its branches and over a weld into the road it closes. Nothing
+// here reads sample order, which is why one procedure serves both a chain and a
+// branched venue: on a branched one the ribbon is a run per edge, and arc
+// length across those runs means nothing.
 //
 // A slice's height is *not* a lerp between its two neighbouring points: a span
 // can cover many slices and several spans can overlap one. Overlaps take the
 // maximum, which unions adjacent cliffs into one ridge instead of stacking them
 // into a spike.
 //
-// Cost is O(points * span-in-samples), not O(points * samples): each point only
-// writes the window its own span covers.
-resolve_cliffs :: proc(sp: Spline, ribbon: []Cross_Section, spp: int) {
-	n := len(ribbon)
-	if n < 2 {
-		return
-	}
-	arc := ribbon_arc(ribbon)
-
-	apply :: proc(cs: ^Cross_Section, p: Point, d: f32) {
-		cs.cliff_l = max(cs.cliff_l, p.cliff_l * cliff_envelope(d, p.span_l, p.cliff_taper))
-		cs.cliff_r = max(cs.cliff_r, p.cliff_r * cliff_envelope(d, p.span_r, p.cliff_taper))
-	}
-
+// Only points that carry a cliff are walked, and a walk settles only what its
+// own span reaches, so a venue pays for the cliffs it has rather than for its
+// length.
+resolve_cliffs :: proc(sp: Spline, ribbon: []Cross_Section) {
 	for p, i in sp.points {
 		if (p.cliff_l <= 0 || p.span_l <= 0) && (p.cliff_r <= 0 || p.span_r <= 0) {
 			continue
 		}
-		// Control point i lands on sample i*spp; the last point is the endpoint
-		// appended after the sampling loop.
-		idx := i == len(sp.points) - 1 ? n - 1 : i * spp
-		// The wider of the two sides bounds the window we have to touch.
+		// The wider of the two sides bounds the road this point can touch.
 		reach := max(p.span_l, p.span_r) * 0.5
-		s0 := arc[idx]
-
-		for j := idx; j < n && arc[j] - s0 <= reach; j += 1 {
-			apply(&ribbon[j], p, arc[j] - s0)
-		}
-		for j := idx - 1; j >= 0 && s0 - arc[j] <= reach; j -= 1 {
-			apply(&ribbon[j], p, arc[j] - s0)
+		dist := graph_reach(sp, i, reach)
+		// One length per edge, not per sample: a ribbon runs an edge at a time.
+		last_from, last_to := -1, -1
+		edge_len: f32
+		for &cs in ribbon {
+			da, db := dist[cs.e_from], dist[cs.e_to]
+			if da >= reach && db >= reach {
+				continue // the whole edge is out of reach, and so is this slice
+			}
+			if cs.e_from != last_from || cs.e_to != last_to {
+				last_from, last_to = cs.e_from, cs.e_to
+				edge_len = edge_length(sp, last_from, last_to)
+			}
+			// `t` stands in for arc fraction across the edge. Control points sit
+			// metres apart, so the two differ by well under the taper.
+			d := min(da + cs.t * edge_len, db + (1 - cs.t) * edge_len)
+			cs.cliff_l = max(cs.cliff_l, p.cliff_l * cliff_envelope(d, p.span_l, p.cliff_taper))
+			cs.cliff_r = max(cs.cliff_r, p.cliff_r * cliff_envelope(d, p.span_r, p.cliff_taper))
 		}
 	}
 }
@@ -808,7 +806,12 @@ marker_valid :: proc(sp: Spline, m: Road_Marker) -> bool {
 // The control point a marker stands for, framed by the road it sits on.
 marker_point :: proc(sp: Spline, e: Edge_At) -> Point {
 	t := clamp(e.t, MARKER_MARGIN, 1 - MARKER_MARGIN)
-	cs := sample_edge(sp, e.from, e.to, t)
+	// Through the resolver, because a start line inside a cliffed stretch has
+	// to come out of a compile standing at the height the road already stands
+	// at. The point itself holds no cliff until this fills it.
+	one := []Cross_Section{sample_edge(sp, e.from, e.to, t)}
+	resolve_cliffs(sp, one)
+	cs := one[0]
 	src := sp.points[e.from]
 	return make_point(
 		cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width,
@@ -882,6 +885,102 @@ edge_is :: proc(e: Edge_At, a, b: int) -> bool {
 	return (e.from == a && e.to == b) || (e.from == b && e.to == a)
 }
 
+@(private = "file")
+edge_blocked :: proc(blocked: []Edge_At, a, b: int) -> bool {
+	for e in blocked {
+		if edge_is(e, a, b) {
+			return true
+		}
+	}
+	return false
+}
+
+// Farther than any road, and what an unreached control point is left at.
+ROAD_INF :: max(f32)
+
+// Every control point joined to every other it shares an edge with, both kinds
+// in one array. Undirected, because a road is drivable either way whatever the
+// parent pointers spell out. Built in one pass: rescanning the point array at
+// every step of a walk would be the same work over and over.
+road_links :: proc(sp: Spline, allocator := context.temp_allocator) -> [][dynamic]int {
+	n := len(sp.points)
+	links := make([][dynamic]int, n, allocator)
+	for i in 0 ..< n {
+		links[i] = make([dynamic]int, allocator)
+	}
+	join :: proc(links: [][dynamic]int, a, b: int) {
+		append(&links[a], b)
+		append(&links[b], a)
+	}
+	for p, i in sp.points {
+		if p.parent >= 0 && p.parent < n && p.parent != i {
+			join(links, p.parent, i)
+		}
+		if p.weld >= 0 && p.weld < n && p.weld != i {
+			join(links, i, p.weld)
+		}
+	}
+	return links
+}
+
+// The one walk over the road graph: metres from `from` to every control point,
+// and the point each was reached through. ROAD_INF where no road runs.
+//
+// `blocked` names edges the walk may not cross (only `from` and `to` are read).
+// `limit` stops it once the nearest point still open is further than that, so a
+// walk that only cares about its own neighbourhood does not settle the whole
+// venue; points past the limit are left at whatever bound they had reached, and
+// are only ever an over-estimate. `stop` ends it early on one point, or -1 for
+// all of them.
+//
+// O(V^2) and no heap: a road is control points, not map tiles.
+@(private = "file")
+road_walk :: proc(
+	sp: Spline,
+	from: int,
+	blocked: []Edge_At,
+	limit: f32,
+	stop: int,
+	allocator := context.temp_allocator,
+) -> (
+	dist: []f32,
+	prev: []int,
+) {
+	n := len(sp.points)
+	dist = make([]f32, n, allocator)
+	prev = make([]int, n, allocator)
+	for i in 0 ..< n {
+		dist[i], prev[i] = ROAD_INF, -1
+	}
+	if from < 0 || from >= n {
+		return
+	}
+	links := road_links(sp)
+	done := make([]bool, n, context.temp_allocator)
+	dist[from] = 0
+	for _ in 0 ..< n {
+		at := -1
+		for i in 0 ..< n {
+			if !done[i] && dist[i] < ROAD_INF && (at < 0 || dist[i] < dist[at]) {
+				at = i
+			}
+		}
+		if at < 0 || at == stop || dist[at] > limit {
+			break
+		}
+		done[at] = true
+		for nbr in links[at] {
+			if done[nbr] || edge_blocked(blocked, at, nbr) {
+				continue
+			}
+			if step := dist[at] + edge_length(sp, at, nbr); step < dist[nbr] {
+				dist[nbr], prev[nbr] = step, at
+			}
+		}
+	}
+	return
+}
+
 // The shortest road between two control points, as the points it runs through,
 // both ends included. Undirected: parent edges and welds are crossable either
 // way, so what comes back is the road a driver can see rather than the one the
@@ -906,66 +1005,8 @@ graph_path :: proc(
 		out[0] = from
 		return out
 	}
-
-	// One pass for both edge kinds. Rescanning the whole array at every step
-	// would be the same work over and over.
-	links := make([][dynamic]int, n, context.temp_allocator)
-	for i in 0 ..< n {
-		links[i] = make([dynamic]int, context.temp_allocator)
-	}
-	join :: proc(links: [][dynamic]int, a, b: int) {
-		append(&links[a], b)
-		append(&links[b], a)
-	}
-	for p, i in sp.points {
-		if p.parent >= 0 && p.parent < n && p.parent != i {
-			join(links, p.parent, i)
-		}
-		if p.weld >= 0 && p.weld < n && p.weld != i {
-			join(links, i, p.weld)
-		}
-	}
-
-	INF :: max(f32)
-	dist := make([]f32, n, context.temp_allocator)
-	prev := make([]int, n, context.temp_allocator)
-	done := make([]bool, n, context.temp_allocator)
-	for i in 0 ..< n {
-		dist[i], prev[i] = INF, -1
-	}
-	dist[from] = 0
-	// O(V^2) and no heap: a road is control points, not map tiles.
-	for _ in 0 ..< n {
-		at := -1
-		for i in 0 ..< n {
-			if !done[i] && dist[i] < INF && (at < 0 || dist[i] < dist[at]) {
-				at = i
-			}
-		}
-		if at < 0 || at == to {
-			break
-		}
-		done[at] = true
-		for nbr in links[at] {
-			if done[nbr] {
-				continue
-			}
-			skip := false
-			for e in blocked {
-				if edge_is(e, at, nbr) {
-					skip = true
-					break
-				}
-			}
-			if skip {
-				continue
-			}
-			if step := dist[at] + edge_length(sp, at, nbr); step < dist[nbr] {
-				dist[nbr], prev[nbr] = step, at
-			}
-		}
-	}
-	if dist[to] >= INF {
+	dist, prev := road_walk(sp, from, blocked, ROAD_INF, to)
+	if dist[to] >= ROAD_INF {
 		return nil
 	}
 
@@ -980,6 +1021,19 @@ graph_path :: proc(
 		node = prev[node]
 	}
 	return out
+}
+
+// How far every control point is from `src` by road, up to `reach`. Past that
+// the answer is only an upper bound, which is all a caller that stops at
+// `reach` ever reads.
+graph_reach :: proc(
+	sp: Spline,
+	src: int,
+	reach: f32,
+	allocator := context.temp_allocator,
+) -> []f32 {
+	dist, _ := road_walk(sp, src, nil, reach, -1, allocator)
+	return dist
 }
 
 // --- stages ------------------------------------------------------------------
