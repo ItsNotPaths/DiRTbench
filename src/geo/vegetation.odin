@@ -7,10 +7,11 @@ package geo
 //
 // The distribution is deliberately simple: a jittered grid in (arc, lateral)
 // space, one candidate per cell, seeded so a given stage scatters the same way
-// every time. Density sets the grid spacing; `road_bias` thins the far edge only
-// slightly, so the verge reads a touch busier than the tree line without the road
-// ending up in a tunnel of trunks. Rows are measured run by run and no two trees
-// share a cell, because a road graph is not one road: see veg_rows and VEG_GAP.
+// every time. Density sets the grid spacing; `road_bias` trades width for nearness,
+// giving up the far ground and spending it on tighter rows and tighter columns, so
+// the tree count holds and only its shape changes. Rows are measured run by run and
+// no two trees share a cell, because a road graph is not one road: see veg_rows and
+// VEG_GAP.
 //
 // Which species is not a knob. A venue derives its art from a base venue, and the
 // trees come with it — firs in Finland, thorn trees in Kenya — so the preset is
@@ -150,15 +151,15 @@ veg_pool :: proc(p: Veg_Preset) -> []Veg_Species {
 	return firs
 }
 
-// The knobs, persisted per stage. `road_bias` is intentionally gentle by default:
-// the brief is "prioritise near the road, only slightly". `preset` is the one
-// field nobody types: it comes off the venue's base and is set when the venue is
-// opened, so it is not saved with the rest.
+// The knobs, persisted per stage. `road_bias` is gentle by default but has real
+// travel: at 1 a rally stage runs through a corridor of trunks. `preset` is the
+// one field nobody types: it comes off the venue's base and is set when the venue
+// is opened, so it is not saved with the rest.
 Veg_Params :: struct {
 	enabled:   bool,
 	preset:    Veg_Preset,
 	density:   f32,   // 0..1; drives the grid spacing
-	road_bias: f32,   // 0..1; fraction of far-edge candidates thinned out
+	road_bias: f32,   // 0..1; how hard the forest is pulled in against the verge
 	seed:      c.int,
 }
 
@@ -175,8 +176,17 @@ VEG_DEFAULTS :: Veg_Params {
 VEG_SPACING_SPARSE :: f32(34)
 VEG_SPACING_DENSE :: f32(7)
 // How far off the verge seam the nearest tree may stand, so trunks never crowd the
-// road edge or clip the verge geometry.
+// road edge or clip the verge geometry. Full bias walks it in to VEG_U_NEAR_TIGHT,
+// which a rally stage wants and which still clears the corridor test by VEG_CLEAR.
 VEG_U_NEAR :: f32(4)
+VEG_U_NEAR_TIGHT :: f32(2.5)
+// The narrowest a column may be, in metres. The bias walks the first column's width
+// down to this; below it the trees would be planted inside each other.
+VEG_STEP_MIN :: f32(2.5)
+// And how much of the reach the scatter still covers at full bias. A rally stage
+// wants a wall of trees beside the road, not the same trees spread to the horizon,
+// so the far ground is given up and the rows tighten to pay for it.
+VEG_REACH_TIGHT :: f32(0.25)
 // The same clearance, enforced against *every* leg of the route rather than the
 // one a candidate was cast from. A cast knows only its own verge, so on a branched
 // route it can put a trunk hard against the kerb of a road it never looked at.
@@ -361,6 +371,55 @@ veg_pick :: proc(rng: ^Rng, pool: []Veg_Species) -> Veg_Species {
 	return pool[len(pool) - 1]
 }
 
+// A lateral band, measured out from the verge seam: where it starts and how wide
+// it is. One tree stands somewhere in each, so the band's width is both the local
+// spacing and the room the tree has to jitter in.
+Veg_Column :: struct {
+	u, step: f32,
+}
+
+// Carve the ground from the verge out to `near + width` into `cols` bands. At bias 0
+// they are all `step_near` wide and the scatter is the even grid it has always been.
+// Drive `step_near` down and the bands grow by a fixed ratio instead, so the near
+// ground is planted harder than the ground behind it.
+veg_columns :: proc(
+	cols: int,
+	near, width, step_near: f32,
+	allocator := context.temp_allocator,
+) -> []Veg_Column {
+	out := make([]Veg_Column, cols, allocator)
+	r := veg_column_ratio(cols, width, step_near)
+	u, step := near, step_near
+	for i in 0 ..< cols {
+		out[i] = {u, step}
+		u += step
+		step *= r
+	}
+	return out
+}
+
+// The growth ratio that makes `cols` bands cover exactly `width`, starting at
+// `step_near`. What they cover rises with the ratio, so a bisection finds it; 1 when
+// bands of an even width already reach far enough.
+veg_column_ratio :: proc(cols: int, width, step_near: f32) -> f32 {
+	if cols < 2 || step_near * f32(cols) >= width {
+		return 1
+	}
+	covered :: proc(r: f32, cols: int, step_near: f32) -> f32 {
+		return step_near * (math.pow(r, f32(cols)) - 1) / (r - 1)
+	}
+	lo, hi := f32(1.0001), f32(4)
+	for _ in 0 ..< 40 {
+		mid := (lo + hi) * 0.5
+		if covered(mid, cols, step_near) < width {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return (lo + hi) * 0.5
+}
+
 // Scatter the stage's trees. Persistent-allocates the result (caller frees), or
 // returns nil when there is nothing to place. Deterministic in `veg.seed`: the
 // same stage and seed scatter identically, run to run.
@@ -384,16 +443,26 @@ veg_generate :: proc(
 
 	vf := veg_field_make(terrain, ribbon, arc, ds, roughness)
 	reach := vf.ok ? vf.reach : VEG_REACH_NO_TERRAIN
-	if reach <= VEG_U_NEAR {
-		return nil // no room outside the verge to plant anything
-	}
 
 	spacing := VEG_SPACING_SPARSE + (VEG_SPACING_DENSE - VEG_SPACING_SPARSE) * clamp(veg.density, 0, 1)
 	spacing = max(spacing, 1)
 	bias := clamp(veg.road_bias, 0, 1)
 	vrows := VERGE_ROWS
 	pool := veg_pool(veg.preset)
-	span := reach - VEG_U_NEAR
+	near := VEG_U_NEAR + (VEG_U_NEAR_TIGHT - VEG_U_NEAR) * bias
+	span := reach - near
+	if span <= 0 {
+		return nil // no room outside the verge to plant anything
+	}
+	// The bias trades width for density. It pulls the scatter's reach in, packs the
+	// columns it still has room for against the verge, and tightens the rows by
+	// exactly what the lost columns were worth, so the tree count barely moves.
+	even_cols := max(int(span / spacing) + 1, 1)
+	band := span * (1 + (VEG_REACH_TIGHT - 1) * bias)
+	step_near := spacing + (min(VEG_STEP_MIN, spacing) - spacing) * bias
+	cols := clamp(int(band / step_near), 1, even_cols)
+	columns := veg_columns(cols, near, band, step_near)
+	row_spacing := max(spacing * f32(cols) / f32(even_cols), VEG_STEP_MIN)
 
 	rng := rng_init(veg.seed)
 	canopy := veg_canopy_col(veg.preset)
@@ -401,11 +470,14 @@ veg_generate :: proc(
 
 	// One tree per cell of a coarse world grid, so two edges covering the same
 	// ground near a junction plant one stand between them rather than one each.
-	gap := max(spacing * VEG_GAP, 0.5)
+	// Sized off the narrowest column, not off `spacing`: at high bias the near columns
+	// stand a couple of metres apart and a cell sized for the even grid would swallow
+	// the whole verge.
+	gap := max(step_near * VEG_GAP, 0.5)
 	taken := make(map[[2]i32]bool, 0, context.temp_allocator)
 	defer delete(taken)
 
-	for i in veg_rows(ribbon, arc, spacing, &rng) {
+	for i in veg_rows(ribbon, arc, row_spacing, &rng) {
 		if len(out) >= VEG_MAX {
 			break
 		}
@@ -419,28 +491,19 @@ veg_generate :: proc(
 			seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
 			o := terrain_outward(cs, side)
 
-			for u := VEG_U_NEAR; u <= reach; u += spacing {
+			for col in columns {
 				if len(out) >= VEG_MAX {
 					break
 				}
-				// Jitter the cell: lateral within +/- half a spacing, and a nudge
-				// along the road, so the grid dissolves into a natural scatter.
-				ju := u + rng_range(&rng, -0.5, 0.5) * spacing
-				if ju < VEG_U_NEAR || ju > reach {
-					continue
-				}
-				jf := rng_range(&rng, -0.5, 0.5) * spacing
+				// Anywhere in the column's own band, plus a nudge along the road, so
+				// the grid dissolves into a natural scatter. A tree never leaves its
+				// band, so however hard the bias packs them none lands on the verge
+				// or past the reach.
+				ju := col.u + rng_unit(&rng) * col.step
+				jf := rng_range(&rng, -0.5, 0.5) * row_spacing
 
 				px := seam.x + o.x * ju + fwd.x * jf
 				pz := seam.z + o.z * ju + fwd.z * jf
-
-				// Prioritise the road, only slightly: keep every near-road candidate,
-				// thin the far edge by at most `road_bias`.
-				frac := (ju - VEG_U_NEAR) / span
-				keep_p := 1 - bias * clamp(frac, 0, 1)
-				if rng_unit(&rng) > keep_p {
-					continue
-				}
 
 				y, inside := veg_field_y(&vf, {px, pz})
 				if !inside {

@@ -2,6 +2,7 @@ package main
 
 import "core:math"
 import "core:os"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 import "../gfx"
@@ -271,6 +272,43 @@ vegetation_does_not_thicken_at_a_branch :: proc(t: ^testing.T) {
 	testing.expectf(t, branch_worst <= straight_worst + 2,
 		"a branch packs %d trees into 8 m of ground where a straight road packs %d",
 		branch_worst, straight_worst)
+}
+
+// The road bias has to be worth a slider. At 0 the scatter is even across the
+// terrain's reach; at 1 a rally stage wants the trees hard against the verge, and
+// it must get there by moving trees rather than by deleting the far ones.
+@(test)
+road_bias_pulls_the_scatter_in :: proc(t: ^testing.T) {
+	sp := straight_road()
+	defer delete(sp.points)
+	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
+	defer delete(ribbon)
+
+	// The road runs up +Z at x = 0, so |x| is the distance out from its centre.
+	scatter :: proc(ribbon: []geo.Cross_Section, bias: f32) -> (n: int, median: f32) {
+		terrain := geo.TERRAIN_DEFAULTS
+		defer geo.terrain_delete(&terrain)
+		veg := geo.Veg_Params{enabled = true, density = 1, road_bias = bias, seed = 7}
+		trees := geo.veg_generate(ribbon, &terrain, veg, 0)
+		defer delete(trees)
+
+		out := make([]f32, len(trees), context.temp_allocator)
+		for it, i in trees {
+			out[i] = abs(it.pos.x)
+		}
+		slice.sort(out)
+		return len(out), len(out) > 0 ? out[len(out) / 2] : 0
+	}
+
+	even_n, even_median := scatter(ribbon, 0)
+	near_n, near_median := scatter(ribbon, 1)
+
+	testing.expectf(t, near_median < even_median * 0.5,
+		"full bias moved the median tree from %.1f m to %.1f m out — not worth a slider",
+		even_median, near_median)
+	testing.expectf(t, near_n >= even_n / 2,
+		"full bias planted %d trees where an even scatter plants %d — it is deleting, not moving",
+		near_n, even_n)
 }
 
 // Trees keep off every leg of the route, sculpted terrain or not. A candidate is

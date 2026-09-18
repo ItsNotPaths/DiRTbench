@@ -668,8 +668,8 @@ draw_veg_section :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("density", &v.density, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
 		mark_veg_dirty(ed.doc)
 	}
-	// "Prioritise near the road, only slightly": at 0 the scatter is even; at 1 the
-	// far tree line is thinned by up to that fraction. The default is deliberately low.
+	// At 0 the scatter is even across the reach; at 1 the same trees are packed
+	// against the verge and the tree line goes thin. Tree count barely moves.
 	if ui.igSliderFloat("road bias", &v.road_bias, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
 		mark_veg_dirty(ed.doc)
 	}
