@@ -48,3 +48,19 @@ mvp_upload_is_column_major :: proc(t: ^testing.T) {
 	v := MatrixToFloatV(Matrix{1, 0, 0, 5, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1})
 	testing.expect(t, v[3] == 0 && v[12] == 5 && v[15] == 1)
 }
+
+// Every event the UI needs has to name its window, or PollWindowEvents drops it
+// before ImGui ever sees it. Text input is the one that bites: keys still route,
+// so the field takes backspace and no characters.
+@(test)
+event_window_id_routes_typed_text :: proc(t: ^testing.T) {
+	ev: sdl.Event
+	ev.type = .TEXT_INPUT
+	ev.text.windowID = 7
+	testing.expect_value(t, event_window_id(&ev), sdl.WindowID(7))
+
+	ev = {}
+	ev.type = .TEXT_EDITING
+	ev.edit.windowID = 9
+	testing.expect_value(t, event_window_id(&ev), sdl.WindowID(9))
+}

@@ -175,6 +175,10 @@ event_window_id :: proc(event: ^sdl.Event) -> sdl.WindowID {
 	case .MOUSE_WHEEL: return event.wheel.windowID
 	case .MOUSE_BUTTON_DOWN, .MOUSE_BUTTON_UP: return event.button.windowID
 	case .KEY_DOWN, .KEY_UP: return event.key.windowID
+	// Typed characters arrive as their own event, not on the key press. An
+	// unrouted one is dropped here, and then no text field takes anything.
+	case .TEXT_INPUT: return event.text.windowID
+	case .TEXT_EDITING: return event.edit.windowID
 	}
 	return 0
 }
