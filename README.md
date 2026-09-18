@@ -2,7 +2,7 @@
   <img src="assets/dirtbenchlogo.png" alt="dirtbench" width="320">
 </p>
 
-<p align="center">A stage editor for DiRT 3. Draw a road, shape the ground, drive it.</p>
+<p align="center">Dirt 3 stage/venue creator..</p>
 
 ## Build
 
@@ -13,7 +13,7 @@
 
 ## Point it at the game
 
-Put a `dirtbench.conf` next to the binary, with one line in it:
+Put a `dirtbench.conf` next to the binary
 
 ```
 install_dir = /path/to/DiRT 3 Complete Edition
@@ -21,11 +21,11 @@ install_dir = /path/to/DiRT 3 Complete Edition
 
 ## Make a stage
 
-1. Start `build/dirtbench`. The project manager lists the game's venues and your own.
+1. Start `dirtbench`. The project manager lists the game's venues and your own.
 2. Make a venue. It holds your stages and borrows its art from a stock venue that you pick.
-3. Open the venue. Draw the road network, then place a stage on it.
-4. Open the stage. Shape the ground under the road.
-5. Export. The stage goes into the game, and you can drive it.
+3. Open the venue. Draw any road network, terrain, trees.
+4. Open/Add a stage. place a start and finish, use pins for a specific route.
+5. Deploy/Update-in-game. The stage goes into the game, and you can drive it.
 
 Stock venues are read-only. On the first export, each game file that dirtbench
 replaces is copied to `<file>.orig`. A later export never touches that copy, so
@@ -49,12 +49,14 @@ dirtbench --pacenotes <stage> [--reverse]
 An export goes into the game by default. `--debug-out` writes to `build/out/`
 instead. glTF always goes there, because the game cannot read it.
 
-## Test
+## Huge thanks
 
-```
-./test.sh
-```
+- The [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding)
+  team, for the database schema and for years of work on the Ego formats.
+- [ssor0](https://github.com/ssor0), for the PSSG/vis/general format knowledge.
+- [Deuterium, the Sentient Mattress](https://www.youtube.com/@DeuteriumtheSentientMattress/videos),
+  for the co-driver voice.
 
 ## License
 
-MIT, see `LICENSE`. Co-driver clips have their own credit in `credits.txt`.
+MIT, see `LICENSE`. Third-party code and data are listed in `credits.txt`.

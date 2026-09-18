@@ -1,14 +1,8 @@
-Deuterium, the Sentient Mattress — pace note VA
-https://www.youtube.com/@DeuteriumtheSentientMattress/videos
-
 Third-party code, fetched by download-deps.sh:
   Dear ImGui + cimgui                 MIT
   ImGuizmo + cimguizmo                MIT
   delaunator-cpp                      MIT
   SDL                                 zlib
-
-raylib's rlgl and stb_vorbis come from the Odin distribution. rlgl remains as
-the low-level OpenGL shim; windowing, input and audio are SDL.
 
 Third-party data, checked in:
   assets/d3/schemaDirt3.xml           Ego-Engine-Modding
@@ -16,8 +10,3 @@ Third-party data, checked in:
     through it. Taken as-is from
     github.com/EgoEngineModding/Ego-Engine-Modding,
     src/EgoDatabaseEditor/schema/schemaDirt3.xml
-
-assets/d3/moosylvania-materials.pssg is a shader/texture-name template read out
-of a DiRT 3 installation. It carries no texture or model payload, only the
-metadata a generated PSSG needs to reference the game's own art. It is
-Codemasters' data, not ours.
