@@ -55,21 +55,14 @@ do_save :: proc(ed: ^Editor) {
 
 // The chain this window exports, and the name it exports under.
 //
-// Only a stage window has one. A venue window is the road graph, and exporting
-// a graph as one stage means nothing — its own contribution to an export is the
-// terrain surface, which every stage export writes anyway.
-//
-// A venue stage exports its compiled chain under its route id, because that id
-// is the directory the game reads. A loose road out of maps/ is its own chain
-// and carries its own name.
+// Only a loose road out of maps/ exports from an editor window. A venue's
+// stages are written by the project manager, which publishes all of them
+// against one load of the road graph — see venue_export_all.
 export_target_chain :: proc(ed: ^Editor) -> (chain: geo.Spline, name: string, ok: bool) {
-	if ed.kind != .Stage {
+	if ed.kind != .Stage || ed.doc.open_venue != "" {
 		return
 	}
-	if ed.doc.open_venue == "" {
-		return ed.doc.spline, sanitise_stage_name(stage_name_text(ed.doc)), len(ed.doc.spline.points) >= 2
-	}
-	return ed.stage.spline, ed.stage_id, ed.stage.state == .Ready
+	return ed.doc.spline, sanitise_stage_name(stage_name_text(ed.doc)), len(ed.doc.spline.points) >= 2
 }
 
 // `rebuild_geometry` first because the terrain rebuild is deferred while a point
@@ -79,12 +72,10 @@ export_target_chain :: proc(ed: ^Editor) -> (chain: geo.Spline, name: string, ok
 do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 	chain, name, ready := export_target_chain(ed)
 	if !ready {
-		set_status(&ed.status, buf_text(ed.stage.msg[:]), false)
+		set_status(&ed.status, "only a loose road out of maps/ exports here; a venue publishes from the project manager", false)
 		return
 	}
-	if ed.doc.open_venue == "" {
-		set_stage_name(ed.doc, name)
-	}
+	set_stage_name(ed.doc, name)
 	rebuild_geometry(ed.doc)
 	msg, ok := export_stage(ed.doc, chain, name, ed.stage_id, target)
 	set_status(&ed.status, msg, ok)
@@ -163,7 +154,7 @@ draw_menubar :: proc(ed: ^Editor) {
 		}
 		ui.igSeparator()
 		_, _, exportable := export_target_chain(ed)
-		if ed.kind == .Stage && ui.igBeginMenu("Export to", exportable) {
+		if ed.doc.open_venue == "" && ui.igBeginMenu("Export to", exportable) {
 			for &t in EXPORT_TARGETS {
 				label := fmt.ctprint(t.label)
 				if ui.igMenuItem_Bool(label, nil, false, true) {
@@ -172,7 +163,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			}
 			ui.igEndMenu()
 		}
-		if ed.kind == .Stage && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()

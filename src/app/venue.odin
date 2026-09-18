@@ -683,6 +683,69 @@ venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.S
 	return stages[:], fmt.tprintf("%d stages, %d control points", len(stages), total), true
 }
 
+// Put a venue in the game: deploy it if it is not there yet, then write every
+// stage over the hardlinked art. Idempotent — run it again after a road edit
+// and each stage is re-exported.
+//
+// Deploying alone leaves the base venue's own road in place under a new name,
+// so the two halves are one action.
+venue_publish :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	deploy_msg, deployed := venue_deploy(vs, p)
+	if !deployed {
+		return deploy_msg, false
+	}
+	install_scan_rescan(vs)
+	export_msg, exported := venue_export_all(vs, p)
+	if !exported {
+		return fmt.tprintf("%s; export: %s", deploy_msg, export_msg), false
+	}
+	return fmt.tprintf("%s; %s", deploy_msg, export_msg), true
+}
+
+// Every stage of a venue, written into its own deployed route directory. The
+// road is loaded once and each stage compiled out of it, so two stages of one
+// venue cannot disagree about the road they came from.
+venue_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	target, found := find_target("dirt3")
+	if !found {
+		return "the Dirt 3 export target is missing", false
+	}
+	if len(p.routes) == 0 {
+		return fmt.tprintf("%s has no stages to export", p.id), false
+	}
+
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	doc.install = vs
+	// The document owns this string; doc_delete frees it.
+	doc.open_venue = strings.clone(p.id)
+	if load_msg, loaded := load_road(&doc, venue_road_path(p.id)); !loaded {
+		return load_msg, false
+	}
+	doc.veg.preset = geo.veg_preset_for_base(p.base)
+
+	done := make([dynamic]string, context.temp_allocator)
+	for route in p.routes {
+		if !route_has_markers(route) {
+			return fmt.tprintf("%s has no start and finish line yet", route.id), false
+		}
+		chain, chain_msg, chain_ok := geo.compile_stage(
+			doc.spline, route.start, route.finish, route.pins[:], context.temp_allocator,
+		)
+		if !chain_ok {
+			return fmt.tprintf("%s: %s", route.id, chain_msg), false
+		}
+		if export_msg, exported := export_stage(&doc, chain, route.id, route.id, target); !exported {
+			return fmt.tprintf("%s: %s", route.id, export_msg), false
+		}
+		append(&done, route.id)
+	}
+	return fmt.tprintf(
+		"exported %s",
+		strings.join(done[:], ", ", context.temp_allocator),
+	), true
+}
+
 venue_compiled_delete :: proc(stages: []geo.Spline, allocator := context.allocator) {
 	for stage in stages { delete(stage.points) }
 	delete(stages, allocator)

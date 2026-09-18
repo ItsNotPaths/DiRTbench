@@ -261,6 +261,15 @@ draw_no_install :: proc(vs: ^Install_Scan) {
 draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
 	ps := &app.screen
 	if deployed {
+		// Re-export, for a road edited since it was last written.
+		if ui.im_button(fmt.ctprintf("Update in game###publish_%s", p.id)) {
+			msg, ok := venue_publish(&app.install, p^)
+			set_status(&app.status, msg, ok)
+			if ok {
+				install_scan_rescan(&app.install)
+			}
+		}
+		ui.im_same_line()
 		if ui.im_button(fmt.ctprintf("Revert deployment###revert_%s", p.id)) {
 			msg, ok := venue_revert(&app.install, p^)
 			set_status(&app.status, msg, ok)
@@ -270,7 +279,7 @@ draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
 		}
 		return
 	}
-	// Exporting a venue compiles its stages out of the road graph first. Until
+	// Publishing a venue compiles its stages out of the road graph first. Until
 	// that succeeds there is nothing to deploy, so the failure is reported here
 	// rather than half way through writing into the game.
 	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
@@ -292,8 +301,8 @@ draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
 		return
 	}
 	ui.im_same_line()
-	if ui.im_button(fmt.ctprintf("Apply deploy###apply_%s", p.id)) {
-		msg, ok := venue_deploy(&app.install, p^)
+	if ui.im_button(fmt.ctprintf("Deploy to game###apply_%s", p.id)) {
+		msg, ok := venue_publish(&app.install, p^)
 		set_status(&app.status, msg, ok)
 		delete(ps.deploy_ready)
 		ps.deploy_ready = ""

@@ -79,7 +79,7 @@ link_tree :: proc(src, dst: string) -> (msg: string, ok: bool) {
 		return fmt.tprintf("could not read %s: %v", src, err), false
 	}
 	for info in infos {
-		if info.name == "." || info.name == ".." {
+		if info.name == "." || info.name == ".." || is_backup_name(info.name) {
 			continue
 		}
 		from, _ := filepath.join({src, info.name}, context.temp_allocator)
@@ -89,6 +89,18 @@ link_tree :: proc(src, dst: string) -> (msg: string, ok: bool) {
 		}
 	}
 	return "", true
+}
+
+// Our own backups, not game content. A base venue that has been written over
+// carries them, and linking one in makes a fresh deployment look like it had
+// already been exported.
+is_backup_name :: proc(name: string) -> bool {
+	for suffix in ([]string{".orig", ".stock", ".rallysculpt-stock"}) {
+		if strings.has_suffix(name, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 @(private = "file")
@@ -101,7 +113,7 @@ link_venue_root :: proc(src, dst: string) -> (msg: string, ok: bool) {
 		return fmt.tprintf("could not read %s: %v", src, err), false
 	}
 	for info in infos {
-		if info.name == "." || info.name == ".." {
+		if info.name == "." || info.name == ".." || is_backup_name(info.name) {
 			continue
 		}
 		if info.type == .Directory && strings.has_prefix(info.name, "route_") {
@@ -526,7 +538,7 @@ venue_deploy_headless :: proc(id: string) -> bool {
 		return false
 	}
 	defer venue_free(p)
-	msg, ok = venue_deploy(&vs, p)
+	msg, ok = venue_publish(&vs, p)
 	fmt.println(msg)
 	return ok
 }
