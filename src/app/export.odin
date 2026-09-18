@@ -181,13 +181,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 		markers[i]={Kind=kind,Distance=marker.station}
 	}
-	// A route draws and collides the venue's whole road network, not just its
-	// own chain: the venue LOD covers all of it, so ground the LOD draws and
-	// the route does not would be visible with nothing under it.
-	drawn := job.stage
-	if len(job.venue.order) > 0 {
-		drawn = job.venue
-	}
+	drawn := export_drawn(job)
 	collision := collision_from_mesh(drawn.mesh, drawn.order, context.temp_allocator)
 	out := d3.Export_Job{
 		Name = job.name, Out = job.out, Backup = job.installing,
@@ -413,6 +407,16 @@ sort_faces_by_material :: proc(
 	return order, counts
 }
 
+// The geometry the ground comes from: the venue's whole road network when there
+// is one, because a route draws and collides all of it, not just its own chain.
+// Anything that must agree with the ground reads this, never `stage` — a tree
+// placed off the stage field stands on ground the venue field built, and the
+// two disagree by the height gap between the nearest chain leg and the nearest
+// branch.
+export_drawn :: proc(job: ^Export_Job) -> ^Export_Geometry {
+	return len(job.venue.order) > 0 ? &job.venue : &job.stage
+}
+
 // Everything the editor holds, flattened for a target. `stage` is the one
 // chain being exported, compiled out of `doc.spline`; a loose road out of
 // maps/ is its own chain and passes itself.
@@ -437,9 +441,10 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 	// glTF needs no shaders, so a missing profile is only fatal for the target
 	// that names them.
 	job.profile, job.profile_msg, _ = export_profile(doc.install, doc.open_venue, context.temp_allocator)
+	ground := export_drawn(&job)
 	job.props = geo.veg_generate(
-		job.stage.ribbon,
-		&job.stage.terrain,
+		ground.ribbon,
+		&ground.terrain,
 		doc.veg,
 		doc.roughness,
 		context.temp_allocator,

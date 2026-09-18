@@ -135,11 +135,13 @@ w_str :: proc(b: ^strings.Builder, s: string) {
 // --- the export --------------------------------------------------------------
 
 export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	// The same geometry the props were scattered on, or they import floating.
+	g := export_drawn(job)
 	// One primitive per material actually present, in job order — which is the
 	// order `order` is sorted in, so each group is one contiguous run.
 	used := make([dynamic]geo.Mat_Id, context.temp_allocator)
 	for mat in geo.Mat_Id {
-		if job.stage.counts[mat] > 0 {
+		if g.counts[mat] > 0 {
 			append(&used, mat)
 		}
 	}
@@ -149,8 +151,8 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 
 	run_start := 0
 	for mat in used {
-		n := job.stage.counts[mat]
-		chunk := job.stage.order[run_start:run_start + n]
+		n := g.counts[mat]
+		chunk := g.order[run_start:run_start + n]
 		run_start += n
 
 		pos := make([dynamic]f32, 0, n * 9, context.temp_allocator)
@@ -158,9 +160,9 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		uv := make([dynamic]f32, 0, n * 6, context.temp_allocator)
 		for tri in chunk {
 			for j in 0 ..< 3 {
-				p := job.stage.mesh.pos[tri * 3 + j]
-				nv := job.stage.mesh.nrm[tri * 3 + j]
-				t := job.stage.mesh.uv[tri * 3 + j]
+				p := g.mesh.pos[tri * 3 + j]
+				nv := g.mesh.nrm[tri * 3 + j]
+				t := g.mesh.uv[tri * 3 + j]
 				append(&pos, p.x, p.y, p.z)
 				append(&nrm, nv.x, nv.y, nv.z)
 				// glTF's V runs down from the top-left; the editor's runs up.
@@ -292,5 +294,5 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if len(job.props) > 0 {
 		prop_note = fmt.tprintf(", %d prop markers", len(job.props))
 	}
-	return fmt.tprintf("exported %d tris%s to %s.gltf", len(job.stage.order), prop_note, job.name), true
+	return fmt.tprintf("exported %d tris%s to %s.gltf", len(g.order), prop_note, job.name), true
 }
