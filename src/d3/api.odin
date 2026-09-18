@@ -70,9 +70,13 @@ Export_Geometry :: export_dirt3_geometry
 Export_Venue_Geometry :: export_dirt3_venue_geometry
 Placement_References :: d3_placement_read_references
 Ens_Parse :: d3_ens_parse
+Ens_Attr_Value :: ens_attr
 Ens_Emit :: d3_ens_emit
 Ens_Placement_Transform :: d3_ens_placement_transform
 Placement_Build :: d3_placement_build
+Prop_Lib_Open :: prop_lib_open
+Prop_Lib_Delete :: prop_lib_delete
+Prop_Lib_Bounds :: prop_lib_reference_bounds
 Placement_Xml_Build :: d3_placement_xml_build
 Write_Out :: d3_write_out
 Stock_Path :: d3_stock_path

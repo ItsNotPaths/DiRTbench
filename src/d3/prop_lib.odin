@@ -115,6 +115,56 @@ prop_lib_index :: proc(lib: ^Prop_Library, node: ^Pssg_Node) {
 	}
 }
 
+// The box the library itself declares for a prop, off the node nicknamed `lod`.
+// The root's own BOUNDINGBOX is all zeros in every stock file, so it is never
+// the one to read. This is what a placement file's reference row quotes, so a
+// synthesized row quotes the same numbers rather than ones we measured.
+prop_lib_bounds :: proc(lib: ^Prop_Library, name: string) -> (lo, hi: [3]f32, ok: bool) {
+	root := prop_lib_find(lib, name)
+	if root == nil {
+		return
+	}
+	for child in root.children {
+		if pssg_attr_string(&lib.file, child, "nickname") != "lod" {
+			continue
+		}
+		for grand in child.children {
+			if grand.name != "BOUNDINGBOX" || len(grand.data) < 24 {
+				continue
+			}
+			for k in 0 ..< 3 {
+				lo[k] = binary_load_f32(grand.data, k * 4, .Big)
+				hi[k] = binary_load_f32(grand.data, 12 + k * 4, .Big)
+			}
+			return lo, hi, true
+		}
+	}
+	return
+}
+
+// The box a placement file's reference row should quote for a prop.
+//
+// The declared box first: it is the authored number, and it agrees with the
+// geometry within a centimetre on 1801 of objects.pssg's 1813 props. Every
+// trees.pssg box is a placeholder cube instead — 0.3 m, whatever the size of
+// the tree — so a declared box that does not contain the geometry it names is
+// dropped for the measured one.
+prop_lib_reference_bounds :: proc(lib: ^Prop_Library, name: string) -> (lo, hi: [3]f32, ok: bool) {
+	declared_lo, declared_hi, declared := prop_lib_bounds(lib, name)
+	mesh, measured := prop_lib_mesh(lib, name, context.temp_allocator)
+	if !measured {
+		return declared_lo, declared_hi, declared
+	}
+	covers := declared
+	for k in 0 ..< 3 {
+		covers &&= declared_lo[k] <= mesh.lo[k] && declared_hi[k] >= mesh.hi[k]
+	}
+	if covers {
+		return declared_lo, declared_hi, true
+	}
+	return mesh.lo, mesh.hi, true
+}
+
 prop_lib_find :: proc(lib: ^Prop_Library, name: string) -> ^Pssg_Node {
 	for entry in lib.props {
 		if entry.name == name {

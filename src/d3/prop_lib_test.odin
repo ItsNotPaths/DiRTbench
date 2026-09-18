@@ -249,3 +249,40 @@ prop_missing_name_is_not_a_mesh :: proc(t: ^testing.T) {
 	_, ok := prop_lib_mesh(&lib, "nothing", context.temp_allocator)
 	testing.expect(t, !ok, "a prop the library does not hold has no mesh")
 }
+
+// A reference row quotes the library's own box, unless that box does not cover
+// the geometry — every trees.pssg box is a placeholder cube, and a 0.3 m row
+// for a 7 m tree is a size the game would believe.
+@(test)
+prop_reference_bounds_reject_a_box_that_misses_the_mesh :: proc(t: ^testing.T) {
+	b: Prop_Test_Builder
+	prop_test_builder(&b)
+	source := prop_test_source(&b, "geom", {{0, 0, 0}, {1, 0, 0}, {0, 7, 0}}, {0, 1, 2})
+	prop :: proc(b: ^Prop_Test_Builder, name: string, lo, hi: [3]f32) -> ^Pssg_Node {
+		box := make([]u8, 24, context.temp_allocator)
+		for k in 0 ..< 3 {
+			binary_store_f32(box, k * 4, lo[k], .Big)
+			binary_store_f32(box, 12 + k * 4, hi[k], .Big)
+		}
+		return prop_test_node(b, "ROOTNODE", {prop_test_attr(b, "id", name)}, {
+			prop_test_node(b, "LODVISIBLERENDERNODE", {prop_test_attr(b, "nickname", "lod")}, {
+				prop_test_node(b, "BOUNDINGBOX", nil, nil, box),
+				prop_test_instance(b, "geom"),
+			}),
+		})
+	}
+	honest := prop(&b, "crate Root", {-0.5, -0.5, -0.5}, {2, 8, 2})
+	placeholder := prop(&b, "birch Root", {-0.3, -0.3, -0.3}, {0.3, 0.3, 0.3})
+
+	lib: Prop_Library
+	prop_test_bind(&b, &lib, {honest, placeholder}, {source})
+
+	lo, hi, ok := prop_lib_reference_bounds(&lib, "crate")
+	testing.expect(t, ok)
+	testing.expect_value(t, hi, [3]f32{2, 8, 2})
+	testing.expect_value(t, lo, [3]f32{-0.5, -0.5, -0.5})
+
+	lo, hi, ok = prop_lib_reference_bounds(&lib, "birch")
+	testing.expect(t, ok)
+	testing.expect_value(t, hi, [3]f32{1, 7, 0})
+}
