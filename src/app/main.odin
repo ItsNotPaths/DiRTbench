@@ -100,7 +100,9 @@ view_delete :: proc(ed: ^Editor) {
 	delete(ed.terrain_brush_offsets)
 	delete(ed.floor_draw)
 	delete(ed.stage_id)
-	prop_preview_clear(&ed.prop_preview)
+	for role in Prop_Role {
+		prop_preview_clear(&ed.prop_browse[role].preview)
+	}
 	stage_cache_clear(ed)
 }
 

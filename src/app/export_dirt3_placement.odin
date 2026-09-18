@@ -61,14 +61,45 @@ d3_ens_reference_node :: proc(entity, mesh: string, allocator := context.temp_al
 	return {tag = "TEMPLATEENTITYREFERENCE", attrs = attrs, content = .Self_Close}
 }
 
-d3_ens_body_node :: proc(id, entity: string, instance: d3.D3_Placement_Instance, allocator := context.temp_allocator) -> d3.Ens_Node {
-	attrs := make([]d3.Ens_Attr, 3, allocator)
+// A placement's rigid body. Two node shapes, and the difference is what the
+// car feels when it arrives.
+//
+// `TEMPLATEBASICENTITYINSTANCE` brings the collision and nothing else. Stock
+// uses it for trees, bushes and fence posts — 511 meshes game-wide that are
+// only ever written this way, none of which moves when hit.
+//
+// `TEMPLATEENTITYINSTANCE` instantiates the venue's whole entity: every
+// subentity, every rigid body and the damage behaviours. `core_barr_haybale_f`
+// is six bales, one anchored at `infMass="1"` and five loose at `infMass="0"`,
+// so this is the difference between a stack that scatters and one immovable
+// lump. All 9391 hay bales in the shipped game are written this way and none is
+// written the other. It costs an `instanceID`, which `track.vis` tag 2 has to
+// declare capacity for even though the entity never receives a box.
+d3_ens_body_node :: proc(
+	id, entity: string,
+	instance: d3.D3_Placement_Instance,
+	form: D3_Ens_Form,
+	instance_id: u32,
+	allocator := context.temp_allocator,
+) -> d3.Ens_Node {
+	dynamic_entity := form == .Dynamic_Entity
+	attrs := make([]d3.Ens_Attr, dynamic_entity ? 4 : 3, allocator)
 	attrs[0] = {name = "id", value = id}
-	attrs[1] = {name = "uri", value = fmt.aprintf("#%s", entity, allocator = allocator)}
-	attrs[2] = {name = "instance_tag", value = fmt.aprintf("%d", instance.instance_tag, allocator = allocator)}
+	at := 1
+	if dynamic_entity {
+		attrs[at] = {name = "instanceID", value = fmt.aprintf("%d", instance_id, allocator = allocator)}
+		at += 1
+	}
+	attrs[at] = {name = "uri", value = fmt.aprintf("#%s", entity, allocator = allocator)}
+	attrs[at + 1] = {name = "instance_tag", value = fmt.aprintf("%d", instance.instance_tag, allocator = allocator)}
 	children := make([]d3.Ens_Node, 1, allocator)
 	children[0] = d3.Ens_Placement_Transform(instance, allocator)
-	return {tag = "TEMPLATEBASICENTITYINSTANCE", attrs = attrs, content = .Children, children = children}
+	return {
+		tag      = dynamic_entity ? "TEMPLATEENTITYINSTANCE" : "TEMPLATEBASICENTITYINSTANCE",
+		attrs    = attrs,
+		content  = .Children,
+		children = children,
+	}
 }
 
 // `instance_tag` runs one ahead of `instance_id`, which is the id `track.vis`
@@ -209,7 +240,7 @@ d3_scatter_placements :: proc(
 				continue
 			}
 			append(&out, Prop_Instance{
-				ref   = {kind = .Trees, name = meshes[binding.mesh].filename},
+				ref   = {kind = .Trees_Pssg, name = meshes[binding.mesh].filename},
 				pos   = prop.pos,
 				rot   = gfx.QuaternionFromAxisAngle({0, 1, 0}, prop.yaw),
 				scale = prop.scale,
@@ -258,6 +289,12 @@ D3_Placement_Out :: struct {
 // reference rows the donor route already had. The donor's own instances are
 // dropped either way — they stand where the old route ran.
 //
+// Three ways a placement can reach the game, and each draws exactly once. An
+// ornament is a placement file instance. An object is an `objects.ens` entity,
+// which carries its own renderable and so is kept out of the placement file. A
+// scattered tree is both: a `trees.bin` instance for the picture and a basic
+// ens record for the collision, which is what stock does with its own.
+//
 // Runs before the route files, because `track.vis` censuses both files for its
 // tag-2 and tag-3 objects and must see what this stage actually has.
 d3_write_placements :: proc(
@@ -286,18 +323,26 @@ d3_write_placements :: proc(
 	append(&all, ..scatter)
 	append(&all, ..placed)
 	donor_rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference
-	donor_rows[.Trees], donor_rows[.Objects] = tree_rows, ornament_refs
-	rows, placements, place_msg, placed_ok := d3_place_resolve(all[:], donor_rows, base_dir)
+	donor_rows[.Trees_Pssg], donor_rows[.Objects_Pssg] = tree_rows, ornament_refs
+	rows, placements, forms, place_msg, placed_ok := d3_place_resolve(
+		all[:], donor_rows, base_dir, len(scatter), bodies,
+	)
 	if !placed_ok {
 		return place_msg, false
 	}
+	// What each placement file actually carries. A dynamic entity draws itself,
+	// so it is in `placements` for its transform and out of the file.
+	file_insts: [Prop_Lib_Kind][]d3.D3_Placement_Instance
+	for kind in Prop_Lib_Kind {
+		file_insts[kind] = d3_place_file_instances(placements[kind], forms[kind])
+	}
 	// Only ornaments honour capacity; trees are written at their exact count.
-	d3_place_capacities(rows[.Objects], placements[.Objects])
+	d3_place_capacities(rows[.Objects_Pssg], file_insts[.Objects_Pssg])
 
 	written := make([dynamic]D3_Placement_Out, context.temp_allocator)
 	for file in ([]struct{name: string, format: d3.D3_Placement_Format, refs: []d3.D3_Placement_Reference, insts: []d3.D3_Placement_Instance}{
-		{"trees.bin", .Trees, rows[.Trees], placements[.Trees]},
-		{"ornaments.bin", .Ornaments, rows[.Objects], placements[.Objects]},
+		{"trees.bin", .Trees, rows[.Trees_Pssg], file_insts[.Trees_Pssg]},
+		{"ornaments.bin", .Ornaments, rows[.Objects_Pssg], file_insts[.Objects_Pssg]},
 	}) {
 		data, build_msg, built := d3.Placement_Build(file.format, file.refs, file.insts, context.temp_allocator)
 		if !built {
@@ -312,7 +357,12 @@ d3_write_placements :: proc(
 		append(&written, D3_Placement_Out{name, xml})
 	}
 
-	nodes, bodied := d3_placement_ens(rows, placements, bodies)
+	// A dynamic entity's `instanceID` continues past the cooked ornaments, which
+	// are the low end of `track.vis` tag 2's drawable space. The vis writer
+	// floors the header count against the ids this produces.
+	nodes, bodied := d3_placement_ens(
+		rows, placements, forms, bodies, u32(len(file_insts[.Objects_Pssg])),
+	)
 	if len(nodes) > 0 {
 		append(&written, D3_Placement_Out{"objects.ens", d3.Ens_Emit(nodes, context.temp_allocator)})
 	}
@@ -322,10 +372,29 @@ d3_write_placements :: proc(
 			return write_msg, false
 		}
 	}
+	// Counted off the forms rather than the roles: the scatter carries no role,
+	// and an object whose mesh the venue gives no body silently falls short of
+	// one, which is the number worth seeing.
+	asked: [D3_Ens_Form]int
+	for kind in Prop_Lib_Kind {
+		for form in forms[kind] {
+			asked[form] += 1
+		}
+	}
+	// An object the venue's art cannot collide is drawn instead, which is worth
+	// saying out loud rather than leaving in the "drawn only" tally.
+	short := 0
+	for inst in placed {
+		if _, has_body := bodies[inst.ref.name]; inst.role == .Object && !has_body {
+			short += 1
+		}
+	}
 	return fmt.tprintf(
-		"%d species, %d scattered trees; %d placed props (%d ornaments); objects.ens: %d records, %d of %d placements given a body (%d entity types off the venue)",
-		species, len(scatter), len(placed),
-		len(placements[.Objects]), len(nodes), bodied, len(all), venue_bodies,
+		"%d species, %d scattered trees; %d placed props; objects.ens: %d records, %d of %d scattered trees given a static body, %d objects given a dynamic entity from id %d, %d drawn only (%d of them objects this venue has no rigid body for; %d entity types off the venue)",
+		species, len(scatter), len(placed), len(nodes),
+		bodied[.Static_Body], asked[.Static_Body],
+		bodied[.Dynamic_Entity], len(file_insts[.Objects_Pssg]),
+		asked[.None], short, venue_bodies,
 	), true
 }
 
@@ -362,8 +431,8 @@ d3_donor_art :: proc(route_dir: string) -> (
 // Record ids are per file, so the two cannot collide inside one objects.ens.
 @(private = "file")
 D3_ENS_PREFIX := [Prop_Lib_Kind]string {
-	.Objects = "dirtbench_orn",
-	.Trees   = "dirtbench_tree",
+	.Objects_Pssg = "dirtbench_orn",
+	.Trees_Pssg   = "dirtbench_tree",
 }
 
 // Every rigid body this stage places, both files sharing one set of entity
@@ -375,16 +444,24 @@ D3_ENS_PREFIX := [Prop_Lib_Kind]string {
 d3_placement_ens :: proc(
 	rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference,
 	placements: [Prop_Lib_Kind][]d3.D3_Placement_Instance,
+	forms: [Prop_Lib_Kind][]D3_Ens_Form,
 	bodies: map[string]string,
-) -> (nodes: []d3.Ens_Node, bodied: int) {
+	first_instance_id: u32,
+) -> (nodes: []d3.Ens_Node, bodied: [D3_Ens_Form]int) {
 	out := make([dynamic]d3.Ens_Node, context.temp_allocator)
 	declared := make(map[string]bool, context.temp_allocator)
+	// One counter across both files: `instanceID` is a whole-file space.
+	next_id := first_instance_id
 	for kind in Prop_Lib_Kind {
-		kind_nodes, kind_bodied := d3_place_ens_nodes(
-			placements[kind], rows[kind], bodies, &declared, D3_ENS_PREFIX[kind],
+		kind_nodes, kind_bodied, after := d3_place_ens_nodes(
+			placements[kind], forms[kind], rows[kind], bodies, &declared,
+			D3_ENS_PREFIX[kind], next_id,
 		)
 		append(&out, ..kind_nodes)
-		bodied += kind_bodied
+		for count, form in kind_bodied {
+			bodied[form] += count
+		}
+		next_id = after
 	}
 	return out[:], bodied
 }

@@ -36,7 +36,10 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // ids stop matching positions, so an older build must not read a v9 file.
 // v10 added the floors block, and v11 the pad's foliage flag.
 // v12 added hand-placed props. Absent in older files, which load with none.
-STAGE_VERSION :: 12
+// v13 split those props into ornaments and objects. A v12 prop loads as an
+// object, which is what it exports as today: the emit gave a body to every prop
+// whose mesh the venue had one for, and still does for an object.
+STAGE_VERSION :: 13
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
@@ -119,6 +122,9 @@ Stage_Floor :: struct {
 Stage_Prop :: struct {
 	name:  string,
 	trees: bool, // from trees.pssg rather than objects.pssg
+	// Drawn only, rather than drawn and collided (v13). Absent in v12, where
+	// every prop collided if its mesh could.
+	scenery: bool,
 	pos:   [3]f32,
 	rot:   [4]f32, // x, y, z, w
 	scale: f32,
@@ -274,11 +280,12 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 		props := make([]Stage_Prop, len(doc.props), context.temp_allocator)
 		for inst, i in doc.props {
 			props[i] = {
-				name  = inst.ref.name,
-				trees = inst.ref.kind == .Trees,
-				pos   = {inst.pos.x, inst.pos.y, inst.pos.z},
-				rot   = quat_to_array(inst.rot),
-				scale = inst.scale,
+				name    = inst.ref.name,
+				trees   = inst.ref.kind == .Trees_Pssg,
+				scenery = inst.role == .Ornament,
+				pos     = {inst.pos.x, inst.pos.y, inst.pos.z},
+				rot     = quat_to_array(inst.rot),
+				scale   = inst.scale,
 			}
 		}
 		stage.props = props
@@ -459,7 +466,8 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 				continue
 			}
 			append(&doc.props, Prop_Instance{
-				ref   = {kind = pr.trees ? .Trees : .Objects, name = strings.clone(pr.name)},
+				ref   = {kind = pr.trees ? .Trees_Pssg : .Objects_Pssg, name = strings.clone(pr.name)},
+				role  = pr.scenery ? .Ornament : .Object,
 				pos   = {pr.pos[0], pr.pos[1], pr.pos[2]},
 				rot   = quat_from_array(pr.rot),
 				scale = clamp(pr.scale, PROP_SCALE_MIN, PROP_SCALE_MAX),

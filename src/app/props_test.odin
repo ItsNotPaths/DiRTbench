@@ -6,6 +6,7 @@ package main
 // this is the document's half — the placements themselves.
 
 import "core:os"
+import "core:strings"
 import "core:testing"
 import "../gfx"
 
@@ -15,8 +16,8 @@ props_round_trip_through_road_json :: proc(t: ^testing.T) {
 	defer delete(doc.spline.points)
 	defer props_free(&doc)
 	seed_spline(&doc.spline)
-	prop_place(&doc, {kind = .Objects, name = "core_barr_haybale_e"}, {12, 3, -40})
-	prop_place(&doc, {kind = .Trees, name = "birch_full_01_a"}, {0, 1, 0})
+	prop_place(&doc, {kind = .Objects_Pssg, name = "core_barr_haybale_e"}, .Object, {12, 3, -40})
+	prop_place(&doc, {kind = .Trees_Pssg, name = "birch_full_01_a"}, .Ornament, {0, 1, 0})
 	doc.props[0].rot = gfx.QuaternionFromAxisAngle({0, 1, 0}, 1.2)
 	doc.props[0].scale = 2.5
 
@@ -34,7 +35,7 @@ props_round_trip_through_road_json :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, len(back.props), 2)
 	testing.expect_value(t, back.props[0].ref.name, "core_barr_haybale_e")
-	testing.expect_value(t, back.props[0].ref.kind, Prop_Lib_Kind.Objects)
+	testing.expect_value(t, back.props[0].ref.kind, Prop_Lib_Kind.Objects_Pssg)
 	testing.expect_value(t, back.props[0].pos, gfx.Vector3{12, 3, -40})
 	testing.expect_value(t, back.props[0].scale, f32(2.5))
 	testing.expect(
@@ -47,7 +48,11 @@ props_round_trip_through_road_json :: proc(t: ^testing.T) {
 	)
 	// Which library a prop came from is part of its identity: the two files are
 	// separate namespaces, and a tree resolved against objects.pssg is a miss.
-	testing.expect_value(t, back.props[1].ref.kind, Prop_Lib_Kind.Trees)
+	testing.expect_value(t, back.props[1].ref.kind, Prop_Lib_Kind.Trees_Pssg)
+	// So is the role. It decides whether the prop gets an objects.ens body, and
+	// the two placements above were dropped from different browsers.
+	testing.expect_value(t, back.props[0].role, Prop_Role.Object)
+	testing.expect_value(t, back.props[1].role, Prop_Role.Ornament)
 
 	// A second load must not stack them up.
 	if _, ok := load_road(&back, path); !ok {
@@ -73,9 +78,48 @@ a_road_without_props_loads_as_none :: proc(t: ^testing.T) {
 	back := doc_defaults()
 	defer delete(back.spline.points)
 	defer props_free(&back)
-	prop_place(&back, {kind = .Objects, name = "left_over"}, {1, 1, 1})
+	prop_place(&back, {kind = .Objects_Pssg, name = "left_over"}, .Object, {1, 1, 1})
 	if _, ok := load_road(&back, path); !ok {
 		testing.fail_now(t, "could not read the road back")
 	}
 	testing.expect_value(t, len(back.props), 0)
+}
+
+// A v12 road has no role on its props. Every one of them collided if its mesh
+// could, so they load as objects and export exactly as they did before.
+//
+// The file is our own writer's output with the role taken back out, rather than
+// a hand-typed one: a v12 road has to be rejected for its version alone, not
+// for some field the test forgot.
+@(test)
+a_v12_prop_loads_as_an_object :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer delete(doc.spline.points)
+	defer props_free(&doc)
+	seed_spline(&doc.spline)
+	prop_place(&doc, {kind = .Objects_Pssg, name = "core_barr_haybale_e"}, .Ornament, {1, 2, 3})
+
+	path := "/tmp/claude-1000/dirtbench-props-v12.json"
+	defer os.remove(path)
+	if _, ok := save_road(&doc, path); !ok {
+		testing.fail_now(t, "could not write the road")
+	}
+	data, rerr := os.read_entire_file(path, context.temp_allocator)
+	if rerr != nil {
+		testing.fail_now(t, "could not read the road back")
+	}
+	text, _ := strings.replace_all(string(data), `"version": 13`, `"version": 12`, context.temp_allocator)
+	text, _ = strings.replace_all(text, `"scenery": true`, `"scenery": false`, context.temp_allocator)
+	if werr := os.write_entire_file(path, transmute([]u8)text); werr != nil {
+		testing.fail_now(t, "could not write the v12 road")
+	}
+
+	back := doc_defaults()
+	defer delete(back.spline.points)
+	defer props_free(&back)
+	if _, ok := load_road(&back, path); !ok {
+		testing.fail_now(t, "could not read the v12 road")
+	}
+	testing.expect_value(t, len(back.props), 1)
+	testing.expect_value(t, back.props[0].role, Prop_Role.Object)
 }

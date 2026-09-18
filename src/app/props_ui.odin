@@ -1,12 +1,16 @@
 package main
 
-// The prop browser: what the base venue ships, what one looks like, and the
+// The prop browsers: what the base venue ships, what one looks like, and the
 // mode that drops it in the world.
 //
-// A section of the Inspector, beside Terrain and Vegetation — the three are the
-// same kind of thing, the scenery knobs of the venue. Picking a prop happens in
-// the filtered list and nowhere else; the thumbnail beside it only shows what
-// is picked.
+// Two sections of the Inspector, beside Terrain and Vegetation. One browser per
+// `Prop_Role`, because an object and an ornament are placed for different
+// reasons and get picked from different ends of the catalogue. They share the
+// one parse: both list out of `Prop_Catalog.refs`, and the Objects section is
+// that list filtered down to the meshes the venue can collide.
+//
+// Picking a prop happens in the filtered list and nowhere else; the thumbnail
+// beside it only shows what is picked.
 //
 // That thumbnail is projected and painted by hand into the dock's ImGui draw
 // list rather than rendered into a texture: the prop is a few thousand
@@ -29,13 +33,50 @@ PROP_PREVIEW_H :: 170
 
 PROP_PREVIEW_SENS :: 0.01 // radians per pixel of drag
 
-// The catalogue entry the browser has selected, if any.
-prop_picked :: proc(ed: ^Editor) -> (ref: Prop_Ref, ok: bool) {
+// One of the two browsers: what it has picked out of the catalogue, the text
+// narrowing its list, and the thumbnail it is spinning.
+//
+// `pick` indexes the catalogue's own ref list rather than naming a prop,
+// because the catalogue owns those strings and a reload frees them.
+Prop_Browser :: struct {
+	pick:    int,
+	filter:  [64]u8,
+	preview: Prop_Preview,
+	yaw:     f32,
+	pitch:   f32,
+}
+
+prop_browser_defaults :: proc() -> Prop_Browser {
+	return {pick = -1, yaw = 0.7, pitch = 0.35}
+}
+
+// The catalogue entry one browser has selected, if any. A pick is dropped when
+// the mesh under it can no longer take the role — a base venue change can turn
+// an object's mesh into one this venue has no rigid body for.
+prop_picked :: proc(ed: ^Editor, role: Prop_Role) -> (ref: Prop_Ref, ok: bool) {
 	cat := &ed.doc.props_lib
-	if cat.state != .Ready || ed.prop_pick < 0 || ed.prop_pick >= len(cat.refs) {
+	pick := ed.prop_browse[role].pick
+	if cat.state != .Ready || pick < 0 || pick >= len(cat.refs) {
 		return
 	}
-	return cat.refs[ed.prop_pick], true
+	ref = cat.refs[pick]
+	return ref, prop_role_allowed(cat, ref, role)
+}
+
+// Whether a mesh may be placed in this role. Every mesh can be an ornament;
+// only the ones the venue declares an entity type for can be an object.
+prop_role_allowed :: proc(cat: ^Prop_Catalog, ref: Prop_Ref, role: Prop_Role) -> bool {
+	return role == .Ornament || prop_has_body(cat, ref)
+}
+
+// How many placements carry this role. The two sections each report their own.
+prop_role_count :: proc(doc: ^Venue_Doc, role: Prop_Role) -> (n: int) {
+	for inst in doc.props {
+		if inst.role == role {
+			n += 1
+		}
+	}
+	return
 }
 
 // The selected placement, or -1. Validates the index: a delete or a load can
@@ -49,48 +90,86 @@ selected_prop :: proc(ed: ^Editor) -> int {
 
 // --- the Inspector section ------------------------------------------------------
 
-draw_props_section :: proc(ed: ^Editor) {
+// Objects first: a prop is more often placed to be hit than to be looked at,
+// and the Objects list is the shorter of the two.
+draw_props_sections :: proc(ed: ^Editor) {
+	if !draw_prop_catalog_gate(ed) {
+		return
+	}
+	draw_prop_role_section(ed, .Object)
+	draw_prop_role_section(ed, .Ornament)
+}
+
+// The one block both sections would otherwise repeat: no base venue, or a
+// catalogue that has not been parsed yet. True when there is art to browse.
+draw_prop_catalog_gate :: proc(ed: ^Editor) -> bool {
+	cat := &ed.doc.props_lib
+	if cat.state == .Ready {
+		return true
+	}
 	if !ui.igCollapsingHeader_TreeNodeFlags("Props", ui.IM_TREE_NODE_DEFAULT_OPEN) {
+		return false
+	}
+	if ed.doc.base == "" {
+		ui.im_text_colored(DIM_COL, "a loose road has no base venue to take props from")
+		return false
+	}
+	ui.im_text(fmt.ctprintf("art from %s", ed.doc.base))
+	if cat.state == .Failed {
+		ui.im_text_colored(WARN_COL, fmt.ctprint(cat.msg))
+	}
+	if ui.im_button("Load prop library") {
+		msg, ok := prop_catalog_load(ed.doc)
+		set_status(&ed.status, ok ? "prop library loaded" : msg, ok)
+	}
+	return false
+}
+
+// One browser. Objects and ornaments differ only in which meshes the list holds
+// and what the placement is for, so one proc draws both.
+draw_prop_role_section :: proc(ed: ^Editor, role: Prop_Role) {
+	if !ui.igCollapsingHeader_TreeNodeFlags(
+		fmt.ctprint(PROP_ROLE_NAMES[role]), ui.IM_TREE_NODE_DEFAULT_OPEN,
+	) {
 		return
 	}
 	cat := &ed.doc.props_lib
+	browser := &ed.prop_browse[role]
 
-	if ed.doc.base == "" {
-		ui.im_text_colored(DIM_COL, "a loose road has no base venue to take props from")
-		return
+	listed := 0
+	for ref in cat.refs {
+		if prop_role_allowed(cat, ref, role) {
+			listed += 1
+		}
 	}
-	if cat.state != .Ready {
-		ui.im_text(fmt.ctprintf("art from %s", ed.doc.base))
-		if cat.state == .Failed {
-			ui.im_text_colored(WARN_COL, fmt.ctprint(cat.msg))
-		}
-		if ui.im_button("Load prop library") {
-			msg, ok := prop_catalog_load(ed.doc)
-			set_status(&ed.status, ok ? "prop library loaded" : msg, ok)
-		}
-		return
+	if role == .Object {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf(
+			"%d of %s's %d meshes carry a rigid body", listed, ed.doc.base, len(cat.refs),
+		))
+	} else {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%d meshes from %s, drawn only", listed, ed.doc.base))
 	}
 
-	ui.im_text_colored(DIM_COL, fmt.ctprintf("%d props from %s", len(cat.refs), ed.doc.base))
 	ui.igSetNextItemWidth(-1)
 	ui.igInputText(
-		"###prop_filter", raw_data(ed.prop_filter[:]), len(ed.prop_filter),
+		fmt.ctprintf("###prop_filter_%v", role), raw_data(browser.filter[:]), len(browser.filter),
 		ui.IM_INPUT_TEXT_NONE, nil, nil,
 	)
 	ui.im_text_colored(DIM_COL, "filter by name")
 
-	draw_prop_list(ed)
-	draw_prop_preview(ed)
+	draw_prop_list(ed, role)
+	draw_prop_preview(ed, role)
 
-	ref, have := prop_picked(ed)
+	ref, have := prop_picked(ed, role)
+	placing := prop_placing_role(ed) == role
 	ui.igBeginDisabled(!have)
-	if ui.im_button(ed.prop_placing ? "Stop placing" : "Place") {
-		ed.prop_placing = !ed.prop_placing
+	if ui.im_button(fmt.ctprintf("%s###prop_place_%v", placing ? "Stop placing" : "Place", role)) {
+		prop_set_placing(ed, role, !placing)
 	}
 	ui.igEndDisabled()
 	ui.im_same_line()
-	ui.im_text(fmt.ctprintf("%d placed", len(ed.doc.props)))
-	if ed.prop_placing && have {
+	ui.im_text(fmt.ctprintf("%d placed", prop_role_count(ed.doc, role)))
+	if placing && have {
 		ui.im_text_colored(MINE_COL, fmt.ctprintf("click the ground to drop %s", ref.name))
 		ui.im_text_colored(DIM_COL, "Esc or right-click stops")
 	} else {
@@ -100,23 +179,34 @@ draw_props_section :: proc(ed: ^Editor) {
 
 // The filtered name list. Every match is listed — the largest stock library is
 // under 200 props, so the scroll bar is enough and nothing is ever hidden.
-draw_prop_list :: proc(ed: ^Editor) {
+//
+// The ids carry the role, so the two lists do not share ImGui state.
+draw_prop_list :: proc(ed: ^Editor, role: Prop_Role) {
 	cat := &ed.doc.props_lib
-	filter := strings.to_lower(buf_text(ed.prop_filter[:]), context.temp_allocator)
-	if !ui.igBeginChild_Str("prop_list", {0, PROP_LIST_H}, ui.IM_CHILD_BORDERS, ui.IM_WINDOW_NONE) {
+	browser := &ed.prop_browse[role]
+	filter := strings.to_lower(buf_text(browser.filter[:]), context.temp_allocator)
+	if !ui.igBeginChild_Str(
+		fmt.ctprintf("prop_list_%v", role), {0, PROP_LIST_H},
+		ui.IM_CHILD_BORDERS, ui.IM_WINDOW_NONE,
+	) {
 		ui.igEndChild()
 		return
 	}
 	shown := 0
 	for ref, i in cat.refs {
+		if !prop_role_allowed(cat, ref, role) {
+			continue
+		}
 		if filter != "" &&
 		   !strings.contains(strings.to_lower(ref.name, context.temp_allocator), filter) {
 			continue
 		}
 		shown += 1
-		label := fmt.ctprintf("%s%s###prop%d", ref.name, ref.kind == .Trees ? "  (tree)" : "", i)
-		if ui.igSelectable_Bool(label, i == ed.prop_pick, ui.IM_SELECTABLE_NONE, {0, 0}) {
-			ed.prop_pick = i
+		label := fmt.ctprintf(
+			"%s%s###prop%v%d", ref.name, ref.kind == .Trees_Pssg ? "  (tree)" : "", role, i,
+		)
+		if ui.igSelectable_Bool(label, i == browser.pick, ui.IM_SELECTABLE_NONE, {0, 0}) {
+			browser.pick = i
 		}
 	}
 	if shown == 0 {
@@ -248,22 +338,23 @@ prop_preview_faces :: proc(
 // nothing — the list is the only place a prop is chosen. Painted straight into
 // the dock: the faces come back sorted back to front, so filling them in order
 // is the whole of the hidden-surface handling.
-draw_prop_preview :: proc(ed: ^Editor) {
-	ref, have := prop_picked(ed)
+draw_prop_preview :: proc(ed: ^Editor, role: Prop_Role) {
+	browser := &ed.prop_browse[role]
+	ref, have := prop_picked(ed, role)
 	if !have {
 		ui.im_text_colored(DIM_COL, "no prop picked")
 		return
 	}
-	prop_preview_build(ed.doc, ref, &ed.prop_preview)
+	prop_preview_build(ed.doc, ref, &browser.preview)
 
 	avail := ui.igGetContentRegionAvail()
 	size := ui.Im_Vec2{avail.x, PROP_PREVIEW_H}
 	at := ui.igGetCursorScreenPos()
-	ui.igInvisibleButton("prop_preview", size, ui.IM_BUTTON_NONE)
+	ui.igInvisibleButton(fmt.ctprintf("prop_preview_%v", role), size, ui.IM_BUTTON_NONE)
 	if ui.igIsItemActive() {
 		drag := gfx.GetMouseDelta()
-		ed.prop_yaw += drag.x * PROP_PREVIEW_SENS
-		ed.prop_pitch = clamp(ed.prop_pitch + drag.y * PROP_PREVIEW_SENS, -1.5, 1.5)
+		browser.yaw += drag.x * PROP_PREVIEW_SENS
+		browser.pitch = clamp(browser.pitch + drag.y * PROP_PREVIEW_SENS, -1.5, 1.5)
 	}
 
 	list := ui.igGetWindowDrawList()
@@ -271,7 +362,7 @@ draw_prop_preview :: proc(ed: ^Editor) {
 	ui.ImDrawList_PushClipRect(list, at, far, true)
 	ui.ImDrawList_AddRectFilled(list, at, far, ui.im_col32(22, 24, 30, 255), 0, 0)
 	base := PROP_BASE_COLOUR[ref.kind]
-	for face in prop_preview_faces(&ed.prop_preview, ed.prop_yaw, ed.prop_pitch, {size.x, size.y}) {
+	for face in prop_preview_faces(&browser.preview, browser.yaw, browser.pitch, {size.x, size.y}) {
 		rgb := prop_shade_colour(base, face.shade)
 		col := ui.im_col32(rgb[0], rgb[1], rgb[2], 255)
 		p :: proc(at: ui.Im_Vec2, v: [2]f32) -> ui.Im_Vec2 {
@@ -281,7 +372,7 @@ draw_prop_preview :: proc(ed: ^Editor) {
 	}
 	ui.ImDrawList_PopClipRect(list)
 
-	pv := &ed.prop_preview
+	pv := &browser.preview
 	if len(pv.tris) == 0 {
 		ui.im_text_colored(WARN_COL, "this prop has no drawable geometry")
 		return
@@ -299,19 +390,20 @@ draw_prop_preview :: proc(ed: ^Editor) {
 
 // --- the selection block ---------------------------------------------------------
 
-// One placed prop: where it stands, how big, and the way out. Its rotation is
-// the gizmo's, so there are no angle fields here.
+// One placed prop: what it is for, where it stands, how big, and the way out.
+// Its rotation is the gizmo's, so there are no angle fields here.
 draw_prop_selection :: proc(ed: ^Editor) {
 	pi := selected_prop(ed)
 	if pi < 0 {
 		return
 	}
 	inst := &ed.doc.props[pi]
-	ui.igSeparatorText(fmt.ctprintf("Prop %d of %d", pi, len(ed.doc.props)))
+	ui.igSeparatorText(fmt.ctprintf("%s %d of %d", PROP_ROLE_NAMES[inst.role], pi, len(ed.doc.props)))
 	ui.im_text(fmt.ctprint(inst.ref.name))
 	if _, drawn := prop_drawable(ed.doc, inst.ref); !drawn {
 		ui.im_text_colored(WARN_COL, fmt.ctprintf("%s does not ship this prop", ed.doc.base))
 	}
+	draw_prop_role_switch(ed, inst)
 	if ui.igDragFloat3("position", cast(^[3]f32)&inst.pos, 0.1, 0, 0, "%.2f m", ui.IM_SLIDER_NONE) {
 		mark_edited(ed.doc)
 	}
@@ -326,5 +418,29 @@ draw_prop_selection :: proc(ed: ^Editor) {
 	if ui.im_button("Delete prop") {
 		prop_remove(ed.doc, pi)
 		ed.sel = {}
+	}
+}
+
+// Turning one placement from scenery into an obstacle, or back. Disabled toward
+// Object when the venue declares no entity type for the mesh: without one there
+// is nothing for an `objects.ens` body to point at, and the prop would export as
+// scenery while claiming to collide.
+draw_prop_role_switch :: proc(ed: ^Editor, inst: ^Prop_Instance) {
+	cat := &ed.doc.props_lib
+	for role in Prop_Role {
+		if role != .Ornament {
+			ui.im_same_line()
+		}
+		allowed := cat.state != .Ready || prop_role_allowed(cat, inst.ref, role)
+		ui.igBeginDisabled(!allowed)
+		if ui.igRadioButton_Bool(fmt.ctprint(PROP_ROLE_NAMES[role]), inst.role == role) &&
+		   inst.role != role {
+			inst.role = role
+			mark_edited(ed.doc)
+		}
+		ui.igEndDisabled()
+	}
+	if cat.state == .Ready && !prop_has_body(cat, inst.ref) {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%s has no rigid body for this mesh", ed.doc.base))
 	}
 }

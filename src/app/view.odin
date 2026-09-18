@@ -158,18 +158,14 @@ Editor :: struct {
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
 
-	// The prop browser (props.odin). `prop_pick` indexes the catalogue's own
-	// ref list rather than naming a prop, because the catalogue owns those
-	// strings and a reload frees them. `prop_placing` is the mode the next
-	// viewport click drops one in.
-	prop_pick:     int,
-	prop_placing:  bool,
-	prop_filter:   [64]u8,
-	prop_preview:  Prop_Preview,
+	// The two prop browsers (props_ui.odin), one per role. `prop_placing` says
+	// which of them owns the next viewport click, and nothing is being placed
+	// when it is nil. `prop_last` is the one B toggles.
+	prop_browse:   [Prop_Role]Prop_Browser,
+	prop_placing:  Maybe(Prop_Role),
+	prop_last:     Prop_Role,
 	prop_ghost:    gfx.Vector3,
 	prop_ghost_ok: bool,
-	prop_yaw:      f32,
-	prop_pitch:    f32,
 	wireframe:     bool,
 	quit:          bool,
 
@@ -434,9 +430,11 @@ view_defaults :: proc() -> Editor {
 		cam = {target = {10, 3, 48}, distance = 110, yaw = 0.6, pitch = 0.6},
 		preview_speed = 30, // ~108 km/h
 		route_sel = -1,
-		prop_pick = -1,
-		prop_yaw = 0.7,
-		prop_pitch = 0.35,
+		prop_browse = {
+			.Ornament = prop_browser_defaults(),
+			.Object   = prop_browser_defaults(),
+		},
+		prop_last = .Object,
 	}
 }
 
@@ -580,9 +578,11 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 		do_save(ed)
 	}
 	// B is the prop-placing mode. Which prop it places is the Inspector's half of
-	// it, and is already picked by the time this is any use.
+	// it, and is already picked by the time this is any use. Two browsers now, so
+	// B toggles whichever was last used.
 	if ed.kind == .Venue && gfx.IsKeyPressed(.B) {
-		ed.prop_placing = !ed.prop_placing
+		_, placing := ed.prop_placing.?
+		prop_set_placing(ed, ed.prop_last, !placing)
 	}
 }
 

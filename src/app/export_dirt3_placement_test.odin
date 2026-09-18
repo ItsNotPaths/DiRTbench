@@ -163,7 +163,7 @@ prop_instances_number_densely_and_carry_yaw_and_scale :: proc(t: ^testing.T) {
 	}
 	row_of := make(map[string]int, context.temp_allocator)
 	row_of["conifer"], row_of["bush"] = 0, 1
-	instances := d3_place_instances(d3_scatter_placements(props, meshes, bindings), .Trees, row_of)
+	instances, _ := d3_place_instances(d3_scatter_placements(props, meshes, bindings), .Trees_Pssg, row_of)
 	testing.expect_value(t, len(instances), 2)
 	for inst, i in instances {
 		testing.expect_value(t, inst.instance_id, u32(i))
@@ -195,8 +195,10 @@ route_number_reads_the_id_and_falls_back_to_zero :: proc(t: ^testing.T) {
 // --- hand-placed props ----------------------------------------------------------
 
 @(private = "file")
-test_placed :: proc(kind: Prop_Lib_Kind, name: string, pos: gfx.Vector3) -> Prop_Instance {
-	return {ref = {kind = kind, name = name}, pos = pos, rot = gfx.Quaternion(1), scale = 1}
+test_placed :: proc(
+	kind: Prop_Lib_Kind, name: string, pos: gfx.Vector3, role := Prop_Role.Object,
+) -> Prop_Instance {
+	return {ref = {kind = kind, name = name}, role = role, pos = pos, rot = gfx.Quaternion(1), scale = 1}
 }
 
 // The scatter and a hand-placed prop must write the same nine numbers for the
@@ -224,17 +226,17 @@ prop_basis_is_the_scatter_convention :: proc(t: ^testing.T) {
 placing_reuses_a_row_before_adding_one :: proc(t: ^testing.T) {
 	rows := []d3.D3_Placement_Reference{test_reference(0, "pole_mesh"), test_reference(1, "core_barr_haybale_e")}
 	placed := []Prop_Instance{
-		test_placed(.Objects, "core_barr_haybale_e", {1, 0, 0}),
-		test_placed(.Objects, "core_barr_haybale_e", {2, 0, 0}),
-		test_placed(.Trees, "birch_full_01_a", {3, 0, 0}),
+		test_placed(.Objects_Pssg, "core_barr_haybale_e", {1, 0, 0}),
+		test_placed(.Objects_Pssg, "core_barr_haybale_e", {2, 0, 0}),
+		test_placed(.Trees_Pssg, "birch_full_01_a", {3, 0, 0}),
 	}
-	out, row_of, msg, ok := d3_place_references(placed, .Objects, rows, nil)
+	out, row_of, msg, ok := d3_place_references(placed, .Objects_Pssg, rows, nil)
 	testing.expect(t, ok, msg); if !ok { return }
 	// Nothing new: the hay bale is already there and the tree is another file's.
 	testing.expect_value(t, len(out), 2)
 	testing.expect_value(t, row_of["core_barr_haybale_e"], 1)
 
-	instances := d3_place_instances(placed, .Objects, row_of)
+	instances, _ := d3_place_instances(placed, .Objects_Pssg, row_of)
 	testing.expect_value(t, len(instances), 2)
 	testing.expect_value(t, instances[0].reference_id, u32(1))
 	testing.expect_value(t, instances[1].instance_id, u32(1))
@@ -255,11 +257,11 @@ placed_trees_number_on_from_the_scatter :: proc(t: ^testing.T) {
 	)
 	all := make([dynamic]Prop_Instance, context.temp_allocator)
 	append(&all, ..scatter)
-	append(&all, test_placed(.Trees, "birch", {1, 0, 0}))
+	append(&all, test_placed(.Trees_Pssg, "birch", {1, 0, 0}))
 
-	_, row_of, msg, ok := d3_place_references(all[:], .Trees, rows, nil)
+	_, row_of, msg, ok := d3_place_references(all[:], .Trees_Pssg, rows, nil)
 	testing.expect(t, ok, msg); if !ok { return }
-	instances := d3_place_instances(all[:], .Trees, row_of)
+	instances, _ := d3_place_instances(all[:], .Trees_Pssg, row_of)
 	testing.expect_value(t, len(instances), 3)
 	testing.expect_value(t, instances[2].reference_id, u32(1))
 	testing.expect_value(t, instances[2].instance_id, u32(2))
@@ -271,8 +273,8 @@ placed_trees_number_on_from_the_scatter :: proc(t: ^testing.T) {
 @(test)
 placing_an_unknown_prop_needs_the_library :: proc(t: ^testing.T) {
 	rows := []d3.D3_Placement_Reference{test_reference(0, "pole_mesh")}
-	placed := []Prop_Instance{test_placed(.Objects, "barrel_wood_a", {0, 0, 0})}
-	_, _, _, ok := d3_place_references(placed, .Objects, rows, nil)
+	placed := []Prop_Instance{test_placed(.Objects_Pssg, "barrel_wood_a", {0, 0, 0})}
+	_, _, _, ok := d3_place_references(placed, .Objects_Pssg, rows, nil)
 	testing.expect(t, !ok, "a prop with no row and no library was accepted")
 }
 
@@ -305,23 +307,172 @@ placed_bodies_declare_each_mesh_once :: proc(t: ^testing.T) {
 		{reference_id = 1, instance_id = 2, instance_tag = 3},
 	}
 	declared := make(map[string]bool, context.temp_allocator)
-	nodes, bodied := d3_place_ens_nodes(
-		instances, rows, test_bodies("core_barr_haybale_e"), &declared, "test",
+	objects := []D3_Ens_Form{.Dynamic_Entity, .Dynamic_Entity, .Dynamic_Entity}
+	nodes, bodied, _ := d3_place_ens_nodes(
+		instances, objects, rows, test_bodies("core_barr_haybale_e"), &declared, "test",
 	)
-	testing.expect_value(t, bodied, 2)
+	testing.expect_value(t, bodied[.Dynamic_Entity], 2)
 	refs, bodies := 0, 0
 	for node in nodes {
 		switch node.tag {
 		case "TEMPLATEENTITYREFERENCE": refs += 1
-		case "TEMPLATEBASICENTITYINSTANCE": bodies += 1
+		// Either instance shape is a body; this is about the declarations.
+		case "TEMPLATEBASICENTITYINSTANCE", "TEMPLATEENTITYINSTANCE": bodies += 1
 		}
 	}
 	testing.expect_value(t, refs, 1)
 	testing.expect_value(t, bodies, 2)
 
 	// A second call into the same file sees the reference is already declared.
-	again, _ := d3_place_ens_nodes(instances[:1], rows, test_bodies("core_barr_haybale_e"), &declared, "test2")
+	again, _, _ := d3_place_ens_nodes(
+		instances[:1], objects[:1], rows, test_bodies("core_barr_haybale_e"), &declared, "test2",
+	)
 	for node in again {
 		testing.expect(t, node.tag != "TEMPLATEENTITYREFERENCE", "a mesh was declared twice in one objects.ens")
 	}
+}
+
+// The role, not the art, decides what collides. A hay bale placed as an
+// ornament gets no record even though the venue declares a body for its mesh,
+// which is the whole point of the two browsers.
+@(test)
+an_ornament_gets_no_body_even_where_the_art_has_one :: proc(t: ^testing.T) {
+	rows := []d3.D3_Placement_Reference{test_reference(0, "core_barr_haybale_e")}
+	instances := []d3.D3_Placement_Instance{
+		{reference_id = 0, instance_id = 0, instance_tag = 1},
+		{reference_id = 0, instance_id = 1, instance_tag = 2},
+	}
+	declared := make(map[string]bool, context.temp_allocator)
+	nodes, bodied, _ := d3_place_ens_nodes(
+		instances, []D3_Ens_Form{.None, .Dynamic_Entity}, rows,
+		test_bodies("core_barr_haybale_e"), &declared, "test",
+	)
+	testing.expect_value(t, bodied[.Dynamic_Entity], 1)
+	// The body that was written is the second instance's, not the first's.
+	for node in nodes {
+		if node.tag != "TEMPLATEBASICENTITYINSTANCE" {
+			continue
+		}
+		tag, has_tag := d3.Ens_Attr_Value(node, "instance_tag")
+		testing.expect(t, has_tag && tag == "2", "the ornament was given the body")
+	}
+}
+
+// The form travels with the instance through the whole resolve, so a body
+// cannot land on the drawable next to the one that asked for it.
+@(test)
+forms_stay_with_their_instances :: proc(t: ^testing.T) {
+	rows := []d3.D3_Placement_Reference{test_reference(0, "core_barr_haybale_e")}
+	placed := []Prop_Instance{
+		test_placed(.Trees_Pssg, "core_barr_haybale_e", {0, 0, 0}, .Object),
+		test_placed(.Objects_Pssg, "core_barr_haybale_e", {1, 0, 0}, .Ornament),
+		test_placed(.Objects_Pssg, "core_barr_haybale_e", {2, 0, 0}, .Object),
+	}
+	_, row_of, msg, ok := d3_place_references(placed, .Objects_Pssg, rows, nil)
+	testing.expect(t, ok, msg); if !ok { return }
+	instances, forms := d3_place_instances(
+		placed, .Objects_Pssg, row_of, 0, test_bodies("core_barr_haybale_e"),
+	)
+	// The tree is another file's, so it is neither an instance nor a form here.
+	testing.expect_value(t, len(instances), 2)
+	testing.expect_value(t, len(forms), 2)
+	testing.expect_value(t, forms[0], D3_Ens_Form.None)
+	testing.expect_value(t, forms[1], D3_Ens_Form.Dynamic_Entity)
+	testing.expect_value(t, instances[1].position, [3]f32{2, 0, 0})
+}
+
+// The node shape is the difference between a hay bale stack that scatters and
+// one immovable lump. Stock writes all 9391 of its hay bales as
+// TEMPLATEENTITYINSTANCE and none as the basic form; it writes its scattered
+// trees the other way round, because the basic form costs no drawable id.
+@(test)
+an_object_is_a_dynamic_entity_and_the_scatter_is_not :: proc(t: ^testing.T) {
+	rows := []d3.D3_Placement_Reference{test_reference(0, "core_barr_haybale_e")}
+	instances := []d3.D3_Placement_Instance{
+		{reference_id = 0, instance_id = 0, instance_tag = 1},
+		{reference_id = 0, instance_id = 1, instance_tag = 2},
+	}
+	declared := make(map[string]bool, context.temp_allocator)
+	nodes, _, next := d3_place_ens_nodes(
+		instances, []D3_Ens_Form{.Static_Body, .Dynamic_Entity}, rows,
+		test_bodies("core_barr_haybale_e"), &declared, "test", 7,
+	)
+	basic, full := 0, 0
+	for node in nodes {
+		switch node.tag {
+		case "TEMPLATEBASICENTITYINSTANCE":
+			basic += 1
+			_, has_id := d3.Ens_Attr_Value(node, "instanceID")
+			testing.expect(t, !has_id, "a static body was given a drawable id")
+		case "TEMPLATEENTITYINSTANCE":
+			full += 1
+			id, has_id := d3.Ens_Attr_Value(node, "instanceID")
+			testing.expect(t, has_id && id == "7", "the dynamic entity did not take the next id")
+		}
+	}
+	testing.expect_value(t, basic, 1)
+	testing.expect_value(t, full, 1)
+	// Only the dynamic one spent an id.
+	testing.expect_value(t, next, u32(8))
+}
+
+// The scatter leads the combined list and is bulk scenery whatever role its
+// instances carry, so it never spends a tag-2 drawable id.
+@(test)
+the_scatter_never_becomes_a_dynamic_entity :: proc(t: ^testing.T) {
+	scatter := test_placed(.Trees_Pssg, "dougfir", {0, 0, 0}, .Object)
+	testing.expect_value(t, d3_ens_form(scatter, 0, 1, true), D3_Ens_Form.Static_Body)
+	// Past the scatter, the role decides.
+	placed_object := test_placed(.Objects_Pssg, "core_barr_haybale_e", {1, 0, 0}, .Object)
+	placed_orn := test_placed(.Objects_Pssg, "core_barr_haybale_e", {2, 0, 0}, .Ornament)
+	testing.expect_value(t, d3_ens_form(placed_object, 1, 1, true), D3_Ens_Form.Dynamic_Entity)
+	testing.expect_value(t, d3_ens_form(placed_orn, 2, 1, true), D3_Ens_Form.None)
+}
+
+// An object the venue gives no rigid body still has to be drawn. Taking it out
+// of the placement file for an objects.ens record that never gets written
+// would delete the prop from the stage.
+@(test)
+an_object_with_no_body_falls_back_to_being_drawn :: proc(t: ^testing.T) {
+	bodyless := test_placed(.Objects_Pssg, "boat_small_b", {0, 0, 0}, .Object)
+	testing.expect_value(t, d3_ens_form(bodyless, 0, 0, false), D3_Ens_Form.None)
+
+	rows := []d3.D3_Placement_Reference{test_reference(0, "boat_small_b")}
+	placed := []Prop_Instance{bodyless}
+	_, row_of, msg, ok := d3_place_references(placed, .Objects_Pssg, rows, nil)
+	testing.expect(t, ok, msg); if !ok { return }
+	// No bodies map at all, which is the venue that declares nothing.
+	instances, forms := d3_place_instances(placed, .Objects_Pssg, row_of, 0, nil)
+	testing.expect_value(t, forms[0], D3_Ens_Form.None)
+	testing.expect_value(t, len(d3_place_file_instances(instances, forms)), 1)
+}
+
+// An object draws itself out of its own entity, so a placement file instance
+// beside it is a second, static copy of the same mesh standing in the first.
+// Stock keeps the reference row and places nothing against it:
+// finland_rally/route_0 declares both hay bale meshes in ornaments.bin and has
+// zero instances on them, with all 355 in objects.ens.
+@(test)
+an_object_is_kept_out_of_the_placement_file :: proc(t: ^testing.T) {
+	instances := []d3.D3_Placement_Instance{
+		{reference_id = 0, instance_id = 0, instance_tag = 1, position = {0, 0, 0}},
+		{reference_id = 0, instance_id = 1, instance_tag = 2, position = {1, 0, 0}},
+		{reference_id = 1, instance_id = 2, instance_tag = 3, position = {2, 0, 0}},
+	}
+	forms := []D3_Ens_Form{.Static_Body, .Dynamic_Entity, .None}
+	kept := d3_place_file_instances(instances, forms)
+	testing.expect_value(t, len(kept), 2)
+	// The dynamic one is gone and the survivors renumber dense from zero, which
+	// is what track.vis addresses a drawable by.
+	testing.expect_value(t, kept[0].position, [3]f32{0, 0, 0})
+	testing.expect_value(t, kept[1].position, [3]f32{2, 0, 0})
+	for inst, i in kept {
+		testing.expect_value(t, inst.instance_id, u32(i))
+		testing.expect_value(t, inst.instance_tag, u32(i + 1))
+	}
+	// And the file still builds, which is the density check the writer makes.
+	rows := []d3.D3_Placement_Reference{test_reference(0, "a"), test_reference(1, "b")}
+	d3_place_capacities(rows, kept)
+	_, msg, built := d3.Placement_Build(.Ornaments, rows, kept, context.temp_allocator)
+	testing.expect(t, built, msg)
 }

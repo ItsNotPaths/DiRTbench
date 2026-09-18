@@ -459,13 +459,13 @@ draw_inspector_body :: proc(ed: ^Editor) {
 
 	draw_terrain_section(ed)
 	draw_veg_section(ed)
-	draw_props_section(ed)
+	draw_props_sections(ed)
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("LMB select point or terrain node")
 	ui.im_text("Terrain: RMB+LMB drag sizes brush; release RMB to raise/lower")
 	ui.im_text("Floors: draw one from the Terrain panel; Del removes a corner")
-	ui.im_text("Props: pick one in the Props panel, B places, Del removes")
+	ui.im_text("Props: pick one in the Objects or Ornaments panel, B places, Del removes")
 	ui.im_text("Shift+drag gizmo extrudes a point")
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")

@@ -10,13 +10,20 @@ package main
 // no textures, no materials. The viewport shades each face flat off its own
 // normal, which is enough to judge where a thing sits and how big it is.
 //
+// A placement is an ornament or an object, which is ours rather than the
+// game's: an ornament is drawn, an object is drawn and collided. Only the
+// meshes the venue's `objecttypes.pssg` declares an entity type for can be
+// objects, and the catalogue reads that file to know which.
+//
 // The catalogue lives on the document, so two windows onto one venue share one
 // parse and one set of uploaded meshes. The placements live there too, and are
-// saved in road.json. The browser's thumbnail is props_ui.odin's. Nothing here writes a game file: emitting these into
-// `ornaments.bin` and `objects.ens` is the export's job and comes later.
+// saved in road.json. The browsers are props_ui.odin's. Nothing here writes a
+// game file: emitting these into `ornaments.bin` and `objects.ens` is the
+// export's job.
 
 import "core:fmt"
 import "core:math"
+import "core:os"
 import "core:path/filepath"
 import "core:slice"
 import "core:strings"
@@ -25,15 +32,17 @@ import "../geo"
 import "../gfx"
 
 // Which of the base venue's two libraries a prop comes from. The name alone is
-// not a key: the two files are separate namespaces.
+// not a key: the two files are separate namespaces. Spelled after the files so
+// that nothing here reads as the placement role below, which is a different
+// question entirely.
 Prop_Lib_Kind :: enum u8 {
-	Objects,
-	Trees,
+	Objects_Pssg,
+	Trees_Pssg,
 }
 
 PROP_LIB_FILES := [Prop_Lib_Kind]string {
-	.Objects = "objects.pssg",
-	.Trees   = "trees.pssg",
+	.Objects_Pssg = "objects.pssg",
+	.Trees_Pssg   = "trees.pssg",
 }
 
 // One prop of the base venue's art, named the way a placement file names it.
@@ -42,10 +51,27 @@ Prop_Ref :: struct {
 	name: string,
 }
 
+// What a placement is for. Ours, not the game's: the game has no word for a
+// drawable that deliberately refuses the rigid body its art offers.
+//
+// An ornament is drawn and nothing else. An object is drawn and collided, which
+// costs it an `objects.ens` body and so limits it to meshes the venue's
+// `objecttypes.pssg` declares an entity type for.
+Prop_Role :: enum u8 {
+	Ornament,
+	Object,
+}
+
+PROP_ROLE_NAMES := [Prop_Role]string {
+	.Ornament = "Ornaments",
+	.Object   = "Objects",
+}
+
 // One placed prop. The transform is the instance's alone — every prop mesh is
 // straight model space, with no transform of its own to compose.
 Prop_Instance :: struct {
 	ref:   Prop_Ref,
+	role:  Prop_Role,
 	pos:   gfx.Vector3,
 	rot:   gfx.Quaternion,
 	scale: f32,
@@ -77,13 +103,66 @@ Prop_Drawable :: struct {
 // uses costs a few hundred KB. The parse itself is the expensive half (tens of
 // milliseconds for the largest library), which is why it happens on the first
 // ask rather than when the venue opens.
+// `bodies` is the venue's `objecttypes.pssg`, which decides what may be placed
+// as an object at all. Small beside the libraries (760 KB at the worst venue in
+// the game against 30 MB of geometry), so it is read in the same pass.
 Prop_Catalog :: struct {
 	base:   string, // the "<location>/<venue>" it was read for
 	state:  Prop_Catalog_State,
 	msg:    string,
 	libs:   [Prop_Lib_Kind]d3.Prop_Library,
 	refs:   [dynamic]Prop_Ref, // objects then trees, each sorted by name
+	bodies: map[string]string, // mesh -> the entity id an objects.ens body points at
 	meshes: map[Prop_Ref]Prop_Drawable,
+}
+
+// Whether the base venue can collide this mesh. Both browsers list off one
+// `refs` array, so the Objects list is this test rather than a second array.
+prop_has_body :: proc(cat: ^Prop_Catalog, ref: Prop_Ref) -> bool {
+	return ref.name in cat.bodies
+}
+
+// Every mesh the venue's `objecttypes.pssg` declares a rigid body for, keyed by
+// mesh name. That file is not PSSG at all: it is the same CSSGXml text as
+// `objects.ens`, so one parser reads both, and its entity ids are `<mesh>.max`.
+//
+// Best effort. A venue whose file will not parse gets an empty map, which reads
+// as "nothing here can be an object" rather than as an error.
+prop_venue_bodies :: proc(
+	dir: string, allocator := context.allocator,
+) -> (bodies: map[string]string) {
+	bodies = make(map[string]string, allocator)
+	if dir == "" {
+		return
+	}
+	path, _ := filepath.join({dir, "objecttypes.pssg"}, context.temp_allocator)
+	data, read_err := os.read_entire_file(path, context.temp_allocator)
+	if read_err != nil {
+		return
+	}
+	nodes, parsed := d3.Ens_Parse(data, context.temp_allocator)
+	if !parsed {
+		return
+	}
+	for node in nodes {
+		if node.tag != "TEMPLATEENTITY" {
+			continue
+		}
+		id, has_id := d3.Ens_Attr_Value(node, "id")
+		if !has_id {
+			continue
+		}
+		mesh := strings.trim_suffix(id, ".max")
+		if mesh == id {
+			continue
+		}
+		// The file bytes are temp; the catalogue outlives them.
+		if _, known := bodies[mesh]; !known {
+			owned := strings.clone(mesh, allocator)
+			bodies[owned] = owned
+		}
+	}
+	return
 }
 
 // --- the catalogue -----------------------------------------------------------
@@ -133,6 +212,7 @@ prop_catalog_load :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
 			append(&cat.refs, Prop_Ref{kind = kind, name = entry.name})
 		}
 	}
+	cat.bodies = prop_venue_bodies(dir)
 	cat.base = strings.clone(doc.base)
 	cat.state = .Ready
 	return "", true
@@ -146,6 +226,10 @@ prop_catalog_free :: proc(doc: ^Venue_Doc) {
 	}
 	delete(cat.meshes)
 	delete(cat.refs)
+	for mesh in cat.bodies {
+		delete(mesh)
+	}
+	delete(cat.bodies)
 	for kind in Prop_Lib_Kind {
 		d3.prop_lib_delete(&cat.libs[kind])
 	}
@@ -182,8 +266,8 @@ prop_drawable :: proc(doc: ^Venue_Doc, ref: Prop_Ref) -> (drawable: Prop_Drawabl
 // The two libraries are tinted apart because a tree placed by hand and a tree
 // from the scatter should not look like the same thing.
 PROP_BASE_COLOUR := [Prop_Lib_Kind][3]f32{
-	.Objects = {0.72, 0.70, 0.66},
-	.Trees   = {0.42, 0.62, 0.38},
+	.Objects_Pssg = {0.72, 0.70, 0.66},
+	.Trees_Pssg   = {0.42, 0.62, 0.38},
 }
 
 // One fixed overhead-ish light, so untextured shape reads. Two-sided: a prop's
@@ -273,9 +357,10 @@ prop_world_bounds :: proc(doc: ^Venue_Doc, inst: Prop_Instance) -> (lo, hi: gfx.
 // Drop a prop on the ground, standing upright and unrotated. Yaw is the one
 // thing worth varying per instance and the gizmo is where that is done, so a
 // fresh placement is deliberately plain.
-prop_place :: proc(doc: ^Venue_Doc, ref: Prop_Ref, at: gfx.Vector3) -> int {
+prop_place :: proc(doc: ^Venue_Doc, ref: Prop_Ref, role: Prop_Role, at: gfx.Vector3) -> int {
 	append(&doc.props, Prop_Instance{
 		ref   = {kind = ref.kind, name = strings.clone(ref.name)},
+		role  = role,
 		pos   = at,
 		rot   = gfx.Quaternion(1),
 		scale = 1,
@@ -381,27 +466,45 @@ draw_prop_box :: proc(doc: ^Venue_Doc, inst: Prop_Instance, col: gfx.Color) {
 
 // --- placing one ------------------------------------------------------------------
 
+// Which browser owns the next viewport click, if any.
+prop_placing_role :: proc(ed: ^Editor) -> Maybe(Prop_Role) {
+	return ed.prop_placing
+}
+
+// Turn one browser's placing mode on or off. Only ever one at a time: two
+// ghosts under one cursor is not a thing the viewport can mean.
+prop_set_placing :: proc(ed: ^Editor, role: Prop_Role, on: bool) {
+	ed.prop_placing = on ? role : nil
+	ed.prop_last = role
+}
+
 // Where the prop being placed would land, refreshed once a frame while the mode
 // is on. Held on the window rather than recomputed at each reader, because the
 // ground pick walks every terrain triangle — affordable once per frame in a
 // mode you turned on, and not affordable twice.
 prop_ghost_update :: proc(ed: ^Editor, ray: gfx.Ray) {
 	ed.prop_ghost_ok = false
-	if !ed.prop_placing {
+	role, placing := ed.prop_placing.?
+	if !placing {
 		return
 	}
-	if _, have := prop_picked(ed); !have {
-		ed.prop_placing = false
+	if _, have := prop_picked(ed, role); !have {
+		ed.prop_placing = nil
 		return
 	}
 	ed.prop_ghost, ed.prop_ghost_ok = pick_ground(ed, ray)
 }
 
 // The prop under the cursor, before it is placed: the real mesh where it would
-// land, with a box round it so it reads as not yet placed.
+// land, with a box round it so it reads as not yet placed. The box is the
+// browser's colour, so an object and an ornament do not look alike in flight.
 draw_prop_ghost :: proc(ed: ^Editor) {
-	ref, have := prop_picked(ed)
-	if !ed.prop_placing || !ed.prop_ghost_ok || !have {
+	role, placing := ed.prop_placing.?
+	if !placing || !ed.prop_ghost_ok {
+		return
+	}
+	ref, have := prop_picked(ed, role)
+	if !have {
 		return
 	}
 	drawable, drawn := prop_drawable(ed.doc, ref)
@@ -410,37 +513,46 @@ draw_prop_ghost :: proc(ed: ^Editor) {
 	}
 	at := ed.prop_ghost
 	prop_draw_one(ed.doc, drawable, gfx.MatrixTranslate(at.x, at.y, at.z), ed.wireframe)
-	draw_prop_box(ed.doc, {ref = ref, pos = at, rot = gfx.Quaternion(1), scale = 1}, {120, 255, 180, 255})
+	draw_prop_box(
+		ed.doc, {ref = ref, role = role, pos = at, rot = gfx.Quaternion(1), scale = 1},
+		PROP_GHOST_COLOUR[role],
+	)
+}
+
+PROP_GHOST_COLOUR := [Prop_Role]gfx.Color {
+	.Ornament = {120, 255, 180, 255},
+	.Object   = {255, 190, 90, 255},
 }
 
 // The click that drops a prop, and the keys that end the mode. Returns true
 // while placing owns the input, which is what holds the road's own click verbs
 // off — the same bargain floor drawing makes.
 prop_place_input :: proc(ed: ^Editor, nav, ui_mouse, ui_keys: bool) -> bool {
-	if !ed.prop_placing {
+	role, placing := ed.prop_placing.?
+	if !placing {
 		return false
 	}
 	if !ui_keys && gfx.IsKeyPressed(.ESCAPE) {
-		ed.prop_placing = false
+		ed.prop_placing = nil
 		return true
 	}
 	if nav || ui_mouse {
 		return true
 	}
 	if gfx.IsMouseButtonPressed(.RIGHT) {
-		ed.prop_placing = false
+		ed.prop_placing = nil
 		return true
 	}
 	if gfx.IsMouseButtonPressed(.LEFT) {
-		ref, have := prop_picked(ed)
+		ref, have := prop_picked(ed, role)
 		if !ed.prop_ghost_ok || !have {
 			set_status(&ed.status, "point at the ground to put a prop there", false)
 			return true
 		}
 		// Selected as it lands, so the gizmo is already on it: a prop is almost
 		// always turned or nudged straight after being dropped.
-		ed.sel = {kind = .Prop, idx = prop_place(ed.doc, ref, ed.prop_ghost)}
-		set_status(&ed.status, fmt.tprintf("%s placed", ref.name), true)
+		ed.sel = {kind = .Prop, idx = prop_place(ed.doc, ref, role, ed.prop_ghost)}
+		set_status(&ed.status, fmt.tprintf("%s placed as %s", ref.name, PROP_ROLE_NAMES[role]), true)
 	}
 	return true
 }
