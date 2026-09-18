@@ -77,6 +77,8 @@ doc_new :: proc(app: ^App) -> ^Venue_Doc {
 // Free what the document owns, including its GPU meshes. Takes a pointer rather
 // than owning the box, so a headless caller can put a document on the stack.
 doc_delete :: proc(doc: ^Venue_Doc) {
+	// Before anything it reads is freed.
+	rebuild_stop(doc)
 	gfx.UnloadMaterial(doc.material)
 	geo.gpu_mesh_unload(&doc.road)
 	geo.gpu_mesh_unload(&doc.terrain_mesh)
@@ -279,12 +281,15 @@ clear_node_selections :: proc(app: ^App, doc: ^Venue_Doc) {
 // One rebuild per document per tick, not one per window. This is the whole
 // mechanism behind live update: two windows onto a venue read the same meshes,
 // so an edit in either appears in both with nothing to synchronise.
+//
+// The rebuild itself runs on the document's worker (rebuild.odin). All that
+// happens here is landing whatever it finished and handing it the next job, so a
+// slow venue costs this loop a mesh upload rather than the whole rebuild.
 docs_rebuild :: proc(app: ^App) {
 	for doc in app.docs {
 		dragging, point_drag := doc_drag_state(app, doc)
-		if geometry_stale(doc) && rebuild_geometry(doc, point_drag) {
+		if rebuild_tick(doc, dragging, point_drag) {
 			clear_node_selections(app, doc)
 		}
-		veg_refresh(doc, dragging)
 	}
 }

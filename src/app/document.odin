@@ -83,6 +83,11 @@ Venue_Doc :: struct {
 
 	// ImGui edits this in place, so it is a fixed C string.
 	stage_name:    [64]u8,
+
+	// The worker that rebuilds all of the above, and the job in its hands.
+	// Interactive windows go through it (rebuild.odin); the CLI and the tests
+	// call rebuild_geometry below and never start a thread.
+	rebuild:       Rebuilder,
 }
 
 // The last save/load/export result, shown for STATUS_LINGER seconds. One per
@@ -147,10 +152,6 @@ mark_terrain_dirty :: proc(doc: ^Venue_Doc) {
 	doc.edits += 1
 }
 
-geometry_stale :: proc(doc: ^Venue_Doc) -> bool {
-	return doc.dirty_road || doc.dirty_terrain
-}
-
 // Clearing, not just freeing: the slice outlives the memory otherwise, and the
 // next delete frees it a second time.
 veg_cache_clear :: proc(doc: ^Venue_Doc) {
@@ -158,20 +159,16 @@ veg_cache_clear :: proc(doc: ^Venue_Doc) {
 	doc.veg_cache = nil
 }
 
-// Resample the ribbon and re-upload whichever mesh went stale. The ribbon is
-// kept because picking and the handle overlay both read it, and it is the input
-// to both meshes.
+// Resample the ribbon and re-upload whichever mesh went stale, here and now.
+// The ribbon is kept because picking and the handle overlay both read it, and it
+// is the input to both meshes.
 //
-// The terrain is several times the road's triangle count, so rebuilding it every
-// frame of a control-point drag is the one thing that makes a big stage feel
-// sluggish. Defer it: the road follows the gizmo live, the terrain snaps to it on
-// release. Dragging a terrain control is exempt — the terrain is the only thing
-// changing, and watching it move is the entire point.
-//
-// `dragging` is "some window is dragging a point gizmo", computed from last
-// frame's state, which is what we want: the frame a drag ends it is already
-// false, so the deferred rebuild lands immediately. Returns true when the
-// control set was renumbered, because no view's node index survives that.
+// This is the blocking rebuild. An editor window never calls it — its document's
+// worker does the same work off the frame (rebuild.odin) — so what is left is
+// the export path, which needs the geometry correct before it reads it, and
+// anything headless. `dragging` skips the terrain half, the way the worker does
+// while a point gizmo is held. Returns true when the control set was renumbered,
+// because no view's node index survives that.
 rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved: bool) {
 	if doc.dirty_road {
 		delete(doc.ribbon)
@@ -191,27 +188,6 @@ rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved:
 		doc.dirty_terrain = false
 	}
 	return
-}
-
-// Regenerate the vegetation cache when it is stale — a knob moved (`veg_dirty`)
-// or the ribbon rebuilt under it (`veg_gen` behind `ribbon_gen`). A no-op
-// otherwise, so it is safe to call every frame. Generating rebuilds the terrain
-// field, which is why the result is cached rather than produced live.
-veg_refresh :: proc(doc: ^Venue_Doc, dragging := false) {
-	if !doc.veg_dirty && doc.veg_gen == doc.ribbon_gen {
-		return
-	}
-	// Generating rebuilds the terrain field, so defer while a gizmo drags — the
-	// trees snap to the new ground on release, the same way the terrain mesh does
-	// for a point drag. `dragging` is last frame's value, so the release frame
-	// lands the rebuild.
-	if dragging {
-		return
-	}
-	veg_cache_clear(doc)
-	doc.veg_cache = geo.veg_generate(doc.ribbon, &doc.terrain, doc.veg, doc.roughness)
-	doc.veg_gen = doc.ribbon_gen
-	doc.veg_dirty = false
 }
 
 // --- status line ------------------------------------------------------------

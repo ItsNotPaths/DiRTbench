@@ -65,10 +65,10 @@ export_target_chain :: proc(ed: ^Editor) -> (chain: geo.Spline, name: string, ok
 	return ed.doc.spline, sanitise_stage_name(stage_name_text(ed.doc)), len(ed.doc.spline.points) >= 2
 }
 
-// `rebuild_geometry` first because the terrain rebuild is deferred while a point
-// gizmo is dragged: a stale `terrain_field` would export the previous ribbon's
-// ground. Nothing is dragging when a menu is open, so this is a no-op in
-// practice and a guard against ever calling export from elsewhere.
+// The worker is joined and the rebuild finished first: an export reads the
+// geometry, so it cannot run against a job still in flight or against a terrain
+// deferred by a drag. Nothing is dragging when a menu is open, so in practice
+// this only waits, and it is the guard against ever calling export elsewhere.
 do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 	chain, name, ready := export_target_chain(ed)
 	if !ready {
@@ -76,6 +76,7 @@ do_export :: proc(ed: ^Editor, target: ^Export_Target) {
 		return
 	}
 	set_stage_name(ed.doc, name)
+	rebuild_join(ed.doc)
 	rebuild_geometry(ed.doc)
 	msg, ok := export_stage(ed.doc, chain, name, ed.stage_id, target)
 	set_status(&ed.status, msg, ok)
@@ -606,9 +607,10 @@ draw_pace_section :: proc(ed: ^Editor) {
 	}
 }
 
-// Vegetation scatter. Every knob flags the cache dirty; veg_refresh regenerates it
-// (and the viewport shapes) at the top of the next frame. The scatter is saved with
-// the stage and handed to the export target, so nothing here touches geometry.
+// Vegetation scatter. Every knob flags the cache dirty; the document's worker
+// regenerates it (and the viewport shapes) and it lands a frame or two later. The
+// scatter is saved with the stage and handed to the export target, so nothing
+// here touches geometry.
 draw_veg_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Vegetation", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
