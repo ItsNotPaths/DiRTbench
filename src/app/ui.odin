@@ -40,6 +40,11 @@ do_save :: proc(ed: ^Editor) {
 		if ok {
 			msg = fmt.tprintf("saved %s", ed.doc.open_venue)
 			recovery_doc_saved(recovery_root(), ed.doc)
+			// The project manager holds its own copy of venue.json, and both
+			// deploy and every reopen read that copy rather than the file. It
+			// has to be told the file moved under it, or a start line saved
+			// here is invisible to both.
+			ed.app.screen.reload_pending = true
 		}
 		set_status(&ed.status, msg, ok)
 		return
