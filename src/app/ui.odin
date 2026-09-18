@@ -120,6 +120,58 @@ do_generate :: proc(ed: ^Editor, frame_camera: bool) {
 	set_status(&ed.status, msg, ok)
 }
 
+// --- the side docks ----------------------------------------------------------
+
+// Panels are docked to the window edges, not floated over it: pinned under the
+// menubar, full height, and neither movable nor resizable. Nothing a road is
+// edited through should be draggable over the road.
+SIDEBAR_W :: 360
+
+SIDEBAR_FLAGS ::
+	ui.IM_WINDOW_NO_TITLE_BAR |
+	ui.IM_WINDOW_NO_RESIZE |
+	ui.IM_WINDOW_NO_MOVE |
+	ui.IM_WINDOW_NO_COLLAPSE |
+	ui.IM_WINDOW_NO_SAVED_SETTINGS |
+	ui.IM_WINDOW_NO_BRING_TO_FRONT
+
+Sidebar_Side :: enum {
+	Left,
+	Right,
+}
+
+// Pin one dock to its edge. False when the window is not drawing this frame;
+// `sidebar_end` is owed either way, and takes the same answer back.
+sidebar_begin :: proc(name: cstring, side: Sidebar_Side) -> bool {
+	top := ui.igGetFrameHeight() // the main menu bar
+	w, h := f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight())
+	x: f32 = side == .Left ? 0 : w - SIDEBAR_W
+	ui.igSetNextWindowPos({x, top}, .Always, {0, 0})
+	ui.igSetNextWindowSize({SIDEBAR_W, h - top}, .Always)
+	open := ui.igBegin(name, nil, SIDEBAR_FLAGS)
+	if open {
+		// A dock is a fixed width and the paths in it are not. Wrap rather than
+		// run off the edge.
+		ui.igPushTextWrapPos(0)
+	}
+	return open
+}
+
+sidebar_end :: proc(open: bool) {
+	if open {
+		ui.igPopTextWrapPos()
+	}
+	ui.igEnd()
+}
+
+// A section of a shared dock, and the close its own title bar used to carry.
+sidebar_section :: proc(label: cstring, open: ^bool) {
+	ui.igSeparatorText(label)
+	if ui.im_button(fmt.ctprintf("Close###close%s", label)) {
+		open^ = false
+	}
+}
+
 // --- UI ---------------------------------------------------------------------
 
 draw_menubar :: proc(ed: ^Editor) {
@@ -205,19 +257,9 @@ draw_status_text :: proc(s: ^Status) {
 	ui.im_text_colored(s.ok ? green : red, msg)
 }
 
-// A floating, closable panel: `igBegin` with a p_open gives it an X, and the
-// menubar toggle brings it back. Not drawn at all while closed.
+// A section of the right dock, switched on from the menubar.
 draw_generator :: proc(ed: ^Editor) {
-	if !ed.show_gen {
-		return
-	}
-	ui.igSetNextWindowPos({330, 34}, .FirstUseEver, {0, 0})
-	ui.igSetNextWindowSize({340, 0}, .FirstUseEver)
-	if !ui.igBegin("Road generator", &ed.show_gen, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
-		ui.igEnd() // still required when collapsed
-		return
-	}
-	defer ui.igEnd()
+	sidebar_section("Road generator", &ed.show_gen)
 
 	ui.im_text("Same seed and settings always give the same road.")
 	ui.igSpacing()
@@ -275,13 +317,11 @@ draw_generator :: proc(ed: ^Editor) {
 // nothing else: its name, where its two lines sit, and whether the road between
 // them compiles.
 draw_stage_inspector :: proc(ed: ^Editor) {
-	ui.igSetNextWindowPos({12, 34}, .FirstUseEver, {0, 0})
-	ui.igSetNextWindowSize({300, 0}, .FirstUseEver)
-	if !ui.igBegin("Stage", nil, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
-		ui.igEnd()
+	open := sidebar_begin("Stage", .Left)
+	defer sidebar_end(open)
+	if !open {
 		return
 	}
-	defer ui.igEnd()
 
 	route := selected_route(ed)
 	if route == nil {
@@ -353,13 +393,11 @@ draw_pins_section :: proc(ed: ^Editor, route: ^Venue_Route) {
 }
 
 draw_inspector :: proc(ed: ^Editor) {
-	ui.igSetNextWindowPos({12, 34}, .FirstUseEver, {0, 0})
-	ui.igSetNextWindowSize({300, 0}, .FirstUseEver)
-	if !ui.igBegin("Inspector", nil, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
-		ui.igEnd()
+	open := sidebar_begin("Inspector", .Left)
+	defer sidebar_end(open)
+	if !open {
 		return
 	}
-	defer ui.igEnd()
 
 	ui.igSeparatorText(ed.doc.open_venue != "" ? "Venue road network" : "Stage")
 	if ed.doc.open_venue != "" {
@@ -595,8 +633,8 @@ draw_pace_section :: proc(ed: ^Editor) {
 
 	ui.im_text(fmt.ctprintf("%d notes", len(ed.stage.notes)))
 
-	// Auto-resize inspector, so cap the list; the preview is where you live with
-	// the full stream anyway.
+	// The dock scrolls, but a long stage is hundreds of calls. Cap the list; the
+	// preview is where you live with the full stream anyway.
 	PACE_LIST_MAX :: 30
 	for nt, i in ed.stage.notes {
 		if i >= PACE_LIST_MAX {
@@ -655,16 +693,7 @@ draw_veg_section :: proc(ed: ^Editor) {
 // debug detour is turned on, and the one place `dirtbench.conf` is named, so
 // someone who has not written one can see what they are missing.
 draw_targets :: proc(ed: ^Editor) {
-	if !ed.show_targets {
-		return
-	}
-	ui.igSetNextWindowPos({330, 34}, .FirstUseEver, {0, 0})
-	ui.igSetNextWindowSize({430, 0}, .FirstUseEver)
-	if !ui.igBegin("Export targets", &ed.show_targets, ui.IM_WINDOW_ALWAYS_AUTO_RESIZE) {
-		ui.igEnd()
-		return
-	}
-	defer ui.igEnd()
+	sidebar_section("Export targets", &ed.show_targets)
 
 	ui.igCheckbox("Write to out/ instead of the game", &ed.doc.debug_export)
 	ui.igSpacing()
@@ -691,6 +720,27 @@ draw_targets :: proc(ed: ^Editor) {
 		ui.im_text(fmt.ctprintf("Config: %s", conf))
 	} else {
 		ui.im_text_colored(DIM_COL, fmt.ctprintf("No %s yet", conf))
+	}
+}
+
+// The venue window's right dock: whichever of the two optional panels the
+// menubar has switched on, one above the other. Absent while both are off, so
+// the road is uncovered on that side until something is asked for.
+draw_venue_tools :: proc(ed: ^Editor) {
+	if !ed.show_gen && !ed.show_targets {
+		return
+	}
+	open := sidebar_begin("Venue tools", .Right)
+	defer sidebar_end(open)
+	if !open {
+		return
+	}
+
+	if ed.show_gen {
+		draw_generator(ed)
+	}
+	if ed.show_targets {
+		draw_targets(ed)
 	}
 }
 

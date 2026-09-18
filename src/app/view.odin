@@ -769,8 +769,7 @@ venue_frame :: proc(ed: ^Editor) {
 
 	draw_menubar(ed)
 	draw_inspector(ed)
-	draw_generator(ed)
-	draw_targets(ed)
+	draw_venue_tools(ed)
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
 	}

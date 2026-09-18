@@ -46,6 +46,8 @@ IM_WINDOW_NO_RESIZE :: Im_Window_Flags(1 << 1)
 IM_WINDOW_NO_MOVE :: Im_Window_Flags(1 << 2)
 IM_WINDOW_NO_COLLAPSE :: Im_Window_Flags(1 << 5)
 IM_WINDOW_ALWAYS_AUTO_RESIZE :: Im_Window_Flags(1 << 6)
+IM_WINDOW_NO_SAVED_SETTINGS :: Im_Window_Flags(1 << 8)
+IM_WINDOW_NO_BRING_TO_FRONT :: Im_Window_Flags(1 << 13)
 
 Im_Slider_Flags :: distinct c.int
 IM_SLIDER_NONE :: Im_Slider_Flags(0)
@@ -138,6 +140,9 @@ foreign imgui {
 
 	igSetNextWindowPos :: proc(pos: Im_Vec2, cond: Im_Cond, pivot: Im_Vec2) ---
 	igSetNextWindowSize :: proc(size: Im_Vec2, cond: Im_Cond) ---
+	// One line of widget: the font plus the frame padding. Also the height of
+	// the main menu bar, which is what a panel pinned below it needs.
+	igGetFrameHeight :: proc() -> f32 ---
 
 	igBeginMainMenuBar :: proc() -> bool ---
 	igEndMainMenuBar :: proc() ---
@@ -158,6 +163,11 @@ foreign imgui {
 
 	igPushStyleColor_Vec4 :: proc(idx: Im_Col, col: Im_Vec4) ---
 	igPopStyleColor :: proc(count: c.int) ---
+
+	// Where text wraps, in window-local x. 0 wraps at the content edge, which is
+	// what a fixed-width panel holding file paths wants.
+	igPushTextWrapPos :: proc(wrap_local_pos_x: f32) ---
+	igPopTextWrapPos :: proc() ---
 
 	igButton :: proc(label: cstring, size: Im_Vec2) -> bool ---
 	// A square button holding nothing but an arrow. `str_id` is the id, not a
