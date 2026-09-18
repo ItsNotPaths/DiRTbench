@@ -682,8 +682,8 @@ draw_veg_section :: proc(ed: ^Editor) {
 	if !ed.doc.terrain.enabled {
 		ui.im_text("(terrain off: trees ride the road edge)")
 	}
-	// The overlay batch is a fixed buffer; a stage can outgrow it. Trees are last
-	// in, so they are what goes missing first.
+	// The overlay batch is a fixed buffer. The trees are a mesh and no longer in it,
+	// so anything dropped here is a handle or a node line.
 	if dropped := gfx.batch_dropped_verts(); dropped > 0 {
 		ui.im_text(fmt.ctprintf("overlay batch full: %d verts dropped", dropped))
 	}

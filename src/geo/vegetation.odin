@@ -550,11 +550,22 @@ veg_generate :: proc(
 
 VEG_TRUNK_COL :: gfx.Color{92, 66, 44, 210} // a muted bark brown, mostly opaque
 
-// Draw the cached scatter as translucent placeholder shapes. Call inside a 3D
-// pass, after the opaque road/terrain, so the canopies blend over the ground
-// rather than punching through it. Low slice counts keep a few thousand trees
-// cheap; the shapes are symmetric about +Y, so yaw is not applied.
-veg_draw :: proc(insts: []Veg_Instance) {
+// Build the cached scatter into a triangle soup, to be uploaded once per rebuild
+// and drawn like the road and the ground.
+//
+// Not the immediate-mode overlay it used to be. That batch is a fixed buffer
+// shared with every handle and node in the frame, and one tree costs upward of a
+// hundred vertices, so a dense stage filled it: the trees at the tail of the
+// ribbon — whole branches of the road graph — drew nothing, and so did the
+// handles queued behind them. A mesh has no such ceiling and is not rebuilt every
+// frame.
+//
+// Viewport only. The export places real props (see Prop_Kind), so the Mat_Id here
+// is never read by a target. Low slice counts keep the soup small, and the shapes
+// are symmetric about +Y, so yaw is not applied.
+veg_build_mesh :: proc(insts: []Veg_Instance, allocator := context.allocator) -> Tri_Mesh {
+	m := tri_mesh_make(allocator)
+	sink := gfx.Tri_Sink{emit = veg_emit_tri, user = &m}
 	for it in insts {
 		base := it.pos
 		top := base + {0, it.trunk, 0} // where the canopy sits
@@ -562,22 +573,27 @@ veg_draw :: proc(insts: []Veg_Instance) {
 		// A slim trunk, for the "little trunk base" / lifted-canopy read.
 		if it.trunk > 0.05 {
 			tr := max(it.r * 0.12, 0.12)
-			gfx.DrawCylinderEx(base, top, tr, tr, 6, VEG_TRUNK_COL)
+			gfx.CylinderEx(sink, base, top, tr, tr, 6, VEG_TRUNK_COL)
 		}
 
 		switch it.shape {
 		case .Conifer:
 			// A tapering cone: wide base at the trunk top, point at the crown.
 			apex := top + {0, it.h, 0}
-			gfx.DrawCylinderEx(top, apex, it.r, 0, 8, it.canopy)
+			gfx.CylinderEx(sink, top, apex, it.r, 0, 8, it.canopy)
 		case .Broadleaf:
 			// A round canopy resting on the trunk.
 			c := top + {0, it.r, 0}
-			gfx.DrawSphereEx(c, it.r, 6, 8, it.canopy)
+			gfx.SphereEx(sink, c, it.r, 6, 8, it.canopy)
 		case .Bush:
 			// A low ground sphere, squashed so it reads as a shrub, not a ball.
 			c := base + {0, it.r * 0.6, 0}
-			gfx.DrawSphereEx(c, it.r, 5, 7, it.canopy)
+			gfx.SphereEx(sink, c, it.r, 5, 7, it.canopy)
 		}
 	}
+	return m
+}
+
+veg_emit_tri :: proc(user: rawptr, a, b, c: gfx.Vector3, col: gfx.Color) {
+	add_tri((^Tri_Mesh)(user), a, b, c, {}, {}, {}, col, .Terrain)
 }

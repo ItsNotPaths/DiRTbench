@@ -408,7 +408,25 @@ DrawGrid :: proc(slices: i32, spacing: f32) {
 DrawSphere :: proc(center: Vector3, radius: f32, color: Color) {
 	DrawSphereEx(center, radius, 12, 12, color)
 }
+// Where a generated primitive's triangles land. The overlay batch is one sink and
+// is rebuilt every frame; a mesh builder is the other, for scenery uploaded once.
+// The shape maths lives in one place either way.
+Tri_Sink :: struct {
+	emit: proc(user: rawptr, a, b, c: Vector3, col: Color),
+	user: rawptr,
+}
+
+batch_sink :: proc() -> Tri_Sink {
+	return {emit = proc(user: rawptr, a, b, c: Vector3, col: Color) {
+		batch_tri(a, b, c, color = col)
+	}}
+}
+
 DrawSphereEx :: proc(center: Vector3, radius: f32, rings, slices: i32, color: Color) {
+	SphereEx(batch_sink(), center, radius, rings, slices, color)
+}
+
+SphereEx :: proc(sink: Tri_Sink, center: Vector3, radius: f32, rings, slices: i32, color: Color) {
 	ring_count, slice_count := max(rings, 3), max(slices, 3)
 	for ring in 0 ..< ring_count {
 		lat0 := -math.PI / 2 + math.PI * f32(ring) / f32(ring_count)
@@ -420,13 +438,23 @@ DrawSphereEx :: proc(center: Vector3, radius: f32, rings, slices: i32, color: Co
 			p01 := center + radius * Vector3{math.cos(lat0) * math.sin(lon1), math.sin(lat0), math.cos(lat0) * math.cos(lon1)}
 			p10 := center + radius * Vector3{math.cos(lat1) * math.sin(lon0), math.sin(lat1), math.cos(lat1) * math.cos(lon0)}
 			p11 := center + radius * Vector3{math.cos(lat1) * math.sin(lon1), math.sin(lat1), math.cos(lat1) * math.cos(lon1)}
-			batch_tri(p00, p10, p11, color)
-			batch_tri(p00, p11, p01, color)
+			sink.emit(sink.user, p00, p10, p11, color)
+			sink.emit(sink.user, p00, p11, p01, color)
 		}
 	}
 }
 
 DrawCylinderEx :: proc(start, end: Vector3, start_radius, end_radius: f32, sides: i32, color: Color) {
+	CylinderEx(batch_sink(), start, end, start_radius, end_radius, sides, color)
+}
+
+CylinderEx :: proc(
+	sink: Tri_Sink,
+	start, end: Vector3,
+	start_radius, end_radius: f32,
+	sides: i32,
+	color: Color,
+) {
 	axis := Vector3Normalize(end - start)
 	ref := abs(axis.y) < 0.99 ? Vector3{0, 1, 0} : Vector3{1, 0, 0}
 	u := Vector3Normalize(Vector3CrossProduct(axis, ref))
@@ -438,10 +466,10 @@ DrawCylinderEx :: proc(start, end: Vector3, start_radius, end_radius: f32, sides
 		d0 := u * math.cos(a0) + v * math.sin(a0)
 		d1 := u * math.cos(a1) + v * math.sin(a1)
 		a, b, c0, d := start + d0 * start_radius, start + d1 * start_radius, end + d0 * end_radius, end + d1 * end_radius
-		batch_tri(a, c0, d, color)
-		batch_tri(a, d, b, color)
-		batch_tri(start, b, a, color)
-		batch_tri(end, c0, d, color)
+		sink.emit(sink.user, a, c0, d, color)
+		sink.emit(sink.user, a, d, b, color)
+		sink.emit(sink.user, start, b, a, color)
+		sink.emit(sink.user, end, c0, d, color)
 	}
 }
 

@@ -131,13 +131,13 @@ draw_world :: proc(ed: ^Editor) {
 	geo.gpu_mesh_draw(ed.doc.terrain_mesh, ed.doc.material, ed.wireframe)
 	geo.gpu_mesh_draw(ed.doc.road, ed.doc.material, ed.wireframe)
 	draw_centreline(ed.doc.ribbon)
-	geo.veg_draw(ed.doc.veg_cache)
+	geo.gpu_mesh_draw(ed.doc.veg_mesh, ed.doc.material, ed.wireframe)
 }
 
-// The venue window's pass. Handles first: they share one fixed-size batch with
-// the scenery, which grows with the stage, and what does not fit is dropped (see
-// batch_has_room). Losing the far trees is a nuisance; losing the handles makes
-// the editor unusable.
+// The venue window's pass. What is left in the fixed-size overlay batch (see
+// batch_has_room) is the grid, the centreline and the handles — the scenery went
+// to its own meshes exactly because a dense stage overran it and took the handles
+// down with it.
 draw_venue_scene :: proc(
 	ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3, node_active: []bool, sel_node: int,
 ) {

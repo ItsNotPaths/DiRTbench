@@ -62,6 +62,7 @@ Rebuild_Job :: struct {
 	field:       geo.Terrain_Field, // moved in, moved back
 	ground_mesh: geo.Tri_Mesh,
 	veg:         []geo.Veg_Instance,
+	veg_mesh:    geo.Tri_Mesh,
 }
 
 // --- the main thread ---------------------------------------------------------
@@ -173,11 +174,13 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 	if j.do_veg {
 		veg_cache_clear(doc)
 		doc.veg_cache = j.veg
+		doc.veg_mesh = geo.gpu_mesh_upload(j.veg_mesh)
 		doc.veg_gen = j.ribbon_gen
 	}
 
 	geo.tri_mesh_delete(&j.road_mesh)
 	geo.tri_mesh_delete(&j.ground_mesh)
+	geo.tri_mesh_delete(&j.veg_mesh)
 	delete(j.spline.points)
 	delete(j.terrain.controls)
 	j^ = {}
@@ -271,6 +274,7 @@ rebuild_job_run :: proc(j: ^Rebuild_Job) {
 	}
 	if j.do_veg {
 		j.veg = geo.veg_generate(ribbon, &j.terrain, j.veg_params, j.roughness, context.allocator)
+		j.veg_mesh = geo.veg_build_mesh(j.veg, context.allocator)
 	}
 }
 

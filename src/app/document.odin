@@ -78,6 +78,9 @@ Venue_Doc :: struct {
 	// when a veg knob changes or the ribbon rebuilds — generating rebuilds the
 	// terrain field, too costly per frame. Persistent-allocated; freed on shutdown.
 	veg_cache:     []geo.Veg_Instance,
+	// The same scatter as a mesh, uploaded once per rebuild. The trees are far too
+	// many vertices for the frame's overlay batch, which handles and nodes share.
+	veg_mesh:      geo.Gpu_Mesh,
 	veg_gen:       u64, // ribbon_gen the cache was built at; a mismatch forces a refresh
 	veg_dirty:     bool,
 
@@ -157,6 +160,7 @@ mark_terrain_dirty :: proc(doc: ^Venue_Doc) {
 veg_cache_clear :: proc(doc: ^Venue_Doc) {
 	delete(doc.veg_cache)
 	doc.veg_cache = nil
+	geo.gpu_mesh_unload(&doc.veg_mesh)
 }
 
 // Resample the ribbon and re-upload whichever mesh went stale, here and now.
