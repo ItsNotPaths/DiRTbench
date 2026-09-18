@@ -133,6 +133,14 @@ ray_triangle :: proc(ray: Ray, a, b, c: Vector3) -> RayCollision {
 	}
 }
 
+// One triangle, with the same ray normalisation the quad does — without it the
+// reported distance is in units of the ray's direction rather than metres.
+GetRayCollisionTriangle :: proc(ray: Ray, a, b, c: Vector3) -> RayCollision {
+	ray, valid := normalized_ray(ray)
+	if !valid { return {} }
+	return ray_triangle(ray, a, b, c)
+}
+
 GetRayCollisionQuad :: proc(ray: Ray, a, b, c, d: Vector3) -> RayCollision {
 	ray, valid := normalized_ray(ray)
 	if !valid { return {} }

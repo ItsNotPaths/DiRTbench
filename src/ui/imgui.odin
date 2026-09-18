@@ -178,6 +178,9 @@ foreign imgui {
 	// `v` is C `float[3]`; gfx.Vector3 is a distinct [3]f32, so cast into it.
 	igDragFloat3 :: proc(label: cstring, v: ^[3]f32, v_speed, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
 	igSliderFloat :: proc(label: cstring, v: ^f32, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
+	// A slider with no ends: drag to change by `v_speed` per pixel. v_min >= v_max
+	// means unbounded, which is what a world height wants.
+	igDragFloat :: proc(label: cstring, v: ^f32, v_speed, v_min, v_max: f32, format: cstring, flags: Im_Slider_Flags) -> bool ---
 	igSliderInt :: proc(label: cstring, v: ^c.int, v_min, v_max: c.int, format: cstring, flags: Im_Slider_Flags) -> bool ---
 	// step / step_fast drive the -/+ buttons and ctrl-click stepping.
 	igInputInt :: proc(label: cstring, v: ^c.int, step, step_fast: c.int, flags: Im_Input_Text_Flags) -> bool ---
