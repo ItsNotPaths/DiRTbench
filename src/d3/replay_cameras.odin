@@ -41,10 +41,6 @@ D3_Camera_Shot :: struct {
 	// Bezier segments of four controls, and one segment is the whole shot.
 	eye_end:   [3]f32,
 	aim_end:   [3]f32,
-	// A fixed quaternion instead of a target path, only on the shots copied
-	// whole from stock, whose coordinates are relative to a subject. nil
-	// tracks `aim`..`aim_end` and derives the orientation from it.
-	orient:    Maybe([4]f32),
 	duration:  f32,
 }
 
@@ -229,35 +225,6 @@ d3_camera_shots :: proc(
 		}, base, route, allocator)
 	}
 
-	// The four cameras stock places in relative coordinates rather than world
-	// ones, copied whole. Nothing here may be derived from the road: these sit
-	// metres from a subject, not from the origin.
-	//
-	// Only `relative_service_camera` is named by a cutscene we write. The other
-	// three are here because a donor's retained cutscenes may name them —
-	// `post_race` reaches for `finish_camera` on some routes — and a cutscene
-	// naming a camera the config lacks is the failure this avoids.
-	for shot in ([]D3_Camera_Shot{
-		{
-			ident    = "relative_service_camera",
-			eye      = {7.594849, 2.342340, -2.604227},
-			eye_end  = {3.776722, 0.269022, -5.072510},
-			orient   = [4]f32{-0.049793, -0.158308, -0.007994, 0.986101},
-			duration = 5,
-		},
-		{
-			ident    = "finish_camera",
-			eye      = {-2.73, 0.82, 3.16},
-			eye_end  = {-2.73, 0.82, 3.16},
-			orient   = [4]f32{0, 0, 0, 1},
-			duration = 5,
-		},
-		{ident = "one2watch_camera", orient = [4]f32{0, 0, 0, 1}, duration = 5},
-		{ident = "one2watch_camera_RAM", orient = [4]f32{0, 0, 0, 1}, duration = 5},
-	}) {
-		append(&out, shot)
-	}
-
 	// The montage. Spread over the middle of the route, so the establishing
 	// shot and the grid are not repeated.
 	for i in 0 ..< montage {
@@ -271,7 +238,7 @@ d3_camera_shots :: proc(
 		shot.ident = fmt.aprintf("mont_%d_camera_r%d", i, route, allocator = allocator)
 		append(&out, shot)
 	}
-	return out[:], fmt.tprintf("%d cameras, %d montage shots", len(out), montage), true
+	return out[:], fmt.tprintf("%d placed, %d montage shots", len(out), montage), true
 }
 
 // --- the config --------------------------------------------------------------
@@ -410,8 +377,7 @@ d3_replay_camera_config :: proc(
 		// exceptions are shared splines and sub-millimetre drift; ours has
 		// neither.
 		append(&params, d3_cam_vector3("Position", shot.eye))
-		tracks := shot.orient == nil
-		orientation := shot.orient.? or_else d3_camera_orientation(d3_cam_sub(shot.aim, shot.eye))
+		orientation := d3_camera_orientation(d3_cam_sub(shot.aim, shot.eye))
 		append(&params, bxml_node("Parameter", bxml_attrs(
 			{"name", "orientation"}, {"type", "Quaternion"},
 			{"x", d3_cam_f(orientation[0])}, {"y", d3_cam_f(orientation[1])},
@@ -425,20 +391,21 @@ d3_replay_camera_config :: proc(
 
 		attrs := make([dynamic]Bxml_Attr, context.temp_allocator)
 		append(&attrs, Bxml_Attr{"type", "zoom"}, Bxml_Attr{"ident", shot.ident})
-		append(&attrs, Bxml_Attr{"sourcePath", source})
-		if tracks {
-			append(&attrs, Bxml_Attr{"targetPath", target})
-		}
+		append(&attrs, Bxml_Attr{"sourcePath", source}, Bxml_Attr{"targetPath", target})
 		append(&attrs, Bxml_Attr{"postProcess", "PreRaceDOF"})
 		append(&children, bxml_node("Camera", attrs[:], params[:], context.temp_allocator))
 
 		append(&children, d3_cam_spline(source, shot.eye, shot.eye_end, shot.duration, curve))
 		append(&children, d3_cam_linear(curve))
-		if tracks {
-			append(&children, d3_cam_spline(target, shot.aim, shot.aim_end, shot.duration, target_curve))
-			append(&children, d3_cam_linear(target_curve))
-		}
+		append(&children, d3_cam_spline(target, shot.aim, shot.aim_end, shot.duration, target_curve))
+		append(&children, d3_cam_linear(target_curve))
 	}
+
+	// The cameras no route derives, copied whole rather than placed: the crash
+	// camera with its rig, and the four whose coordinates are metres from a
+	// subject instead of from the venue origin.
+	append(&children, ..d3_stock_elements(context.temp_allocator))
+	shots_msg = fmt.tprintf("%s, %d copied whole", shots_msg, D3_STOCK_CAMERAS)
 
 	root := bxml_node("ReplayCameraConfiguration", bxml_attrs(
 		{"route", fmt.tprintf("%d", route)},
