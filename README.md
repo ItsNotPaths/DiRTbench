@@ -2,7 +2,7 @@
   <img src="assets/dirtbenchlogo.png" alt="dirtbench" width="320">
 </p>
 
-<p align="center">Dirt 3 stage/venue creator..</p>
+<p align="center">Dirt 3 stage/venue creator.</p>
 
 ## Build
 
