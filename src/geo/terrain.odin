@@ -118,7 +118,7 @@ TERRAIN_DEFAULTS :: Terrain {
 	enabled = false,
 	reach_m = 96,
 	blend_m = 48,
-	cell_m  = 8,
+	cell_m  = 4,
 	row_m   = 10,
 }
 
