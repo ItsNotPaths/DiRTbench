@@ -16,10 +16,10 @@ recovery_fixture :: proc(
 	t: ^testing.T, root, live_root, name: string,
 ) -> (set: Recovery_Set, live_path: string) {
 	set_dir, _ := filepath.join({root, "set-aside-120000"}, context.temp_allocator)
-	held_dir, _ := filepath.join({set_dir, "stage", name}, context.temp_allocator)
+	held_dir, _ := filepath.join({set_dir, "venue", name}, context.temp_allocator)
 	err := os.make_directory_all(held_dir)
 	testing.expect(t, err == nil || err == os.General_Error.Exist, "could not make the set folder")
-	held, _ := filepath.join({held_dir, VENUE_ROAD_FILE}, context.temp_allocator)
+	held, _ := filepath.join({held_dir, RECOVERY_DOC_FILE}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(held, transmute([]u8)string("recovered")) == nil)
 
 	live_path, _ = filepath.join(
@@ -31,7 +31,7 @@ recovery_fixture :: proc(
 	paths := make([]string, 1, context.temp_allocator)
 	paths[0] = live_path
 	docs := make([]Recovery_Doc, 1, context.temp_allocator)
-	docs[0] = {kind = .Stage, id = name, paths = paths}
+	docs[0] = {id = name, paths = paths}
 	testing.expect(t, recovery_write_manifest(set_dir, .Recovered, docs), "manifest not written")
 	return Recovery_Set{dir = set_dir, state = .Recovered, docs = docs}, live_path
 }
@@ -59,7 +59,7 @@ recovery_swap_puts_each_version_where_the_other_was :: proc(t: ^testing.T) {
 	// What the crash would have left on disk: the last save.
 	testing.expect(t, os.write_entire_file(live, transmute([]u8)string("on disk")) == nil)
 
-	held, _ := filepath.join({set.dir, "stage", "moose", VENUE_ROAD_FILE}, context.temp_allocator)
+	held, _ := filepath.join({set.dir, "venue", "moose", RECOVERY_DOC_FILE}, context.temp_allocator)
 
 	msg, ok := recovery_swap(&set)
 	testing.expect(t, ok, msg); if !ok { return }
@@ -100,7 +100,7 @@ recovery_swap_handles_a_document_that_was_never_saved :: proc(t: ^testing.T) {
 	msg, ok = recovery_swap(&set)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect(t, !os.exists(live), "undoing left the recovered file behind")
-	held, _ := filepath.join({set.dir, "stage", "moose", VENUE_ROAD_FILE}, context.temp_allocator)
+	held, _ := filepath.join({set.dir, "venue", "moose", RECOVERY_DOC_FILE}, context.temp_allocator)
 	testing.expect_value(t, file_text(held), "recovered")
 }
 
@@ -113,7 +113,7 @@ recovery_promote_claims_only_dead_sessions :: proc(t: ^testing.T) {
 	_ = os.remove_all(root)
 
 	docs := make([]Recovery_Doc, 1, context.temp_allocator)
-	docs[0] = {kind = .Venue, id = "moose_loop"}
+	docs[0] = {id = "moose_loop"}
 	// One from a process that is gone, one from this one, which is alive.
 	dead := recovery_live_dir(root, 999_999, context.temp_allocator)
 	testing.expect(t, recovery_write_manifest(dead, .Recovered, docs), "no manifest for the dead run")
@@ -140,28 +140,16 @@ recovery_promote_claims_only_dead_sessions :: proc(t: ^testing.T) {
 @(test)
 recovery_refuses_to_swap_a_document_a_window_holds :: proc(t: ^testing.T) {
 	forest := Venue_Doc{open_venue = "forest"}
-	loose := Venue_Doc{}
-	set_stage_name(&loose, "hill climb")
-	open := []^Venue_Doc{&forest, &loose}
+	open := []^Venue_Doc{&forest}
 
 	docs := make([]Recovery_Doc, 1, context.temp_allocator)
 
-	docs[0] = {kind = .Venue, id = "moose_loop"}
+	docs[0] = {id = "moose_loop"}
 	_, blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
 	testing.expect(t, !blocked, "a venue nobody has open was refused")
 
-	docs[0] = {kind = .Venue, id = "forest"}
+	docs[0] = {id = "forest"}
 	held, venue_blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
 	testing.expect(t, venue_blocked, "a venue with a window open was allowed")
 	testing.expect_value(t, held, "forest")
-
-	// A loose road is matched by the name it saves under, which is what
-	// sanitise_stage_name makes of whatever the name field holds.
-	docs[0] = {kind = .Stage, id = sanitise_stage_name("hill climb")}
-	_, stage_blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
-	testing.expect(t, stage_blocked, "an open loose road was allowed")
-
-	docs[0] = {kind = .Stage, id = "forest"}
-	_, cross_blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
-	testing.expect(t, !cross_blocked, "a stage was matched against a venue of the same name")
 }

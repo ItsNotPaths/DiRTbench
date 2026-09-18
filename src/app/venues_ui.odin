@@ -222,9 +222,7 @@ draw_recovery_row :: proc(app: ^App, set: Recovery_Set, i: int) -> Recovery_Answ
 	}
 	ui.im_text_colored(recovered ? WARN_COL : MINE_COL, headline)
 	for doc in set.docs {
-		ui.im_text_colored(
-			DIM_COL, fmt.ctprintf("    %s %s", doc.kind == .Venue ? "venue" : "stage", doc.id),
-		)
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("    venue %s", doc.id))
 	}
 
 	if held, blocked := recovery_blocked_by(app.docs[:], set); blocked {
@@ -319,7 +317,7 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 	if !ui.igCollapsingHeader_TreeNodeFlags(label, ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
-	ui.im_text_colored(MINE_COL, fmt.ctprintf("art from %s/%s", p.base, p.base_route))
+	ui.im_text_colored(MINE_COL, fmt.ctprint(pack_text(p.base, p.base_route)))
 	deployed := false
 	if venue, found := d3.install_venue(&app.install.install, p.location, p.id); found {
 		deployed = d3.venue_playable(venue^)
@@ -650,29 +648,12 @@ install_venue_by_id :: proc(vs: ^Install_Scan, id: string) -> (venue: d3.Venue, 
 // --- opening -----------------------------------------------------------------
 
 venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
-	path := venue_road_path(p.id)
-	migrating := false
-	// One-time compatibility bridge for projects made before venues owned a
-	// road.json: their first route was the road document.
-	if !os.exists(path) && len(p.stages) > 0 {
-		path = venue_stage_path(p.id, p.stages[0])
-		migrating = true
-	}
-	if load_msg, loaded := load_road(doc, path); !loaded {
+	if load_msg, loaded := doc_load_road(doc, p.road); !loaded {
 		return load_msg, false
 	}
 	routes_free(&doc.routes)
 	doc.routes = venue_routes(p^)
 	doc.next_route = p.next_route
-	if migrating {
-		if save_msg, saved := save_road(doc, venue_road_path(p.id)); !saved {
-			return fmt.tprintf("opened old road but could not migrate it: %s", save_msg), false
-		}
-		p.version = VENUE_VERSION
-		if save_msg, saved := venue_save(p^); !saved {
-			return fmt.tprintf("migrated road but could not update venue: %s", save_msg), false
-		}
-	}
 	delete(doc.open_venue)
 	doc.open_venue = strings.clone(p.id)
 	// The trees come with the art: the base venue picks the species, not the user.

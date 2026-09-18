@@ -1,7 +1,8 @@
 package d3
 
-// The graphics template for one of our venues, read out of the base venue's
-// `tracksplit.pssg` when the venue is made.
+// The graphics template a venue draws with, read out of the base venue's
+// `tracksplit.pssg`. One pack per base venue, under `content-packs/`, shared by
+// every venue of ours that derives from it.
 //
 // It holds shader metadata and texture names, never a payload. A SHADERINPUT
 // names its texture as `tracksplit.pssg#<name>.tga`, and that resolves against
@@ -160,11 +161,11 @@ d3_pack_probe_mesh :: proc(allocator := context.temp_allocator) -> []Collision_T
 	return out
 }
 
-// Extract the pack and the profile that names its materials. `venue_id` becomes
-// the profile's `default` key, so the file says which venue it belongs to.
+// Extract the pack and the profile that names its materials. `base_id` becomes
+// the profile's `default` key, so the file says which base venue it came out of.
 d3_pack_build :: proc(
 	tracksplit: []u8,
-	venue_id: string,
+	base_id: string,
 	allocator := context.allocator,
 ) -> (
 	pack: []u8,
@@ -215,7 +216,7 @@ d3_pack_build :: proc(
 	// Colours, collision codes and the tile grid are ours. The base venue
 	// decides only which shaders name its art.
 	profile := d3_profile_defaults()
-	profile.id = venue_id
+	profile.id = base_id
 	profile.lod = lod[0].id
 	profile.batch = batch[0].id
 	// The largest surface material drives the road, and the largest one with a
@@ -295,7 +296,7 @@ d3_pack_build :: proc(
 	return encoded, strings.clone(d3_profile_text(profile, context.temp_allocator), allocator), "", true
 }
 
-// --- the venue's `base/` directory -------------------------------------------
+// --- the pack on disk ---------------------------------------------------------
 
 d3_profile_save :: proc(dir: string, pack: []u8, profile_text: string) -> (msg: string, ok: bool) {
 	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
@@ -336,7 +337,7 @@ d3_tracksplit_path :: proc(base_dir: string, allocator := context.temp_allocator
 // Extract straight to a profile, writing nothing. This is how a stage exported
 // over a stock route draws with that venue's own shaders.
 d3_pack_profile :: proc(
-	base_dir, venue_id: string,
+	base_dir, base_id: string,
 	allocator := context.temp_allocator,
 ) -> (
 	profile: D3_Venue_Profile,
@@ -348,20 +349,20 @@ d3_pack_profile :: proc(
 	if read_err != nil {
 		return profile, fmt.tprintf("could not read %s: %v", source, read_err), false
 	}
-	pack, text, build_msg, built := d3_pack_build(tracksplit, venue_id, allocator)
+	pack, text, build_msg, built := d3_pack_build(tracksplit, base_id, allocator)
 	if !built { return profile, build_msg, false }
 	return d3_profile_parse(text, pack, allocator)
 }
 
-// One call for venue creation: read the base venue's tracksplit, extract the
-// pack, and write both files into `dir`.
-d3_pack_install :: proc(base_dir, dir, venue_id: string) -> (msg: string, ok: bool) {
+// One call to build a content pack: read the base venue's tracksplit, extract
+// the pack, and write both files into `dir`.
+d3_pack_install :: proc(base_dir, dir, base_id: string) -> (msg: string, ok: bool) {
 	source := d3_tracksplit_path(base_dir)
 	tracksplit, read_err := os.read_entire_file(source, context.temp_allocator)
 	if read_err != nil {
 		return fmt.tprintf("could not read %s: %v", source, read_err), false
 	}
-	pack, profile_text, build_msg, built := d3_pack_build(tracksplit, venue_id, context.temp_allocator)
+	pack, profile_text, build_msg, built := d3_pack_build(tracksplit, base_id, context.temp_allocator)
 	if !built { return build_msg, false }
 	if save_msg, saved := d3_profile_save(dir, pack, profile_text); !saved { return save_msg, false }
 	return fmt.tprintf("%d byte material pack from %s", len(pack), source), true

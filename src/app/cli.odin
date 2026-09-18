@@ -105,7 +105,6 @@ run_cli :: proc() -> (handled: bool) {
 	target := "dirt3"
 	terrain := false
 	debug_out := false
-	route := ""
 	venue := ""
 	for i := 2; i < len(args); i += 1 {
 		switch args[i] {
@@ -113,13 +112,6 @@ run_cli :: proc() -> (handled: bool) {
 			terrain = true
 		case "--debug-out":
 			debug_out = true
-		case "--route":
-			if i + 1 >= len(args) {
-				fmt.println("--route needs <venue>/<route_n>")
-				os.exit(1)
-			}
-			i += 1
-			route = args[i]
 		case "--venue":
 			if i + 1 >= len(args) {
 				fmt.println("--venue needs the id of one of ours; see --venues")
@@ -139,7 +131,7 @@ run_cli :: proc() -> (handled: bool) {
 			os.exit(1)
 		}
 	}
-	msg, ok := export_headless(args[1], target, terrain, debug_out, route, venue)
+	msg, ok := export_headless(args[1], target, terrain, debug_out, venue)
 	fmt.println(msg)
 	os.exit(0 if ok else 1)
 }
@@ -245,13 +237,13 @@ dirt3_placement_raise_headless :: proc(path: string, dy: f32, out_path: string) 
 	return fmt.tprintf("%s -> %s: raised %d instances by %.3f m Y (%s; %s)", path, out_path, len(instances), dy, read_msg, write_msg), true
 }
 
-// `--pacenotes <stage>`: load a stage, generate the notes and print them. No
+// `--pacenotes <venue>`: load a venue's road, generate the notes and print them. No
 // window, no GL — the generator is pure, so this is the way to eyeball the
 // placement numbers while tuning.
 hectic_headless :: proc(stage: string, s0, s1: f32) {
 	doc := doc_defaults()
 	defer doc_delete(&doc)
-	if msg, ok := load_road_named(&doc, stage); !ok {
+	if msg, ok := load_road(&doc, venue_path(stage)); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}
@@ -265,7 +257,7 @@ hectic_headless :: proc(stage: string, s0, s1: f32) {
 pacenotes_headless :: proc(stage: string, reverse: bool) {
 	doc := doc_defaults()
 	defer doc_delete(&doc)
-	if msg, ok := load_road_named(&doc, stage); !ok {
+	if msg, ok := load_road(&doc, venue_path(stage)); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}

@@ -3,10 +3,10 @@ package d3
 // Venue-specific graphics data, kept deliberately small: shader metadata and
 // texture names, never texture or model payloads.
 //
-// A venue carries its own profile under `base/`, extracted from the venue it
-// derives from when it was made. See material_pack.odin. Nothing in the export
-// path names a venue: what the base venue decides is the shader names, and
-// everything else here is our own convention.
+// The profile lives in the base venue's content pack, not in our venue. See
+// material_pack.odin. Nothing in the export path names one of our venues: the
+// base venue decides the shader names, and everything else here is our own
+// convention.
 //
 // One parser and one writer cover the file, so a round trip is a free test.
 
@@ -21,10 +21,14 @@ import "core:strings"
 D3_FIXTURE_MATERIALS :: #load("../../assets/d3/moosylvania-materials.pssg")
 D3_FIXTURE_ID :: "fixture"
 
-// The venue's borrowed-art directory, and the two files in it.
-D3_PROFILE_DIR :: "base"
+// The two files a pack is made of.
 D3_PROFILE_FILE :: "profile.txt"
 D3_MATERIALS_FILE :: "materials.pssg"
+
+// A pack is shared and outlives the build that wrote it, so it says which build
+// that was. Raise this whenever the extraction changes, and every pack already
+// on disk is rebuilt instead of silently reused.
+D3_PACK_STAMP :: 1
 
 D3_MATERIAL_KEY := [Collision_Material]string {
 	.Road      = "road",
@@ -35,6 +39,7 @@ D3_MATERIAL_KEY := [Collision_Material]string {
 
 D3_Venue_Profile :: struct {
 	id:        string,
+	pack:      int,
 	template:  []u8,
 	visual:    [Collision_Material]string,
 	colour:    [Collision_Material][4]u8,
@@ -79,6 +84,11 @@ d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (
 	switch field {
 	case "lod":   profile.lod = value;   return "", true
 	case "batch": profile.batch = value; return "", true
+	case "pack":
+		stamp, parsed := strconv.parse_int(value)
+		if !parsed { return fmt.tprintf("malformed pack stamp %s in Dirt 3 profile", value), false }
+		profile.pack = stamp
+		return "", true
 	case "tiles_x", "tiles_z":
 		count, parsed := strconv.parse_int(value)
 		if !parsed || count < 1 { return fmt.tprintf("malformed tile count %s in Dirt 3 profile", field), false }
@@ -155,6 +165,7 @@ d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_all
 	strings.write_string(&b, "# Written by dirtbench from the base venue's tracksplit.pssg.\n")
 	strings.write_string(&b, "# Values are PSSG SHADERINSTANCE ids in materials.pssg beside this file.\n")
 	fmt.sbprintf(&b, "default = %s\n", profile.id)
+	fmt.sbprintf(&b, "%s.pack = %d\n", profile.id, profile.pack)
 	for material in Collision_Material {
 		key := D3_MATERIAL_KEY[material]
 		colour := profile.colour[material]
@@ -177,6 +188,7 @@ d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_all
 // material is tinted, which collision code it maps to, and how the route is
 // tiled. `visual`, `lod`, `batch` and `id` are the base venue's to fill in.
 d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
+	profile.pack = D3_PACK_STAMP
 	profile.tiles_x = 8
 	profile.tiles_z = 4
 	for material in Collision_Material {

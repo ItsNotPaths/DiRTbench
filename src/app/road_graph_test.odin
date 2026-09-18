@@ -384,33 +384,6 @@ compile_keeps_markers_clear_of_the_nodes_they_sit_between :: proc(t: ^testing.T)
 	}
 }
 
-@(test)
-old_projects_migrate_their_stage_names_into_routes :: proc(t: ^testing.T) {
-	p := Venue {
-		stages = []string{"route_0", "route_1"},
-		names  = {stages = []string{"FIRST", "SECOND"}},
-	}
-	venue_migrate_routes(&p, context.temp_allocator)
-	testing.expect_value(t, len(p.routes), 2)
-	testing.expect_value(t, p.routes[0].id, "route_0")
-	testing.expect_value(t, p.routes[1].name, "SECOND")
-	// Migrated routes have no markers, so the venue says what it still needs
-	// instead of looking ready to export.
-	for route in p.routes {
-		testing.expect(t, !route_has_markers(route))
-	}
-
-	// A project that already has routes is left alone.
-	kept := Venue {
-		stages = []string{"route_0"},
-		routes = []Venue_Route{{id = "route_9", start = {0, 1, 0.5}, finish = {1, 2, 0.5}}},
-	}
-	venue_migrate_routes(&kept, context.temp_allocator)
-	testing.expect_value(t, len(kept.routes), 1)
-	testing.expect_value(t, kept.routes[0].id, "route_9")
-	testing.expect(t, route_has_markers(kept.routes[0]))
-}
-
 // --- cliffs over the graph ----------------------------------------------------
 
 // A straight road along +Z, every point facing the way it runs, so arc length

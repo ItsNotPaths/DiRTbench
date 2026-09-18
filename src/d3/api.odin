@@ -86,6 +86,6 @@ Registration_Output_Delete :: registration_output_delete
 Database_Bytes_Have_Venue :: database_bytes_have_venue
 Venue_Profile :: D3_Venue_Profile
 Profile_Load :: d3_profile_load
-Profile_Dir :: D3_PROFILE_DIR
+Pack_Stamp :: D3_PACK_STAMP
 Pack_Install :: d3_pack_install
 Pack_Profile :: d3_pack_profile

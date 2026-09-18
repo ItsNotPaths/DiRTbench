@@ -1,5 +1,7 @@
 package main
 
+import "core:os"
+import "core:strings"
 import "core:testing"
 import "../geo"
 import "../gfx"
@@ -165,4 +167,37 @@ a_document_is_freed_only_with_its_last_window :: proc(t: ^testing.T) {
 	testing.expect(t, editors_detach(&app, &b) == &shared, "the last window did not release the shared document")
 	testing.expect_value(t, len(app.editors), 0)
 	testing.expect_value(t, len(app.docs), 0)
+}
+
+// A venue document is one file, so the road and the stage list are written
+// together. They were not always: the road save used to re-read the file and
+// take the stage list from a document that did not have one yet, which threw
+// away the stage every new venue starts with.
+@(test)
+a_written_document_keeps_its_road_and_its_stages :: proc(t: ^testing.T) {
+	path := "/tmp/claude-1000/dirtbench-doc-round-trip.json"
+	defer os.remove(path)
+
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
+	append(&doc.routes, Venue_Route{
+		id     = strings.clone("route_0"),
+		name   = strings.clone("FIRST"),
+		start  = {from = -1, to = -1},
+		finish = {from = -1, to = -1},
+	})
+
+	p := Venue{format = VENUE_FORMAT, version = VENUE_VERSION, id = "moose", base = "finland/finland_rally"}
+	msg, ok := venue_doc_write(p, &doc, path)
+	testing.expect(t, ok, msg); if !ok { return }
+
+	back, load_msg, loaded := venue_load_path(path, context.temp_allocator)
+	testing.expect(t, loaded, load_msg); if !loaded { return }
+	testing.expect_value(t, back.base, "finland/finland_rally")
+	testing.expect_value(t, len(back.routes), 1)
+	testing.expect_value(t, back.routes[0].name, "FIRST")
+	testing.expect_value(t, len(back.road.points), len(doc.spline.points))
+	// The counter must clear every id in use, or the next stage takes one back.
+	testing.expect(t, back.next_route > 0)
 }

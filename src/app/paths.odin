@@ -9,6 +9,9 @@ package main
 //     <data_dir>/maps/            loose road documents
 //     <data_dir>/maps/crash-backups/  autosaves (recovery.odin)
 //     <data_dir>/venues/          our venues, one directory each
+//     <data_dir>/content-packs/   what we take out of the vanilla game, one
+//                                 pack per base venue, shared by every venue
+//                                 of ours that derives from it
 //     <data_dir>/out/             the debug export detour
 //
 // One root, named once: every other path in the tool derives from `data_dir`,
@@ -36,6 +39,14 @@ maps_dir :: proc(allocator := context.temp_allocator) -> string {
 
 venues_dir :: proc(allocator := context.temp_allocator) -> string {
 	joined, _ := filepath.join({data_dir(context.temp_allocator), "venues"}, allocator)
+	return joined
+}
+
+// Derived cache, never a document. A pack rebuilds itself out of the player's
+// own install, so erasing this directory costs nothing and nothing in it may
+// travel to another machine.
+content_packs_dir :: proc(allocator := context.temp_allocator) -> string {
+	joined, _ := filepath.join({data_dir(context.temp_allocator), "content-packs"}, allocator)
 	return joined
 }
 

@@ -24,90 +24,20 @@ import "../ui"
 
 // --- actions ----------------------------------------------------------------
 
-// Saves under the (sanitised) name in the buffer, and writes the sanitised name
-// back so the field always shows the filename that actually exists on disk.
+// The document goes home to its venue file. The road and the markers that make
+// the stages go down together, so neither can land without the other.
 do_save :: proc(ed: ^Editor) {
-	// A stage opened from one of our venues belongs to it. Saving it into
-	// maps/ under whatever the name field says would quietly fork the document.
-	if ed.doc.open_venue != "" {
-		path := venue_road_path(ed.doc.open_venue)
-		msg, ok := save_road(ed.doc, path)
-		if ok {
-			// The markers are the stages, and they live in venue.json. Saving the
-			// road without them would drop every start and finish line.
-			msg, ok = venue_routes_save(ed.doc.open_venue, ed.doc.routes[:], ed.doc.next_route)
-		}
-		if ok {
-			msg = fmt.tprintf("saved %s", ed.doc.open_venue)
-			recovery_doc_saved(recovery_root(), ed.doc)
-			// The project manager holds its own copy of venue.json, and both
-			// deploy and every reopen read that copy rather than the file. It
-			// has to be told the file moved under it, or a start line saved
-			// here is invisible to both.
-			ed.app.screen.reload_pending = true
-		}
-		set_status(&ed.status, msg, ok)
-		return
-	}
-	name := sanitise_stage_name(stage_name_text(ed.doc))
-	set_stage_name(ed.doc, name)
-	msg, ok := save_road_named(ed.doc, name)
+	msg, ok := save_road(ed.doc, venue_path(ed.doc.open_venue))
 	if ok {
+		msg = fmt.tprintf("saved %s", ed.doc.open_venue)
 		recovery_doc_saved(recovery_root(), ed.doc)
+		// The project manager holds its own copy of the document, and both
+		// deploy and every reopen read that copy rather than the file. It has
+		// to be told the file moved under it, or a start line saved here is
+		// invisible to both.
+		ed.app.screen.reload_pending = true
 	}
 	set_status(&ed.status, msg, ok)
-}
-
-// The chain this window exports, and the name it exports under.
-//
-// Only a loose road out of maps/ exports from an editor window. A venue's
-// stages are written by the project manager, which publishes all of them
-// against one load of the road graph — see venue_export_all.
-export_target_chain :: proc(ed: ^Editor) -> (chain: geo.Spline, name: string, ok: bool) {
-	if ed.kind != .Stage || ed.doc.open_venue != "" {
-		return
-	}
-	return ed.doc.spline, sanitise_stage_name(stage_name_text(ed.doc)), len(ed.doc.spline.points) >= 2
-}
-
-// The worker is joined and the rebuild finished first: an export reads the
-// geometry, so it cannot run against a job still in flight or against a terrain
-// deferred by a drag. Nothing is dragging when a menu is open, so in practice
-// this only waits, and it is the guard against ever calling export elsewhere.
-do_export :: proc(ed: ^Editor, target: ^Export_Target) {
-	chain, name, ready := export_target_chain(ed)
-	if !ready {
-		set_status(&ed.status, "only a loose road out of maps/ exports here; a venue publishes from the project manager", false)
-		return
-	}
-	set_stage_name(ed.doc, name)
-	rebuild_join(ed.doc)
-	rebuild_geometry(ed.doc)
-	msg, ok := export_stage(ed.doc, chain, name, ed.stage_id, target)
-	set_status(&ed.status, msg, ok)
-}
-
-do_load :: proc(ed: ^Editor, name: string) {
-	// The sculpt comes out of the file, so it must not be invalidated after:
-	// the loaded offsets are what the next rebuild re-attaches by position.
-	msg, ok := load_road_named(ed.doc, name)
-	if ok {
-		set_stage_name(ed.doc, name)
-		ed.sel = {} // indices from the old spline mean nothing now
-		mark_dirty(ed.doc)
-		doc_loaded(ed.doc)
-	}
-	set_status(&ed.status, msg, ok)
-}
-
-do_new :: proc(ed: ^Editor) {
-	seed_spline(&ed.doc.spline)
-	ed.doc.timing = TIMING_DEFAULTS
-	ed.sel = {}
-	geo.terrain_invalidate(&ed.doc.terrain)
-	set_stage_name(ed.doc, "untitled")
-	mark_dirty(ed.doc)
-	set_status(&ed.status, "new stage", true)
 }
 
 // Regenerating reallocates spline.points, so it must never run while the gizmo
@@ -189,39 +119,8 @@ draw_menubar :: proc(ed: ^Editor) {
 		if ed.doc.open_venue != "" && ui.igMenuItem_Bool("Close editor", nil, false, true) {
 			ed.quit = true
 		}
-		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("New", nil, false, true) {
-			do_new(ed)
-		}
-		if ui.igMenuItem_Bool("Save", "Ctrl+S", false, len(ed.doc.spline.points) >= 2) {
-			do_save(ed)
-		}
-		if ed.doc.open_venue == "" && ui.igBeginMenu("Load", true) {
-			stages := list_stages()
-			if len(stages) == 0 {
-				ui.igBeginDisabled(true)
-				ui.igMenuItem_Bool("(no stages in maps/)", nil, false, true)
-				ui.igEndDisabled()
-			}
-			for name in stages {
-				label := fmt.ctprint(name)
-				if ui.igMenuItem_Bool(label, nil, name == stage_name_text(ed.doc), true) {
-					do_load(ed, name)
-				}
-			}
-			ui.igEndMenu()
-		}
 		ui.igSeparator()
-		_, _, exportable := export_target_chain(ed)
-		if ed.doc.open_venue == "" && ui.igBeginMenu("Export to", exportable) {
-			for &t in EXPORT_TARGETS {
-				label := fmt.ctprint(t.label)
-				if ui.igMenuItem_Bool(label, nil, false, true) {
-					do_export(ed, &t)
-				}
-			}
-			ui.igEndMenu()
-		}
-		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()
@@ -416,14 +315,8 @@ draw_inspector :: proc(ed: ^Editor) {
 }
 
 draw_inspector_body :: proc(ed: ^Editor) {
-	ui.igSeparatorText(ed.doc.open_venue != "" ? "Venue road network" : "Stage")
-	if ed.doc.open_venue != "" {
-		ui.im_text(fmt.ctprint(ed.doc.open_venue))
-	} else {
-		if ui.igInputText("name", raw_data(ed.doc.stage_name[:]), len(ed.doc.stage_name), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil) {
-			mark_edited(ed.doc)
-		}
-	}
+	ui.igSeparatorText("Venue road network")
+	ui.im_text(fmt.ctprint(ed.doc.open_venue))
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)
@@ -816,11 +709,10 @@ draw_targets :: proc(ed: ^Editor) {
 	ui.igCheckbox("Write to out/ instead of the game", &ed.doc.debug_export)
 	ui.igSpacing()
 
-	_, name, _ := export_target_chain(ed)
 	for &t in EXPORT_TARGETS {
 		ui.igSeparatorText(fmt.ctprint(t.label))
 		ui.im_text(fmt.ctprint(t.blurb))
-		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, name, ed.stage_id, &t)
+		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, ed.stage_id, &t)
 		if !dest_ok {
 			ui.im_text_colored(DIM_COL, fmt.ctprint(dest_msg))
 		} else if installing {

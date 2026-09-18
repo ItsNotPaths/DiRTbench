@@ -36,19 +36,12 @@ RECOVERY_VERSION :: 1
 // a crash loses a sculpting pass, not an afternoon.
 RECOVERY_INTERVAL :: 20.0 // seconds
 
-// Which document a snapshot came from, and so where it goes back to. A venue is
-// two files: road.json, and the venue.json its stages live in.
-Recovery_Kind :: enum {
-	Venue,
-	Stage, // a loose road out of maps/
-}
-
+// Which document a snapshot came from, and so where it goes back to.
 Recovery_Doc :: struct {
-	kind: Recovery_Kind,
-	id:   string, // venue id, or stage name without the extension
+	id: string, // venue id
 	// Where this document belongs, recorded when the snapshot was taken rather
-	// than worked out again when it is put back. A venue is two paths, a loose
-	// road one, and they pair with the files in the set folder in this order.
+	// than worked out again when it is put back. It pairs with the file in the
+	// set folder.
 	paths: []string,
 }
 
@@ -78,6 +71,9 @@ Recovery_File :: struct {
 	docs:   []Recovery_Doc,
 }
 
+// The snapshot's name for a document. One file, whatever kind it is.
+RECOVERY_DOC_FILE :: "road.json"
+
 recovery_root :: proc(allocator := context.temp_allocator) -> string {
 	joined, _ := filepath.join({maps_dir(context.temp_allocator), RECOVERY_DIR}, allocator)
 	return joined
@@ -95,30 +91,16 @@ recovery_live_dir :: proc(root: string, pid := -1, allocator := context.temp_all
 recovery_doc_dir :: proc(
 	set_dir: string, doc: Recovery_Doc, allocator := context.temp_allocator,
 ) -> string {
-	kind := doc.kind == .Venue ? "venue" : "stage"
-	joined, _ := filepath.join({set_dir, kind, doc.id}, allocator)
+	joined, _ := filepath.join({set_dir, "venue", doc.id}, allocator)
 	return joined
 }
 
-// Which document this is and where it belongs: a venue by id, with its road and
-// its venue.json, or a loose road by the name it saves under.
+// Which document this is and where it belongs.
 recovery_doc_of :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> Recovery_Doc {
-	if doc.open_venue == "" {
-		name := sanitise_stage_name(stage_name_text(doc), allocator)
-		paths := make([]string, 1, allocator)
-		paths[0] = stage_path(name, allocator)
-		return {kind = .Stage, id = name, paths = paths}
-	}
-	paths := make([]string, 2, allocator)
-	paths[0] = venue_road_path(doc.open_venue, allocator)
-	paths[1], _ = filepath.join(
-		{venue_dir(doc.open_venue, context.temp_allocator), VENUE_FILE}, allocator,
-	)
-	return {kind = .Venue, id = doc.open_venue, paths = paths}
+	paths := make([]string, 1, allocator)
+	paths[0] = venue_path(doc.open_venue, allocator)
+	return {id = doc.open_venue, paths = paths}
 }
-
-@(private = "file")
-RECOVERY_FILES := [2]string{VENUE_ROAD_FILE, VENUE_FILE}
 
 // The snapshot file that pairs with each live path, in the same order.
 @(private = "file")
@@ -126,15 +108,8 @@ recovery_snapshot_paths :: proc(
 	set_dir: string, doc: Recovery_Doc, allocator := context.temp_allocator,
 ) -> []string {
 	dir := recovery_doc_dir(set_dir, doc, context.temp_allocator)
-	if doc.kind == .Stage {
-		out := make([]string, 1, allocator)
-		out[0], _ = filepath.join({dir, VENUE_ROAD_FILE}, allocator)
-		return out
-	}
-	out := make([]string, 2, allocator)
-	for name, i in RECOVERY_FILES {
-		out[i], _ = filepath.join({dir, name}, allocator)
-	}
+	out := make([]string, 1, allocator)
+	out[0], _ = filepath.join({dir, RECOVERY_DOC_FILE}, allocator)
 	return out
 }
 
@@ -150,20 +125,14 @@ recovery_write_doc :: proc(root: string, doc: ^Venue_Doc) -> (msg: string, ok: b
 		return fmt.tprintf("could not create %s: %v", dir, err), false
 	}
 	paths := recovery_snapshot_paths(recovery_live_dir(root), rd)
-	if msg, ok = save_road(doc, paths[0]); !ok {
-		return
-	}
-	if rd.kind == .Stage {
-		return "", true
-	}
+	// Identity comes from the venue's own file, not from the snapshot path:
+	// nothing is there yet, and a snapshot with no base venue restores a venue
+	// that cannot export.
 	p, load_msg, loaded := venue_load(rd.id, context.temp_allocator)
 	if !loaded {
 		return load_msg, false
 	}
-	p.routes = doc.routes[:]
-	p.next_route = doc.next_route
-	venue_route_counter_floor(&p)
-	return venue_write(p, paths[1])
+	return venue_doc_write(p, doc, paths[0])
 }
 
 // A document written home. Its snapshot goes with it: one older than the file it
@@ -449,11 +418,7 @@ swap_files :: proc(live, held: string) -> (msg: string, ok: bool) {
 recovery_blocked_by :: proc(open: []^Venue_Doc, set: Recovery_Set) -> (id: string, blocked: bool) {
 	for doc in set.docs {
 		for held in open {
-			if doc.kind == .Venue && held.open_venue == doc.id {
-				return doc.id, true
-			}
-			if doc.kind == .Stage && held.open_venue == "" &&
-			   sanitise_stage_name(stage_name_text(held)) == doc.id {
+			if held.open_venue == doc.id {
 				return doc.id, true
 			}
 		}

@@ -167,18 +167,14 @@ prop_venue_bodies :: proc(
 
 // --- the catalogue -----------------------------------------------------------
 
-// Where the base venue's art lives. A venue derives from a stock base, and the
-// three library files sit at that base, one level above `route_n`.
+// Where the prop art lives: the stock venue under the document's content pack.
+// The three library files sit there, one level above `route_n`.
 prop_base_dir :: proc(doc: ^Venue_Doc) -> (dir: string, ok: bool) {
-	slash := strings.index_byte(doc.base, '/')
-	if slash < 0 || doc.install == nil || !doc.install.found {
+	if doc.install == nil {
 		return "", false
 	}
-	venue, found := d3.install_venue(&doc.install.install, doc.base[:slash], doc.base[slash + 1:])
-	if !found {
-		return "", false
-	}
-	return venue.dir, true
+	dir = base_venue_dir(doc.install, pack_manifest(doc.base).base)
+	return dir, dir != ""
 }
 
 // Parse both libraries. Idempotent: already loaded for this base is a no-op, and

@@ -20,8 +20,6 @@ Install_Scan :: struct {
 	install: d3.Install,
 	found:   bool,
 	status:  string, // why the last scan failed, when it did
-	venue:   int,    // index into install.venues, -1 for none
-	route:   int,    // index into that venue's routes, -1 for none
 }
 
 install_scan_init :: proc(vs: ^Install_Scan) {
@@ -37,8 +35,7 @@ install_scan_delete :: proc(vs: ^Install_Scan) {
 }
 
 // Re-read the install from disk. Safe to call at any time; the previous scan is
-// released first, and the selection is dropped because its indices no longer
-// mean anything.
+// released first.
 //
 // Every window shares this one scan, so any of them can call this at any time.
 // That is the rule for anything derived from it elsewhere: hold an id, never an
@@ -49,7 +46,6 @@ install_scan_rescan :: proc(vs: ^Install_Scan) {
 	}
 	delete(vs.status)
 	vs.found, vs.status = false, ""
-	vs.venue, vs.route = -1, -1
 
 	root, have_root := d3_install_dir()
 	if !have_root {
@@ -64,40 +60,6 @@ install_scan_rescan :: proc(vs: ^Install_Scan) {
 		return
 	}
 	vs.install, vs.found = inst, true
-}
-
-// The selected route's directory, or "" when nothing is selected.
-install_scan_route_dir :: proc(vs: ^Install_Scan) -> string {
-	if !vs.found || vs.venue < 0 || vs.route < 0 {
-		return ""
-	}
-	return vs.install.venues[vs.venue].routes[vs.route].dir
-}
-
-// Select a route by name: `<venue>/<route_n>`, e.g. `finland_rally/route_0`.
-// The location is not part of it — venue ids are unique across the install.
-install_scan_select :: proc(vs: ^Install_Scan, spec: string) -> (msg: string, ok: bool) {
-	if !vs.found {
-		return install_scan_status_text(vs), false
-	}
-	slash := strings.index_byte(spec, '/')
-	if slash < 0 {
-		return fmt.tprintf("route %q is not <venue>/<route_n>", spec), false
-	}
-	want_venue, want_route := spec[:slash], spec[slash + 1:]
-	for venue, vi in vs.install.venues {
-		if venue.id != want_venue {
-			continue
-		}
-		for route, ri in venue.routes {
-			if route.id == want_route {
-				vs.venue, vs.route = vi, ri
-				return "", true
-			}
-		}
-		return fmt.tprintf("%s has no %s", venue.id, want_route), false
-	}
-	return fmt.tprintf("no venue named %q", want_venue), false
 }
 
 // One line for the status bar after a rescan.

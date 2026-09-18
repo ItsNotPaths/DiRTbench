@@ -227,47 +227,6 @@ road_file_round_trips_point_ids :: proc(t: ^testing.T) {
 	testing.expect(t, geo.marker_valid(back.spline, m), "a saved marker lost its road on load")
 }
 
-// Every road written before v9 names its points by array position, and every
-// marker written before venue.json v5 holds those same numbers. Handing out
-// id = index on load is what makes both keep meaning what they meant.
-@(private = "file")
-V8_ROAD :: `{
-	"format": "dirtbench.stage",
-	"version": 8,
-	"name": "legacy",
-	"points": [
-		{"parent": -1, "weld": -1, "pos": [0, 0, 0],  "rot": [0, 0, 0, 1], "width": 8},
-		{"parent": 0,  "weld": -1, "pos": [0, 0, 32], "rot": [0, 0, 0, 1], "width": 8},
-		{"parent": 1,  "weld": -1, "pos": [0, 0, 64], "rot": [0, 0, 0, 1], "width": 8},
-		{"parent": 2,  "weld": -1, "pos": [0, 0, 96], "rot": [0, 0, 0, 1], "width": 8}
-	]
-}`
-
-@(test)
-a_road_written_before_ids_keeps_its_markers :: proc(t: ^testing.T) {
-	path := "/tmp/claude-1000/dirtbench-v8-road.json"
-	testing.expect(t, os.write_entire_file(path, transmute([]u8)string(V8_ROAD)) == nil)
-	defer os.remove(path)
-
-	doc := doc_defaults()
-	defer doc_delete(&doc)
-	msg, ok := load_road(&doc, path)
-	testing.expect(t, ok, msg)
-	if !ok {
-		return
-	}
-	for p, i in doc.spline.points {
-		testing.expect_value(t, p.id, i)
-	}
-	testing.expect_value(t, doc.spline.next_id, len(doc.spline.points))
-	// A v4 venue.json wrote array positions. Read as ids they name the same edge.
-	old := geo.Road_Marker{from = 2, to = 3, t = 0.5}
-	at, resolved := geo.marker_resolve(doc.spline, old)
-	testing.expect(t, resolved, "a marker from before ids stopped resolving")
-	testing.expect_value(t, at.from, 2)
-	testing.expect_value(t, at.to, 3)
-}
-
 @(test)
 a_road_with_repeated_ids_is_refused :: proc(t: ^testing.T) {
 	doc := doc_defaults()
@@ -298,13 +257,14 @@ a_road_with_repeated_ids_is_refused :: proc(t: ^testing.T) {
 // the same way it refuses a repeat.
 @(private = "file")
 NEGATIVE_ID_ROAD :: `{
-	"format": "dirtbench.stage",
-	"version": 9,
-	"name": "bad",
-	"points": [
-		{"id": 0,  "parent": -1, "weld": -1, "pos": [0, 0, 0],  "rot": [0, 0, 0, 1], "width": 8},
-		{"id": -3, "parent": 0,  "weld": -1, "pos": [0, 0, 32], "rot": [0, 0, 0, 1], "width": 8}
-	]
+	"format": "dirtbench.venue",
+	"version": 7,
+	"road": {
+		"points": [
+			{"id": 0,  "parent": -1, "weld": -1, "pos": [0, 0, 0],  "rot": [0, 0, 0, 1], "width": 8},
+			{"id": -3, "parent": 0,  "weld": -1, "pos": [0, 0, 32], "rot": [0, 0, 0, 1], "width": 8}
+		]
+	}
 }`
 
 @(test)

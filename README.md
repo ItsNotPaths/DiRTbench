@@ -40,10 +40,9 @@ dirtbench --venue-deploy <id> [--apply]
 dirtbench --venue-revert <id>
 dirtbench --dirt3-venues                    # the game's venues, and the broken entries
 
-dirtbench --export <stage> [--target gltf|dirt3] [--terrain]
-                           [--venue <id>] [--route <venue>/<route_n>]
+dirtbench --export <stage> --venue <id> [--target gltf|dirt3] [--terrain]
                            [--debug-out]
-dirtbench --pacenotes <stage> [--reverse]
+dirtbench --pacenotes <venue> [--reverse]
 ```
 
 An export goes into the game by default. `--debug-out` writes to `build/out/`

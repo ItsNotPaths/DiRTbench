@@ -54,12 +54,30 @@ venue_deploy_dir :: proc(
 
 // --- deployment -------------------------------------------------------------
 
+// How a file gets from its source into the staged venue.
+//
+// Base art is hardlinked: it is 127 MB of it, and it already sits on the game's
+// own filesystem. A content pack's own art is copied, because
+// `build/content-packs/` sits beside the binary and a hardlink cannot cross a
+// filesystem.
 @(private = "file")
-link_entry :: proc(src, dst: string, file_type: os.File_Type) -> (msg: string, ok: bool) {
+Place_Mode :: enum {
+	Link,
+	Copy,
+}
+
+@(private = "file")
+place_entry :: proc(src, dst: string, file_type: os.File_Type, mode: Place_Mode) -> (msg: string, ok: bool) {
 	#partial switch file_type {
 	case .Directory:
-		return link_tree(src, dst)
+		return place_tree(src, dst, mode)
 	case .Regular:
+		if mode == .Copy {
+			if copy_err := os.copy_file(dst, src); copy_err != nil {
+				return fmt.tprintf("could not copy %s: %v", src, copy_err), false
+			}
+			return "", true
+		}
 		if link_err := os.link(src, dst); link_err != nil {
 			return fmt.tprintf("could not hardlink %s: %v", src, link_err), false
 		}
@@ -70,7 +88,7 @@ link_entry :: proc(src, dst: string, file_type: os.File_Type) -> (msg: string, o
 }
 
 @(private = "file")
-link_tree :: proc(src, dst: string) -> (msg: string, ok: bool) {
+place_tree :: proc(src, dst: string, mode: Place_Mode) -> (msg: string, ok: bool) {
 	if err := os.make_directory_all(dst); err != nil && err != os.General_Error.Exist {
 		return fmt.tprintf("could not create %s: %v", dst, err), false
 	}
@@ -84,7 +102,7 @@ link_tree :: proc(src, dst: string) -> (msg: string, ok: bool) {
 		}
 		from, _ := filepath.join({src, info.name}, context.temp_allocator)
 		to, _ := filepath.join({dst, info.name}, context.temp_allocator)
-		if msg, ok = link_entry(from, to, info.type); !ok {
+		if msg, ok = place_entry(from, to, info.type, mode); !ok {
 			return
 		}
 	}
@@ -103,8 +121,17 @@ is_backup_name :: proc(name: string) -> bool {
 	return false
 }
 
-@(private = "file")
-link_venue_root :: proc(src, dst: string) -> (msg: string, ok: bool) {
+// The venue-wide art, staged from the two places it can come from: the stock
+// venue for everything the pack does not provide, and the pack's own `local/`
+// for everything it does. See content_pack.odin — the manifest is what decides,
+// and this is the only reader of that decision.
+//
+// Route directories are not linked here; stage_venue_tree lays those down from
+// the base route, one per stage.
+//
+// `local_dir` is where the pack's own files are, passed in rather than derived
+// so a test can stage one without a pack on disk.
+place_venue_root :: proc(pack: Content_Pack, local_dir, src, dst: string) -> (msg: string, ok: bool) {
 	if err := os.make_directory_all(dst); err != nil && err != os.General_Error.Exist {
 		return fmt.tprintf("could not create %s: %v", dst, err), false
 	}
@@ -119,9 +146,36 @@ link_venue_root :: proc(src, dst: string) -> (msg: string, ok: bool) {
 		if info.type == .Directory && strings.has_prefix(info.name, "route_") {
 			continue
 		}
+		if pack_provides(pack, info.name) {
+			continue
+		}
 		from, _ := filepath.join({src, info.name}, context.temp_allocator)
 		to, _ := filepath.join({dst, info.name}, context.temp_allocator)
-		if msg, ok = link_entry(from, to, info.type); !ok {
+		if msg, ok = place_entry(from, to, info.type, .Link); !ok {
+			return
+		}
+	}
+	return place_pack_local(pack, local_dir, dst)
+}
+
+// Everything the pack provides itself. A name in the manifest with no file
+// behind it is an error, not a silent fallback to the base: the pack said it
+// owns that entry, and a venue built on it expects the pack's version.
+@(private = "file")
+place_pack_local :: proc(pack: Content_Pack, local_dir, dst: string) -> (msg: string, ok: bool) {
+	if len(pack.local) == 0 {
+		return "", true
+	}
+	for name in pack.local {
+		from, _ := filepath.join({local_dir, name}, context.temp_allocator)
+		info, stat_err := os.stat(from, context.temp_allocator)
+		if stat_err != nil {
+			return fmt.tprintf(
+				"content pack %s says it provides %s, and %s is not there", pack.id, name, from,
+			), false
+		}
+		to, _ := filepath.join({dst, name}, context.temp_allocator)
+		if msg, ok = place_entry(from, to, info.type, .Copy); !ok {
 			return
 		}
 	}
@@ -140,11 +194,12 @@ venue_source :: proc(
 	route: d3.Route,
 	ok: bool,
 ) {
-	slash := strings.index_byte(p.base, '/')
-	if slash < 0 {
+	// `p.base` names a content pack. The pack's manifest names the stock venue
+	// under it, which is what the install is keyed on.
+	location, id, split := base_split(pack_manifest(p.base).base)
+	if !split {
 		return
 	}
-	location, id := p.base[:slash], p.base[slash + 1:]
 	found_venue, found := d3.install_venue(&vs.install, location, id)
 	if !found {
 		return
@@ -234,6 +289,7 @@ restore_registration_files :: proc(paths, backups: [3]string) -> (msg: string, o
 
 @(private = "file")
 stage_venue_tree :: proc(
+	pack: Content_Pack,
 	source: d3.Venue,
 	source_route: d3.Route,
 	routes: []string,
@@ -256,12 +312,12 @@ stage_venue_tree :: proc(
 		return "", fmt.tprintf("could not stage venue: %v", err), false
 	}
 	staged = temp_path
-	if msg, ok = link_venue_root(source.dir, staged); !ok {
+	if msg, ok = place_venue_root(pack, pack_local_dir(pack.id), source.dir, staged); !ok {
 		return
 	}
 	for route in routes {
 		route_dst, _ := filepath.join({staged, route}, context.temp_allocator)
-		if msg, ok = link_tree(source_route.dir, route_dst); !ok {
+		if msg, ok = place_tree(source_route.dir, route_dst, .Link); !ok {
 			return
 		}
 	}
@@ -425,6 +481,7 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 
 	route_dirs, _ := route_ids(p)
 	staged, stage_msg, staged_ok := stage_venue_tree(
+		pack_manifest(p.base),
 		deployment.source,
 		deployment.source_route,
 		route_dirs,
@@ -510,7 +567,7 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 			remove_err,
 		), false
 	}
-	return fmt.tprintf("reverted %s; project remains at %s", p.id, venue_dir(p.id)), true
+	return fmt.tprintf("reverted %s; document remains at %s", p.id, venue_path(p.id)), true
 }
 
 venue_deploy_preflight_headless :: proc(id: string) -> bool {

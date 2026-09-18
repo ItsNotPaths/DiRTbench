@@ -479,7 +479,6 @@ export_job_delete :: proc(job: ^Export_Job) {
 // Pure: it creates nothing, so the Export targets panel can ask every frame.
 export_dest :: proc(
 	doc: ^Venue_Doc,
-	name: string,
 	stage_id: string,
 	target: ^Export_Target,
 ) -> (
@@ -489,33 +488,22 @@ export_dest :: proc(
 	ok: bool,
 ) {
 	if target.installs && !doc.debug_export {
-		// A stage opened from one of our venues goes to that venue's own route
-		// directory inside the game. That directory only exists once the venue
-		// has been deployed, which is a separate step and does not exist yet —
-		// so say so, rather than creating a directory the game never reads.
-		if doc.open_venue != "" {
-			route, deployed := venue_deploy_dir(doc, doc.open_venue, stage_id)
-			if !deployed {
-				return "", false, fmt.tprintf(
-					"%s is not in the game yet; tick Write to out/ until deploying exists",
-					doc.open_venue,
-				), false
-			}
-			return route, true, "", true
-		}
-		route := install_scan_route_dir(doc.install)
-		if route == "" {
-			return "", false, "no route selected: open one from Dirt 3 > Install_Scan, or tick Write to out/", false
+		// The stage goes to its venue's own route directory inside the game.
+		// That directory only exists once the venue has been deployed, which is
+		// a separate step — so say so, rather than creating a directory the
+		// game never reads.
+		route, deployed := venue_deploy_dir(doc, doc.open_venue, stage_id)
+		if !deployed {
+			return "", false, fmt.tprintf(
+				"%s is not in the game yet; tick Write to out/ until deploying exists",
+				doc.open_venue,
+			), false
 		}
 		return route, true, "", true
 	}
 	// Two venues can both hold a `route_0`, so the debug detour keeps them
 	// apart by venue.
-	if doc.open_venue != "" {
-		dir, _ = filepath.join({out_dir(), doc.open_venue, name}, context.temp_allocator)
-	} else {
-		dir, _ = filepath.join({out_dir(), name}, context.temp_allocator)
-	}
+	dir, _ = filepath.join({out_dir(), doc.open_venue, stage_id}, context.temp_allocator)
 	return dir, false, "", true
 }
 
@@ -536,16 +524,6 @@ export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (ve
 	venue_dir = filepath.dir(out)
 	template_dir = venue_dir
 	donor_route_dir = out
-	if doc.open_venue == "" {
-		if route := install_scan_route_dir(doc.install); route != "" {
-			donor_route_dir = route
-			if !installing {
-				venue_dir = filepath.dir(route)
-				template_dir = venue_dir
-			}
-		}
-		return
-	}
 	if p, _, loaded := venue_load(doc.open_venue, context.temp_allocator); loaded {
 		if venue, route, found := venue_source(doc.install, p); found {
 			donor_route_dir = route.dir
@@ -557,8 +535,7 @@ export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (ve
 	return
 }
 
-// The `n` of a `route_n` id. Zero for a loose road out of maps/, which has no
-// stage id and lands in whatever install route was selected.
+// The `n` of a `route_n` id.
 route_number :: proc(stage_id: string) -> int {
 	digits := strings.trim_prefix(stage_id, "route_")
 	if digits == stage_id {
@@ -585,7 +562,7 @@ export_stage :: proc(
 	if !jok {
 		return jmsg, false
 	}
-	dest, installing, dmsg, dok := export_dest(doc, name, stage_id, target)
+	dest, installing, dmsg, dok := export_dest(doc, stage_id, target)
 	if !dok {
 		return dmsg, false
 	}
@@ -641,7 +618,6 @@ export_headless :: proc(
 	target_id: string,
 	terrain: bool,
 	debug_out: bool,
-	route: string,
 	venue: string,
 ) -> (
 	msg: string,
@@ -659,6 +635,9 @@ export_headless :: proc(
 			strings.join(ids[:], ", ", context.temp_allocator),
 		), false
 	}
+	if venue == "" {
+		return "an export needs --venue <id>; see --venues", false
+	}
 
 	// The install scan is the only thing that knows where the game is, so a
 	// headless export into it needs the scan too.
@@ -671,41 +650,21 @@ export_headless :: proc(
 		veg       = geo.VEG_DEFAULTS,
 	}
 	doc.debug_export = debug_out
+	doc.open_venue = venue
 	install_scan_init(doc.install)
 	defer install_scan_delete(doc.install)
-	// `--venue <id>` names one of ours and `stage` is its stage; `--route
-	// <venue>/<route_n>` names a route already in the game. They are the two
-	// destinations an install can have, and only one applies at a time.
-	if venue != "" {
-		doc.open_venue = venue
-	} else if route != "" {
-		if m, sok := install_scan_select(doc.install, route); !sok {
-			return m, false
-		}
-	}
 	defer delete(doc.spline.points)
 	defer geo.terrain_delete(&doc.terrain)
 
-	// `doc.spline` is the road as saved: the venue's whole graph, or a loose
-	// road out of maps/. `chain` is the one stage to export, which for a loose
-	// road is the road itself.
-	chain: geo.Spline
-	if venue != "" {
-		p, pmsg, pok := venue_load(doc.open_venue, context.temp_allocator)
-		if !pok { return pmsg, false }
-		compiled, cmsg, cok := venue_compile_route(p, stage, &doc, context.allocator)
-		if !cok { return cmsg, false }
-		chain = compiled
-	} else {
-		if m, lok := load_road_named(&doc, stage); !lok { return m, false }
-		chain = doc.spline
-	}
-	// Not inside the if: a block-scoped defer would free the chain before the
-	// export ran. A loose road's chain is doc.spline, freed above.
-	defer if venue != "" { delete(chain.points) }
+	// `doc.spline` is the venue's whole road graph; `chain` is the one stage
+	// being exported, compiled out of it.
+	p, pmsg, pok := venue_load(venue, context.temp_allocator)
+	if !pok { return pmsg, false }
+	chain, cmsg, cok := venue_compile_route(p, stage, &doc, context.allocator)
+	if !cok { return cmsg, false }
+	defer delete(chain.points)
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a road that has none.
 	doc.terrain.enabled = doc.terrain.enabled || terrain
-	// A `--venue` export names its stage; a loose one out of maps/ has none.
-	return export_stage(&doc, chain, stage, venue != "" ? stage : "", target)
+	return export_stage(&doc, chain, stage, stage, target)
 }

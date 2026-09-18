@@ -528,35 +528,3 @@ unsculpted_terrain_writes_no_controls :: proc(t: ^testing.T) {
 	testing.expect_value(t, back.terrain.cell_m, f32(12))
 	testing.expect_value(t, geo.terrain_node_count(&back.terrain), 0)
 }
-
-// A road written before v8 has no terrain block. It must load with the ground
-// off and the sliders at their defaults, not at whatever the caller held.
-@(test)
-pre_v8_road_loads_with_terrain_off :: proc(t: ^testing.T) {
-	doc := doc_defaults()
-	defer doc_delete(&doc)
-	seed_spline(&doc.spline)
-
-	path := "/tmp/claude-1000/dirtbench-terrain-v7.json"
-	msg, ok := save_road(&doc, path)
-	testing.expect(t, ok, msg); if !ok { return }
-	defer os.remove(path)
-	data, rerr := os.read_entire_file(path, context.temp_allocator)
-	testing.expect(t, rerr == nil, "could not read back the file"); if rerr != nil { return }
-	aged, _ := strings.replace(string(data), `"version": 8`, `"version": 7`, 1, context.temp_allocator)
-	testing.expect(t, os.write_entire_file(path, transmute([]u8)aged) == nil, "could not age the file")
-
-	// A document already carrying a sculpt: the v7 load must clear it, not
-	// leave the previous venue's ground behind.
-	stale := doc_defaults()
-	defer doc_delete(&stale)
-	stale.terrain.enabled = true
-	stale.terrain.reach_m = 123
-	append(&stale.terrain.controls, geo.Terrain_Control{x = 1, z = 2, offset = 5})
-
-	load_msg, loaded := load_road(&stale, path)
-	testing.expect(t, loaded, load_msg); if !loaded { return }
-	testing.expect(t, !stale.terrain.enabled, "a v7 road turned terrain on")
-	testing.expect_value(t, stale.terrain.reach_m, geo.TERRAIN_DEFAULTS.reach_m)
-	testing.expect_value(t, geo.terrain_node_count(&stale.terrain), 0)
-}

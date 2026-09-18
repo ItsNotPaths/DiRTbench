@@ -231,11 +231,6 @@ status_text :: proc(s: ^Status) -> (text: cstring, ok: bool) {
 	return cstring(raw_data(s.text[:])), true
 }
 
-// The stage name as ImGui left it in the buffer: NUL-terminated, unsanitised.
-stage_name_text :: proc(doc: ^Venue_Doc) -> string {
-	return buf_text(doc.stage_name[:])
-}
-
 set_stage_name :: proc(doc: ^Venue_Doc, name: string) {
 	set_buf(doc.stage_name[:], name)
 }

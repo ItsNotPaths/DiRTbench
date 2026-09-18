@@ -1,5 +1,6 @@
 package d3
 
+import "core:fmt"
 import "core:strings"
 import "core:testing"
 
@@ -102,4 +103,22 @@ export_refuses_a_job_with_no_profile :: proc(t: ^testing.T) {
 	msg, ok := export_dirt3(&job)
 	testing.expect(t, !ok, "an export with no profile must be refused")
 	testing.expect(t, strings.contains(msg, "venue"), msg)
+}
+
+// A pack written before the stamp existed must read as stale, not as current.
+// Reused silently, an old pack outlives every venue that shares it.
+@(test)
+profile_without_a_stamp_reads_as_stale :: proc(t: ^testing.T) {
+	want, want_msg, want_ok := d3_profile_fixture()
+	testing.expect(t, want_ok, want_msg); if !want_ok { return }
+	testing.expect_value(t, want.pack, D3_PACK_STAMP)
+
+	text := d3_profile_text(want, context.temp_allocator)
+	stamp := fmt.tprintf("%s.pack = %d\n", want.id, D3_PACK_STAMP)
+	old, _ := strings.replace(text, stamp, "", 1, context.temp_allocator)
+	testing.expect(t, old != text, "the stamp line must be in the written profile")
+
+	got, msg, ok := d3_profile_parse(old, want.template, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	testing.expect_value(t, got.pack, 0)
 }
