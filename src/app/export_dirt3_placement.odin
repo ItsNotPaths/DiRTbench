@@ -53,6 +53,12 @@ D3_Prop_Binding :: struct {
 	mesh: int,
 }
 
+// A mesh's rigid body in `objecttypes.pssg`: the entity id is the mesh name and
+// the uri appends `.max`, on every stock route read.
+d3_prop_entity_uri :: proc(mesh: string, allocator := context.temp_allocator) -> string {
+	return strings.concatenate({"objecttypes.pssg#", mesh, ".max"}, allocator)
+}
+
 // Which meshes this venue gives a rigid body: mesh name -> the `objects.ens`
 // id to point an instance at. An `!n` suffix on the id is an authoring
 // duplicate of the same mesh, so key and value can differ.
@@ -190,12 +196,17 @@ d3_prop_instances :: proc(
 	return out[:]
 }
 
-// Every tree's rigid body, appended to the donor route's existing records.
+// Every tree's rigid body, and nothing else.
+//
+// The donor's own records are dropped. They are the base venue's hay bales,
+// fences and power lines standing along the old road, and keeping them leaves
+// invisible collision once `ornaments.bin` is emptied.
+// `frontend_track/route_0` ships 139 bytes with no references and no
+// instances, so the empty form is stock.
+//
 // Built from the same instance slice `trees.bin` is written from, so physics
-// and render cannot drift; each instance points at the donor's existing
-// objects.ens reference.
+// and render cannot drift.
 d3_prop_ens_nodes :: proc(
-	donor: []u8,
 	meshes: []D3_Prop_Mesh,
 	instances: []d3.D3_Placement_Instance,
 	allocator := context.temp_allocator,
@@ -204,12 +215,14 @@ d3_prop_ens_nodes :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	existing, parsed := d3.Ens_Parse(donor, allocator)
-	if !parsed {
-		return nil, "the base route's objects.ens did not parse", false
+	out := make([dynamic]d3.Ens_Node, 0, len(meshes)+len(instances), allocator)
+	for mesh in meshes {
+		attrs := make([]d3.Ens_Attr, 3, allocator)
+		attrs[0] = {name = "id", value = mesh.entity_id}
+		attrs[1] = {name = "uri", value = d3_prop_entity_uri(mesh.reference.filename, allocator)}
+		attrs[2] = {name = "allocAlt", value = "5"}
+		append(&out, d3.Ens_Node{tag = "TEMPLATEENTITYREFERENCE", attrs = attrs, content = .Self_Close})
 	}
-	out := make([dynamic]d3.Ens_Node, 0, len(existing)+len(instances), allocator)
-	append(&out, ..existing)
 	for instance, i in instances {
 		if int(instance.reference_id) >= len(meshes) {
 			return nil, "a placement names a mesh no binding covers", false
@@ -227,7 +240,7 @@ d3_prop_ens_nodes :: proc(
 			children = children,
 		})
 	}
-	return out[:], fmt.tprintf("%d donor records + %d tree bodies", len(existing), len(instances)), true
+	return out[:], fmt.tprintf("%d meshes, %d bodies, no donor records", len(meshes), len(instances)), true
 }
 
 // Resolve the scatter against the donor's art: the reference rows to write
@@ -318,7 +331,7 @@ d3_write_placements :: proc(out: ^d3.Export_Job, route_dir: string, props: []geo
 
 	ens_msg := "unchanged, no trees to give a body"
 	if len(instances) > 0 {
-		nodes, nodes_msg, nodes_ok := d3_prop_ens_nodes(donor_ens, meshes, instances)
+		nodes, nodes_msg, nodes_ok := d3_prop_ens_nodes(meshes, instances)
 		if !nodes_ok {
 			return nodes_msg, false
 		}
