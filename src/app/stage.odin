@@ -34,7 +34,8 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // v9 adds stable point ids. Older files migrate as id = array index, so the
 // markers a v4 venue.json holds keep naming the same edges. One insert makes
 // ids stop matching positions, so an older build must not read a v9 file.
-STAGE_VERSION :: 9
+// v10 added the floors block, and v11 the pad's foliage flag.
+STAGE_VERSION :: 11
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
@@ -98,6 +99,19 @@ Stage_Terrain :: struct {
 	controls: []Stage_Terrain_Control,
 }
 
+// A flat pad (v10). Stored as its own outline rather than a run into a shared
+// array: the file is a translation of geo's flat storage, not the storage.
+// Absent in older files, where it unmarshals to an empty list — no floors.
+Stage_Floor :: struct {
+	y:         f32,
+	falloff:   f32,
+	points:    [][2]f32,
+	// v11. A v10 pad predates the flag and loads with it set, which is both the
+	// default for a new pad and what a v10 pad was already doing — nothing had
+	// been written that turned it off.
+	clear_veg: bool,
+}
+
 Stage_File :: struct {
 	format:  string,
 	version: int,
@@ -106,6 +120,7 @@ Stage_File :: struct {
 	veg:     Stage_Veg,
 	timing:  Stage_Timing,
 	terrain: Stage_Terrain,
+	floors:  []Stage_Floor,
 }
 
 // --- paths ------------------------------------------------------------------
@@ -168,8 +183,8 @@ save_road_named :: proc(doc: ^Venue_Doc, name: string) -> (msg: string, ok: bool
 // The whole road document, at a path the caller chose. A venue's road lives at
 // `venues/<id>/road.json`, not in `maps/`.
 //
-// road.json holds points, vegetation, timing and terrain, and Venue_Doc holds
-// the same four, so this writes all of them. There is deliberately no per-block
+// road.json holds points, vegetation, timing, terrain and its floors, and
+// Venue_Doc holds the same, so this writes all of it. There is no per-block
 // form: passing the blocks one at a time is how one gets silently dropped, and
 // that has already cost every compiled stage its checkpoints once.
 save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
@@ -229,6 +244,18 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 			row_m    = terrain.row_m,
 			controls = controls,
 		}
+	}
+	{
+		floors := make([]Stage_Floor, len(terrain.floors), context.temp_allocator)
+		for f, i in terrain.floors {
+			floors[i] = {
+				y         = f.y,
+				falloff   = f.falloff,
+				points    = geo.floor_verts(terrain, f),
+				clear_veg = f.clear_veg,
+			}
+		}
+		stage.floors = floors
 	}
 	data, merr := json.marshal(stage, {pretty = true, use_spaces = true}, context.temp_allocator)
 	if merr != nil {
@@ -382,6 +409,18 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 			terrain.cell_m = max(t.cell_m, 1)
 			terrain.row_m = clamp(t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX)
 			geo.terrain_sculpt_load(terrain, saved)
+		}
+	}
+	{
+		// Rebuilt from the file every time, so a road that predates the block
+		// opens with no pads rather than keeping the last document's.
+		clear(&terrain.floors)
+		clear(&terrain.floor_pts)
+		for f in stage.floors {
+			if i := geo.floor_add(terrain, f.points, f.y); i >= 0 {
+				terrain.floors[i].falloff = clamp(f.falloff, 0, geo.TERRAIN_REACH_MAX)
+				terrain.floors[i].clear_veg = stage.version < 11 || f.clear_veg
+			}
 		}
 	}
 	return fmt.tprintf("loaded %d points from %s", len(sp.points), filepath.base(path)), true
