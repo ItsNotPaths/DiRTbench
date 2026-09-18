@@ -447,6 +447,7 @@ draw_inspector :: proc(ed: ^Editor) {
 	ui.igSeparatorText("Controls")
 	ui.im_text("LMB select point or terrain node")
 	ui.im_text("Terrain: RMB+LMB drag sizes brush; release RMB to raise/lower")
+	ui.im_text("Floors: draw one from the Terrain panel; Del removes a corner")
 	ui.im_text("Shift+drag gizmo extrudes a point")
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")
@@ -523,6 +524,60 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 		geo.terrain_invalidate(t)
 		mark_terrain_dirty(ed.doc)
 	}
+
+	draw_floor_section(ed)
+}
+
+// Flat pads (geo/floor.odin). A pad is a ceiling on the ground, so the only
+// numbers it carries are the height it holds and how far out it blends.
+draw_floor_section :: proc(ed: ^Editor) {
+	t := &ed.doc.terrain
+	ui.igSeparatorText("Floors")
+	if ed.floor_drawing {
+		ui.im_text(fmt.ctprintf("%d corners placed", len(ed.floor_draw)))
+		ui.im_text("click the ground for each corner")
+		ui.im_text("Enter or RMB closes it, Esc drops it")
+		if ui.im_button("Close") {
+			floor_draw_close(ed)
+		}
+		ui.im_same_line()
+		if ui.im_button("Cancel") {
+			floor_draw_cancel(ed)
+		}
+		return
+	}
+
+	if ui.im_button("New floor") {
+		floor_draw_begin(ed)
+	}
+	ui.im_same_line()
+	ui.im_text(fmt.ctprintf("%d placed", len(t.floors)))
+
+	fi := selected_floor(ed)
+	if fi < 0 {
+		ui.im_text_colored(DIM_COL, "click one to select it")
+		return
+	}
+	f := &t.floors[fi]
+	_, v := selected_floor_vert(ed)
+	ui.im_text(fmt.ctprintf("floor %d: %d corners%s", fi, f.count,
+		v >= 0 ? fmt.ctprintf(", corner %d", v) : ""))
+	if ui.igDragFloat("height", &f.y, 0.1, 0, 0, "%.1f m", ui.IM_SLIDER_NONE) {
+		mark_terrain_dirty(ed.doc)
+	}
+	// Zero is a wall: the pad would meet the hillside at a vertical face, and
+	// that face is exported as collision, not just drawn.
+	if ui.igSliderFloat("falloff", &f.falloff, 0, 64, "%.0f m", ui.IM_SLIDER_NONE) {
+		mark_terrain_dirty(ed.doc)
+	}
+	if ui.igCheckbox("clear foliage", &f.clear_veg) {
+		mark_terrain_dirty(ed.doc)
+	}
+	ui.im_text_colored(DIM_COL, "RMB an edge adds a corner, Del removes")
+	if ui.im_button("Delete floor") {
+		ed.sel = {kind = .Floor, idx = fi}
+		floor_delete(ed)
+	}
 }
 
 // Everything that belongs to the one selected control point.
@@ -535,6 +590,8 @@ draw_point_section :: proc(ed: ^Editor) {
 		if ed.sel.kind == .Node {
 			ui.im_text("terrain control selected")
 			ui.im_text("drag its vertical handle to sculpt")
+		} else if selected_floor(ed) >= 0 {
+			ui.im_text("floor selected: see the Terrain panel")
 		} else {
 			ui.im_text("no point selected")
 		}

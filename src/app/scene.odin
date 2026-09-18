@@ -26,6 +26,38 @@ ray_ground :: proc(ray: gfx.Ray) -> (hit: gfx.Vector3, ok: bool) {
 	return ray.position + ray.direction * t, true
 }
 
+// Where the cursor lands on the ground: the terrain surface as it was last
+// built, or the world plane when there is no terrain to hit. Brute force over
+// the field's triangles, which is affordable because this runs on a click and
+// never per frame.
+pick_ground :: proc(ed: ^Editor, ray: gfx.Ray) -> (gfx.Vector3, bool) {
+	f := &ed.doc.terrain_field
+	at: gfx.Vector3
+	best := max(f32)
+	if len(f.ys) == len(f.pts) {
+		vert :: proc(f: ^geo.Terrain_Field, i: u32) -> gfx.Vector3 {
+			return {f.pts[i].x, f.ys[i], f.pts[i].z}
+		}
+		for tri in f.tris {
+			c := gfx.GetRayCollisionTriangle(ray, vert(f, tri[0]), vert(f, tri[1]), vert(f, tri[2]))
+			if c.hit && c.distance < best {
+				at, best = c.point, c.distance
+			}
+		}
+	}
+	if best < max(f32) {
+		return at, true
+	}
+	// With terrain on, a miss means the cursor is off the ground — or that the
+	// field is in the rebuild worker's hands this frame. Either way there is no
+	// answer, and the world plane is the wrong one: it is at y = 0 and the
+	// ground need not be anywhere near it.
+	if ed.doc.terrain.enabled {
+		return {}, false
+	}
+	return ray_ground(ray)
+}
+
 // nearest control point the ray strikes, or -1. The distance comes back too, so
 // a click can be arbitrated against a terrain node hit (see pick_terrain_node).
 pick_point :: proc(sp: geo.Spline, ray: gfx.Ray) -> (idx: int, dist: f32) {
@@ -146,6 +178,7 @@ draw_venue_scene :: proc(
 	draw_world(ed)
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
+	draw_floors(ed)
 	gfx.EndMode3D()
 }
 

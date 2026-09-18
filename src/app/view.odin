@@ -56,13 +56,16 @@ Gizmo_Mode :: enum {
 // control point and a world-space terrain control are both selectable.
 Sel_Kind :: enum {
 	None,
-	Point, // idx indexes geo.Spline points
-	Node,  // idx indexes geo.Terrain.controls
+	Point,      // idx indexes geo.Spline points
+	Node,       // idx indexes geo.Terrain.controls
+	Floor,      // idx indexes geo.Terrain.floors: the whole pad
+	Floor_Vert, // ... and `sub` one corner of its outline
 }
 
 Selection :: struct {
 	kind: Sel_Kind,
 	idx:  int,
+	sub:  int, // read by Floor_Vert alone, so a zero-value Selection is still None
 }
 
 Terrain_Brush_Phase :: enum {
@@ -146,6 +149,10 @@ Editor :: struct {
 	terrain_brush_anchor_offset: f32,
 	terrain_brush_mask: [dynamic]bool,
 	terrain_brush_offsets: [dynamic]f32,
+	// The floor outline being drawn, empty when none is (floor_edit.odin). Held
+	// as world points, so the corners keep the heights they were picked at.
+	floor_draw:    [dynamic]gfx.Vector3,
+	floor_drawing: bool,
 	show_demo:     bool,
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
@@ -528,6 +535,9 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	} else if sel_node >= 0 {
 		gizmo_shown = true
 		gizmo_used = terrain_brush_gizmo(ed, node_pos, sel_node, cam3d)
+	} else if selected_floor(ed) >= 0 {
+		gizmo_shown = true
+		gizmo_used = floor_gizmo(ed, cam3d)
 	}
 	ed.gizmo_active = gizmo_used
 	ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
@@ -616,6 +626,11 @@ edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys:
 	if gizmo_used || ui_mouse {
 		return
 	}
+	if gfx.IsMouseButtonPressed(.RIGHT) && !nav && selected_floor(ed) >= 0 {
+		if floor_insert_vert(ed, ray) {
+			return
+		}
+	}
 	if gfx.IsMouseButtonPressed(.RIGHT) && !nav {
 		sel := selected_point(ed)
 		target, _ := pick_point(ed.doc.spline, ray)
@@ -641,8 +656,11 @@ edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys:
 			}
 		}
 	}
-	// Only a road point can be deleted. Terrain controls are generated from the
-	// terrain region rather than individually added or removed.
+	// A road point or a floor. Terrain controls are generated from the terrain
+	// region rather than individually added or removed.
+	if gfx.IsKeyPressed(.DELETE) && !ui_keys && floor_delete(ed) {
+		return
+	}
 	if pi := selected_point(ed); gfx.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
 		geo.remove_point(&ed.doc.spline, pi)
 		ed.sel = {}
@@ -656,16 +674,32 @@ editor_input :: proc(
 	ed: ^Editor, ray: gfx.Ray, node_pos: []gfx.Vector3, node_active: []bool,
 	gizmo_used, nav, ui_mouse, ui_keys: bool,
 ) {
-	// A click arbitrates between a control point and a terrain node by depth,
-	// so whichever handle is actually in front wins.
+	// An open floor outline owns the mouse and the keys until it is closed, so
+	// the road's own verbs cannot fire into the middle of one.
+	if floor_draw_input(ed, ray, nav, ui_mouse, ui_keys) {
+		return
+	}
+	// A click arbitrates between a control point, a terrain node and a floor by
+	// depth, so whichever handle is actually in front wins.
 	if gfx.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
 		pi, pd := pick_point(ed.doc.spline, ray)
 		ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.doc.terrain), ray)
+		fvi, fv, fvd := pick_floor_vert(&ed.doc.terrain, ray)
+		fi, fd := pick_floor(&ed.doc.terrain, ray)
+		// A corner handle sits on its pad's surface, so it must win any tie
+		// against the pad itself.
+		if fvi >= 0 && fvd <= fd {
+			fi, fd = -1, max(f32)
+		}
 		switch {
-		case ni >= 0 && (pi < 0 || nd < pd):
+		case fvi >= 0 && (pi < 0 || fvd < pd) && (ni < 0 || fvd < nd):
+			ed.sel = {kind = .Floor_Vert, idx = fvi, sub = fv}
+		case ni >= 0 && (pi < 0 || nd < pd) && (fi < 0 || nd < fd):
 			ed.sel = {kind = .Node, idx = ni}
-		case pi >= 0:
+		case pi >= 0 && (fi < 0 || pd < fd):
 			ed.sel = {kind = .Point, idx = pi}
+		case fi >= 0:
+			ed.sel = {kind = .Floor, idx = fi}
 		case:
 			ed.sel = {}
 		}

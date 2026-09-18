@@ -95,6 +95,7 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 view_delete :: proc(ed: ^Editor) {
 	delete(ed.terrain_brush_mask)
 	delete(ed.terrain_brush_offsets)
+	delete(ed.floor_draw)
 	delete(ed.stage_id)
 	stage_cache_clear(ed)
 }
