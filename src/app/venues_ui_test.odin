@@ -53,7 +53,7 @@ a_stage_window_follows_its_stage_by_id :: proc(t: ^testing.T) {
 // the authority on the first, which is why the road is edited here without it.
 @(test)
 the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
-	doc := Venue_Doc{topo = 2}
+	doc := Venue_Doc{}
 	defer delete(doc.spline.points)
 	defer delete(doc.routes)
 	seed_spline(&doc.spline)
@@ -109,7 +109,7 @@ the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 // that has not moved still needs recalling when one of them does.
 @(test)
 stage_notes_follow_the_ribbon_and_the_pace_knobs :: proc(t: ^testing.T) {
-	doc := Venue_Doc{topo = 8, pace = geo.PACE_DEFAULTS}
+	doc := Venue_Doc{pace = geo.PACE_DEFAULTS}
 	defer delete(doc.spline.points)
 	defer delete(doc.routes)
 	seed_spline(&doc.spline)

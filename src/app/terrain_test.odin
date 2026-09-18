@@ -51,7 +51,7 @@ branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 	arc := geo.ribbon_arc(ribbon, context.allocator)
 	defer delete(arc)
 	geo.terrain_field_ensure(
-		&field, &terrain, ribbon, arc, geo.sample_spacing(ribbon), 8, 0, 1,
+		&field, &terrain, ribbon, arc, geo.sample_spacing(ribbon), 0, 1,
 	)
 	testing.expect(t, len(field.tris) > 0, "a branched road produced no terrain at all")
 
@@ -125,9 +125,9 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 	arc := geo.ribbon_arc(ribbon, context.allocator)
 	defer delete(arc)
 	ds := geo.sample_spacing(ribbon)
-	geo.terrain_field_ensure(&field, &terrain, ribbon, arc, ds, geo.SAMPLES_PER_SEG, 0, 1)
+	geo.terrain_field_ensure(&field, &terrain, ribbon, arc, ds, 0, 1)
 
-	vf := geo.veg_field_make(&terrain, ribbon, arc, ds, geo.SAMPLES_PER_SEG, 0)
+	vf := geo.veg_field_make(&terrain, ribbon, arc, ds, 0)
 	testing.expect(t, vf.ok, "no vegetation field to test against")
 
 	// True when q sits inside a terrain triangle, in plan. Strictly inside: at a
@@ -258,7 +258,7 @@ vegetation_does_not_thicken_at_a_branch :: proc(t: ^testing.T) {
 		defer delete(ribbon)
 		terrain := geo.TERRAIN_DEFAULTS
 		defer geo.terrain_delete(&terrain)
-		trees := geo.veg_generate(ribbon, &terrain, veg, geo.SAMPLES_PER_SEG, 0)
+		trees := geo.veg_generate(ribbon, &terrain, veg, 0)
 		defer delete(trees)
 		return thickest_patch(trees)
 	}
@@ -319,7 +319,7 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 		terrain.enabled = terrain_on
 		defer geo.terrain_delete(&terrain)
 
-		trees := geo.veg_generate(ribbon, &terrain, veg, geo.SAMPLES_PER_SEG, 0)
+		trees := geo.veg_generate(ribbon, &terrain, veg, 0)
 		defer delete(trees)
 		testing.expect(t, len(trees) > 0, "nothing was planted at all")
 
@@ -371,7 +371,7 @@ a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 	defer delete(arc)
 	ds := geo.sample_spacing(ribbon)
 
-	fs := geo.field_samples(ribbon, arc, ds, geo.SAMPLES_PER_SEG, 0)
+	fs := geo.field_samples(ribbon, arc, ds, 0)
 	lo := [2]f32{max(f32), max(f32)}
 	hi := [2]f32{min(f32), min(f32)}
 	for s in fs {
@@ -399,7 +399,7 @@ build_sculpted_terrain :: proc(doc: ^Venue_Doc, field: ^geo.Terrain_Field) -> []
 	arc := geo.ribbon_arc(ribbon, context.allocator)
 	defer delete(arc)
 	geo.terrain_field_ensure(
-		field, &doc.terrain, ribbon, arc, geo.sample_spacing(ribbon), 8, 0, 1,
+		field, &doc.terrain, ribbon, arc, geo.sample_spacing(ribbon), 0, 1,
 	)
 	return ribbon
 }

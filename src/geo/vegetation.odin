@@ -234,13 +234,12 @@ veg_field_make :: proc(
 	ribbon: []Cross_Section,
 	arc: []f32,
 	ds: []f32,
-	topo: c.int,
 	roughness: f32,
 ) -> Veg_Field {
 	if t == nil || len(ribbon) < 2 {
 		return {}
 	}
-	fs := field_samples(ribbon, arc, ds, topo, roughness)
+	fs := field_samples(ribbon, arc, ds, roughness)
 	lo := [2]f32{max(f32), max(f32)}
 	hi := [2]f32{min(f32), min(f32)}
 	for s in fs {
@@ -369,7 +368,6 @@ veg_generate :: proc(
 	ribbon: []Cross_Section,
 	terrain: ^Terrain,
 	veg: Veg_Params,
-	topo: c.int,
 	roughness: f32,
 	allocator := context.allocator,
 ) -> []Veg_Instance {
@@ -384,7 +382,7 @@ veg_generate :: proc(
 		return nil
 	}
 
-	vf := veg_field_make(terrain, ribbon, arc, ds, topo, roughness)
+	vf := veg_field_make(terrain, ribbon, arc, ds, roughness)
 	reach := vf.ok ? vf.reach : VEG_REACH_NO_TERRAIN
 	if reach <= VEG_U_NEAR {
 		return nil // no room outside the verge to plant anything
@@ -393,7 +391,7 @@ veg_generate :: proc(
 	spacing := VEG_SPACING_SPARSE + (VEG_SPACING_DENSE - VEG_SPACING_SPARSE) * clamp(veg.density, 0, 1)
 	spacing = max(spacing, 1)
 	bias := clamp(veg.road_bias, 0, 1)
-	vrows := verge_rows(topo)
+	vrows := VERGE_ROWS
 	pool := veg_pool(veg.preset)
 	span := reach - VEG_U_NEAR
 

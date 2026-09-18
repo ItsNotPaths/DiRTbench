@@ -8,7 +8,6 @@ package main
 // window (see docs_rebuild in main.odin). Nothing here knows about a camera,
 // a cursor or a window.
 
-import "core:c"
 import "../geo"
 import "../gfx"
 
@@ -16,12 +15,6 @@ GROUND_Y :: 0.0
 
 // How long a save/load result stays on screen, seconds.
 STATUS_LINGER :: 8.0
-
-// Global tessellation density: ribbon samples per spline segment. Also drives
-// how many vertical rows a cliff face gets (see cliff_rows).
-TOPO_MIN :: 2
-
-TOPO_MAX :: 48
 
 // The venue, and everything derived from it. One per open venue, shared by
 // every window looking at it — which is what makes an edit in one window show
@@ -68,7 +61,6 @@ Venue_Doc :: struct {
 	edits:         u64,
 	saved_edits:   u64, // `edits` when this was last written home
 	snapshot_edits: u64, // `edits` when the crash snapshot was last written
-	topo:          c.int, // ribbon samples per spline segment
 	// Baseline road/cliff jitter, 0..1. Held at zero: the game roughens each
 	// surface itself. Per-point offsets are the only way to add any.
 	roughness:     f32,
@@ -105,7 +97,7 @@ Status :: struct {
 
 // --- geometry cache ---------------------------------------------------------
 
-// Call after *any* mutation of the spline or of topo/roughness. The terrain is
+// Call after *any* mutation of the spline or of roughness. The terrain is
 // carved to the road — its inner edge is the verge seam — so a spline edit
 // invalidates it too. Cheap: the rebuilds happen at the top of the next frame.
 mark_dirty :: proc(doc: ^Venue_Doc) {
@@ -183,18 +175,18 @@ veg_cache_clear :: proc(doc: ^Venue_Doc) {
 rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved: bool) {
 	if doc.dirty_road {
 		delete(doc.ribbon)
-		doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), context.allocator)
+		doc.ribbon = geo.build_ribbon(doc.spline, allocator = context.allocator)
 		doc.ribbon_gen += 1
-		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.topo, doc.roughness)
+		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.roughness)
 		doc.dirty_road = false
 	}
 	if doc.dirty_terrain && !dragging {
 		before := geo.terrain_node_count(&doc.terrain)
-		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.topo, doc.roughness)
+		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.roughness)
 		controls_moved = geo.terrain_node_count(&doc.terrain) != before
 		geo.terrain_mesh_rebuild(
 			&doc.terrain_mesh, &doc.terrain_field, &doc.terrain,
-			doc.ribbon, doc.topo, doc.roughness, doc.ribbon_gen,
+			doc.ribbon, doc.roughness, doc.ribbon_gen,
 		)
 		doc.dirty_terrain = false
 	}
@@ -217,7 +209,7 @@ veg_refresh :: proc(doc: ^Venue_Doc, dragging := false) {
 		return
 	}
 	veg_cache_clear(doc)
-	doc.veg_cache = geo.veg_generate(doc.ribbon, &doc.terrain, doc.veg, doc.topo, doc.roughness)
+	doc.veg_cache = geo.veg_generate(doc.ribbon, &doc.terrain, doc.veg, doc.roughness)
 	doc.veg_gen = doc.ribbon_gen
 	doc.veg_dirty = false
 }
@@ -305,7 +297,6 @@ doc_defaults :: proc() -> Venue_Doc {
 	return Venue_Doc{
 		gen = GEN_DEFAULTS,
 		gen_live = true,
-		topo = geo.SAMPLES_PER_SEG,
 		// The game adds its own per-surface roughness, and every stock track is
 		// geometrically smooth, so the baseline is flat. Per-point offsets still
 		// add on top (see geo: eff = global + cs.roughness).

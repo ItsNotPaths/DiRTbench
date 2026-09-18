@@ -15,7 +15,6 @@ package geo
 // Nothing here is lit by a shader: the default material is unlit, so a
 // fixed key light is baked into the vertex colours at build time.
 
-import "core:c"
 import "core:math"
 import "../gfx"
 
@@ -44,7 +43,7 @@ CLIFF_JITTER :: 0.45
 
 // Road-surface tessellation.
 //
-// The ribbon is subdivided *along* its length by `topo`; ROAD_COLS splits each
+// The ribbon is subdivided *along* its length by SAMPLES_PER_SEG; ROAD_COLS splits each
 // rung into this many columns across its width, so the surface is a grid. That
 // is what gives the roughness field interior vertices to displace: a single
 // full-width quad can only tilt, not undulate.
@@ -343,7 +342,7 @@ lerp_col :: proc(a, b: gfx.Color, t: f32) -> gfx.Color {
 // Which surface a road segment gets: ~2 in 3 keep Dirt grip, ~1 in 3 are the
 // Sand penalty. Hashed on the segment index so it is deterministic and scattered
 // along the road rather than clumping or striping. A whole segment (all its width
-// columns) takes one surface, so at high `topo` (short segments) the car switches
+// columns) takes one surface, so with short segments the car switches
 // surface every few centimetres of travel — fast enough to feel like one blended
 // surface that reads as mostly dirt.
 road_surf_mat :: proc(seg: int) -> Mat_Id {
@@ -485,15 +484,12 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, rows: in
 	}
 }
 
-// How many rows a verge profile is swept into, derived from the global topo
-// resolution so one slider controls tessellation everywhere.
-verge_rows :: proc(topo: c.int) -> int {
-	return clamp(int(topo) / 3, 2, 12)
-}
+// How many rows a verge profile is swept into. Tied to SAMPLES_PER_SEG so the
+// verge tessellates in step with the ribbon it hangs off.
+VERGE_ROWS :: min(max(SAMPLES_PER_SEG / 3, 2), 12)
 
 build_tri_mesh :: proc(
 	ribbon: []Cross_Section,
-	topo: c.int,
 	roughness: f32,
 	allocator := context.allocator,
 ) -> Tri_Mesh {
@@ -503,7 +499,7 @@ build_tri_mesh :: proc(
 	}
 	arc := ribbon_arc(ribbon) // temp-allocated; the UVs are metres along it
 	build_road_surface(&m, ribbon, arc, roughness)
-	build_verges(&m, ribbon, arc, verge_rows(topo), roughness)
+	build_verges(&m, ribbon, arc, VERGE_ROWS, roughness)
 	return m
 }
 
@@ -539,9 +535,9 @@ gpu_mesh_upload :: proc(m: Tri_Mesh) -> Gpu_Mesh {
 
 // Rebuild the whole thing from the ribbon. The old GPU buffers are released
 // first, so callers may call this every frame while a gizmo is dragged.
-road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, topo: c.int, roughness: f32) {
+road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, roughness: f32) {
 	gpu_mesh_unload(rm)
-	m := build_tri_mesh(ribbon, topo, roughness, context.temp_allocator)
+	m := build_tri_mesh(ribbon, roughness, context.temp_allocator)
 	rm^ = gpu_mesh_upload(m)
 }
 

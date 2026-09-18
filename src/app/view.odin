@@ -11,7 +11,6 @@ package main
 // gizmo took the mouse. Geometry is already current by then — docs_rebuild
 // ran before any window drew.
 
-import "core:c"
 import "core:fmt"
 import "core:math"
 import "core:slice"
@@ -80,15 +79,14 @@ View_Kind :: enum {
 	Stage, // two markers on that road, and the road it cuts out
 }
 
-// What the compiled stage is keyed on. Every spline edit ticks `gen`, and topo
-// is the only other input to the ribbon, so these four say whether the cache
-// below still describes the stage. The pins are the fifth input and are not
-// here: a list cannot be compared with `==`, so the cache keeps its own copy
-// and compares that (see stage_cache_refresh).
+// What the compiled stage is keyed on. Every spline edit ticks `gen`, and the
+// ribbon has no other varying input, so these three say whether the cache below
+// still describes the stage. The pins are the fourth input and are not here: a
+// list cannot be compared with `==`, so the cache keeps its own copy and
+// compares that (see stage_cache_refresh).
 Stage_Key :: struct {
 	gen:           u64, // doc.ribbon_gen
 	start, finish: geo.Road_Marker,
-	topo:          c.int,
 }
 
 // Where the cached compile stands. One field, because two booleans would allow
@@ -297,7 +295,6 @@ stage_cache_refresh :: proc(ed: ^Editor) {
 		gen    = ed.doc.ribbon_gen,
 		start  = route.start,
 		finish = route.finish,
-		topo   = ed.doc.topo,
 	}
 	if ed.stage.state != .None && ed.stage.key == key &&
 	   slice.equal(ed.stage.pins[:], route.pins[:]) {
@@ -313,7 +310,7 @@ stage_cache_refresh :: proc(ed: ^Editor) {
 		return
 	}
 	ed.stage.spline = sp
-	ed.stage.ribbon = geo.build_ribbon(sp, int(ed.doc.topo), context.allocator)
+	ed.stage.ribbon = geo.build_ribbon(sp, allocator = context.allocator)
 	if arc := geo.ribbon_arc(ed.stage.ribbon); len(arc) > 0 {
 		ed.stage.length = arc[len(arc) - 1]
 	}
@@ -757,7 +754,7 @@ venue_frame :: proc(ed: ^Editor) {
 	// Node handles come from the world-space terrain controls, so they are
 	// recomputed after the rebuild and shared by drawing, picking and the
 	// gizmo. Temp-allocated: valid for this frame only.
-	node_pos := geo.terrain_node_world(&ed.doc.terrain, ed.doc.ribbon, ed.doc.topo, ed.doc.roughness)
+	node_pos := geo.terrain_node_world(&ed.doc.terrain, ed.doc.ribbon, ed.doc.roughness)
 	node_active := geo.terrain_node_active_mask(&ed.doc.terrain, node_pos)
 	sel_node := resolve_node_selection(ed, node_pos, node_active)
 

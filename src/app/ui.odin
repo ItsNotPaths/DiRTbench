@@ -430,9 +430,6 @@ draw_terrain_section :: proc(ed: ^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Terrain", ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
-	if ui.igSliderInt("topo resolution", &ed.doc.topo, TOPO_MIN, TOPO_MAX, "%d /segment", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
 	if ui.im_button(ed.wireframe ? "Wireframe: on" : "Wireframe: off") {
 		ed.wireframe = !ed.wireframe
 	}

@@ -40,7 +40,6 @@ package geo
 // Sculpt controls are sampled from this valid world-space region rather than
 // offset from every road station, so inside corners and hairpins merge cleanly.
 
-import "core:c"
 import "core:math"
 import "../gfx"
 
@@ -208,7 +207,7 @@ terrain_clone :: proc(t: ^Terrain) -> (out: Terrain) {
 	return
 }
 
-terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughness: f32) {
+terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, roughness: f32) {
 	if !t.enabled {
 		return
 	}
@@ -273,12 +272,11 @@ field_samples :: proc(
 	ribbon: []Cross_Section,
 	arc: []f32,
 	ds: []f32,
-	topo: c.int,
 	roughness: f32,
 	allocator := context.temp_allocator,
 ) -> []Field_Sample {
 	n := len(ribbon)
-	vrows := verge_rows(topo)
+	vrows := VERGE_ROWS
 	out := make([]Field_Sample, n, allocator)
 
 	run := 0
@@ -636,7 +634,6 @@ Terrain_Sig :: struct {
 	reach:      f32,
 	cell:       f32,
 	rough:      f32,
-	topo:       c.int,
 }
 
 Terrain_Field :: struct {
@@ -768,7 +765,6 @@ terrain_field_build :: proc(
 	ribbon: []Cross_Section,
 	arc: []f32,
 	ds: []f32,
-	topo: c.int,
 	roughness: f32,
 ) {
 	clear(&f.pts)
@@ -778,7 +774,7 @@ terrain_field_build :: proc(
 		return
 	}
 
-	fs := field_samples(ribbon, arc, ds, topo, roughness)
+	fs := field_samples(ribbon, arc, ds, roughness)
 	lo := [2]f32{max(f32), max(f32)}
 	hi := [2]f32{min(f32), min(f32)}
 	for s in fs {
@@ -789,7 +785,7 @@ terrain_field_build :: proc(
 	near_other := terrain_near_other(t, fs, hash)
 
 	limit := t.reach_m + 64
-	vrows := verge_rows(topo)
+	vrows := VERGE_ROWS
 
 	// Grow the cell rather than allocate without bound on a huge stage.
 	cell := max(t.cell_m, 0.5)
@@ -951,7 +947,6 @@ terrain_field_ensure :: proc(
 	ribbon: []Cross_Section,
 	arc: []f32,
 	ds: []f32,
-	topo: c.int,
 	roughness: f32,
 	ribbon_gen: u64,
 ) {
@@ -960,13 +955,12 @@ terrain_field_ensure :: proc(
 		reach      = t.reach_m,
 		cell       = t.cell_m,
 		rough      = roughness,
-		topo       = topo,
 	}
 	if f.valid && f.sig == sig {
 		terrain_controls_ensure(t, f)
 		return
 	}
-	terrain_field_build(f, t, ribbon, arc, ds, topo, roughness)
+	terrain_field_build(f, t, ribbon, arc, ds, roughness)
 	f.sig = sig
 	f.valid = true
 	terrain_controls_ensure(t, f)
@@ -1080,7 +1074,6 @@ terrain_node_radius :: proc(t: ^Terrain) -> f32 {
 terrain_node_world :: proc(
 	t: ^Terrain,
 	ribbon: []Cross_Section,
-	topo: c.int,
 	roughness: f32,
 	allocator := context.temp_allocator,
 ) -> []gfx.Vector3 {
@@ -1153,7 +1146,6 @@ terrain_mesh_rebuild :: proc(
 	f: ^Terrain_Field,
 	t: ^Terrain,
 	ribbon: []Cross_Section,
-	topo: c.int,
 	roughness: f32,
 	ribbon_gen: u64,
 ) {
@@ -1167,7 +1159,7 @@ terrain_mesh_rebuild :: proc(
 	}
 	ds := sample_spacing(ribbon)
 
-	terrain_field_ensure(f, t, ribbon, arc, ds, topo, roughness, ribbon_gen)
+	terrain_field_ensure(f, t, ribbon, arc, ds, roughness, ribbon_gen)
 
 	m := tri_mesh_make(context.temp_allocator)
 	build_terrain_mesh(&m, t, f)

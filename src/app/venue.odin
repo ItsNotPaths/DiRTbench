@@ -873,7 +873,6 @@ venue_tracksplit_collision :: proc(
 	ok: bool,
 ) {
 	doc := Venue_Doc{
-		topo      = geo.SAMPLES_PER_SEG,
 		roughness = 0,
 		terrain   = geo.TERRAIN_DEFAULTS,
 	}

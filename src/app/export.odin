@@ -363,16 +363,16 @@ build_geometry :: proc(doc: ^Venue_Doc, spline: geo.Spline) -> (g: Export_Geomet
 	if len(spline.points) < 2 {
 		return g, "nothing to export: a road needs at least 2 points", false
 	}
-	g.ribbon = geo.build_ribbon(spline, int(doc.topo), context.temp_allocator)
+	g.ribbon = geo.build_ribbon(spline, allocator = context.temp_allocator)
 	g.terrain = geo.terrain_clone(&doc.terrain)
 	if g.terrain.enabled {
-		geo.terrain_ensure(&g.terrain, g.ribbon, doc.topo, doc.roughness)
+		geo.terrain_ensure(&g.terrain, g.ribbon, doc.roughness)
 		arc := geo.ribbon_arc(g.ribbon)
 		ds := geo.sample_spacing(g.ribbon)
 		// A fresh field is always rebuilt, so the generation only gets stored.
-		geo.terrain_field_ensure(&g.field, &g.terrain, g.ribbon, arc, ds, doc.topo, doc.roughness, 1)
+		geo.terrain_field_ensure(&g.field, &g.terrain, g.ribbon, arc, ds, doc.roughness, 1)
 	}
-	g.mesh = geo.build_tri_mesh(g.ribbon, doc.topo, doc.roughness, context.temp_allocator)
+	g.mesh = geo.build_tri_mesh(g.ribbon, doc.roughness, context.temp_allocator)
 	if g.terrain.enabled && len(g.field.tris) > 0 {
 		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field)
 	}
@@ -441,7 +441,6 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 		job.stage.ribbon,
 		&job.stage.terrain,
 		doc.veg,
-		doc.topo,
 		doc.roughness,
 		context.temp_allocator,
 	)
@@ -659,7 +658,6 @@ export_headless :: proc(
 	scan: Install_Scan
 	doc := Venue_Doc {
 		install   = &scan,
-		topo      = geo.SAMPLES_PER_SEG,
 
 		terrain   = geo.TERRAIN_DEFAULTS,
 		pace      = geo.PACE_DEFAULTS,

@@ -350,7 +350,8 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 }
 
 // Sample the whole spline into a contiguous ribbon of cross-sections.
-// `samples_per_seg` is the global topo resolution. Returns a freshly-allocated
+// `samples_per_seg` defaults to SAMPLES_PER_SEG; only tests pass anything else.
+// Returns a freshly-allocated
 // slice (caller deletes) or nil when there is nothing to draw.
 build_ribbon :: proc(
 	sp: Spline,
