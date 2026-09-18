@@ -797,8 +797,7 @@ venues_headless :: proc() -> bool {
 // before `track.vis` is correct at venue scope. Never touches the game.
 // The whole road network's own triangle soup and the venue's shader profile —
 // the two things `tracksplit.pssg` is built from, at venue rather than route
-// scope, no route markers involved. Shared by the debug converter below and
-// by deployment's own venue-wide tracksplit writer.
+// scope, no route markers involved.
 venue_tracksplit_collision :: proc(
 	vs: ^Install_Scan,
 	id: string,
@@ -806,7 +805,6 @@ venue_tracksplit_collision :: proc(
 	allocator := context.temp_allocator,
 ) -> (
 	collision: []d3.Collision_Triangle,
-	ribbon: []geo.Cross_Section,
 	profile: ^d3.Venue_Profile,
 	msg: string,
 	ok: bool,
@@ -819,36 +817,24 @@ venue_tracksplit_collision :: proc(
 	defer geo.terrain_delete(&doc.terrain)
 
 	if load_msg, loaded := load_road(&doc, venue_road_path(id)); !loaded {
-		return nil, nil, nil, load_msg, false
+		return nil, nil, load_msg, false
 	}
 	defer delete(doc.spline.points)
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a venue that has none.
 	doc.terrain.enabled = doc.terrain.enabled || terrain
 
-	defer geo.terrain_field_delete(&doc.terrain_field)
-	doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), allocator)
-	doc.ribbon_gen = 1
-
-	if doc.terrain.enabled {
-		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.topo, doc.roughness)
-		arc := geo.ribbon_arc(doc.ribbon)
-		ds := geo.sample_spacing(doc.ribbon)
-		geo.terrain_field_ensure(&doc.terrain_field, &doc.terrain, doc.ribbon, arc, ds, doc.topo, doc.roughness, doc.ribbon_gen)
+	g, build_msg, built := build_geometry(&doc, doc.spline)
+	defer export_geometry_delete(&g)
+	if !built {
+		return nil, nil, build_msg, false
 	}
-
-	mesh := build_export_mesh(&doc, context.temp_allocator)
-	order, _ := sort_faces_by_material(mesh)
-	if len(order) == 0 {
-		return nil, nil, nil, "nothing to export: the road network has no triangles", false
-	}
-	collision = collision_from_mesh(mesh, order, allocator)
 
 	profile, msg, ok = export_profile(vs, id, allocator)
 	if !ok {
-		return nil, nil, nil, msg, false
+		return nil, nil, msg, false
 	}
-	return collision, doc.ribbon, profile, "", true
+	return collision_from_mesh(g.mesh, g.order, allocator), profile, "", true
 }
 
 // `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
@@ -862,7 +848,7 @@ venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok
 		return install_scan_status_text(&vs), false
 	}
 
-	collision, _, profile, build_msg, built := venue_tracksplit_collision(&vs, id, terrain, context.temp_allocator)
+	collision, profile, build_msg, built := venue_tracksplit_collision(&vs, id, terrain, context.temp_allocator)
 	if !built {
 		return build_msg, false
 	}

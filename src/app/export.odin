@@ -26,12 +26,59 @@ import "core:strings"
 import d3 "../d3"
 import "../geo"
 
+// The base venue's own `tracksplit.pssg`, whose art the splice keeps. A
+// deployed venue starts as a hardlink to it, and `d3_backup_once` leaves a
+// `.orig` beside it the first time we write, so the backup is the base file
+// from the second export on.
+read_tracksplit_template :: proc(dir: string) -> (data: []u8, msg: string, ok: bool) {
+	path := d3.Stock_Path(dir, "tracksplit.pssg")
+	if path == "" {
+		return nil, fmt.tprintf("%s holds no tracksplit.pssg to splice onto", dir), false
+	}
+	read, err := os.read_entire_file(path, context.temp_allocator)
+	if err != nil {
+		return nil, fmt.tprintf("could not read %s: %v", path, err), false
+	}
+	return read, "", true
+}
+
+// The venue's terrain surface, spliced onto the base venue's own tracksplit:
+// its shader libraries and texture payloads kept, its geometry replaced by the
+// whole road network's.
+//
+// A material-pack-only tracksplit is not game-valid at venue scope — it leaves
+// the game on the loading screen forever waiting on an asset that never
+// resolves — so the base file is not optional.
+export_dirt3_tracksplit :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	template, template_msg, template_ok := read_tracksplit_template(job.template_dir)
+	if !template_ok {
+		return template_msg, false
+	}
+	collision := collision_from_mesh(job.venue.mesh, job.venue.order, context.temp_allocator)
+	return d3.Export_Venue_Geometry(&d3.Export_Job{
+		Out       = job.venue_dir,
+		Backup    = job.installing,
+		Collision = collision,
+		Profile   = job.profile,
+	}, template)
+}
+
 export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if job.profile == nil {
 		return job.profile_msg, false
 	}
-	route := make([]d3.Route_Sample, len(job.ribbon), context.temp_allocator)
-	for section, i in job.ribbon {
+	// The venue surface first: `track.vis` censuses it together with the
+	// route's own routesplit, so it has to be on disk and current before any
+	// route file is written.
+	tracksplit_msg := "not written: a loose road has no venue"
+	if len(job.venue.order) > 0 {
+		tracksplit_ok: bool
+		if tracksplit_msg, tracksplit_ok = export_dirt3_tracksplit(job); !tracksplit_ok {
+			return fmt.tprintf("tracksplit.pssg: %s", tracksplit_msg), false
+		}
+	}
+	route := make([]d3.Route_Sample, len(job.stage.ribbon), context.temp_allocator)
+	for section, i in job.stage.ribbon {
 		half := section.width/2
 		left := section.pos-section.right*half
 		right := section.pos+section.right*half
@@ -41,7 +88,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 			Right = {right.x,right.y,right.z},
 		}
 	}
-	timing := timing_markers(job.ribbon,job.timing)
+	timing := timing_markers(job.stage.ribbon,job.timing)
 	markers := make([]d3.Progress_Marker,len(timing),context.temp_allocator)
 	for marker,i in timing {
 		kind:d3.Progress_Marker_Kind
@@ -52,8 +99,23 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 		markers[i]={Kind=kind,Distance=marker.station}
 	}
-	collision := collision_from_mesh(job.mesh, job.order, context.temp_allocator)
-	return d3.Export(&d3.Export_Job{Name=job.name,Out=job.out,Backup=job.installing,Route=route,Markers=markers,Collision=collision,Profile=job.profile})
+	collision := collision_from_mesh(job.stage.mesh, job.stage.order, context.temp_allocator)
+	out := d3.Export_Job{
+		Name = job.name, Out = job.out, Backup = job.installing,
+		Route = route, Markers = markers, Collision = collision,
+		Profile = job.profile, Venue_Dir = job.venue_dir,
+	}
+	// Before the route files: track.vis censuses trees.bin for its tag-3
+	// objects, so the trees have to be the ones this stage actually has.
+	placement_msg, placement_ok := d3_write_placements(&out, job.donor_route_dir, job.props)
+	if !placement_ok {
+		return fmt.tprintf("placements: %s", placement_msg), false
+	}
+	route_msg, route_ok := d3.Export(&out)
+	if !route_ok {
+		return route_msg, false
+	}
+	return fmt.tprintf("tracksplit.pssg: %s; %s; placements: %s", tracksplit_msg, route_msg, placement_msg), true
 }
 
 // The triangle soup, in material order, as a target-agnostic collision list.
@@ -89,16 +151,21 @@ Export_Job :: struct {
 	// True when `out` is inside the installed game, so a writer knows to keep a
 	// copy of whatever it overwrites.
 	installing: bool,
-	mesh:   geo.Tri_Mesh,        // road + verges + terrain, each triangle tagged
-	order:  []int,           // triangle indices, sorted by material
-	counts: [geo.Mat_Id]int,     // population of each material group
+	// The stage being exported: every route file comes from this.
+	stage:  Export_Geometry,
+	// The venue's whole road network, which the venue-scope terrain surface
+	// comes from. Empty for a loose road out of maps/, which has no venue.
+	venue:  Export_Geometry,
 	props:  []geo.Veg_Instance,  // scattered vegetation; empty when disabled
-	ribbon: []geo.Cross_Section, // for targets that place things along the road
 	// Which shaders the stage draws with, resolved from the open venue or from
 	// the venue the selected route lives in. Only the Dirt 3 target needs it,
 	// so a failure to resolve one is carried rather than raised.
 	profile:     ^d3.Venue_Profile,
 	profile_msg: string,
+	// See export_venue_dirs.
+	venue_dir:       string,
+	template_dir:    string,
+	donor_route_dir: string,
 	notes:  []geo.Pace_Note,     // pace notes at their arc stations
 	pace:   geo.Pace_Params,     // what `notes` was generated from, for a target that
 	                         // writes notes rather than baked audio
@@ -169,18 +236,58 @@ run_tool :: proc(exe: string, args: ..string) -> (out: string, ok: bool) {
 
 // --- building the job --------------------------------------------------------
 
-// Road + verges + (if enabled) terrain, in one soup, each triangle tagged.
-// Reuses the viewport's own builders: one source of geometry.
+// One spline's geometry, built the way the viewport builds it: the ribbon, the
+// ground fitted to that ribbon, and the soup of both with every triangle
+// tagged. This is the CPU half of `rebuild_geometry` and nothing else, so no GL
+// context is involved and it runs headless.
 //
 // The terrain is included as a *driveable* surface, not scenery — a target that
 // makes the mesh its own collision must not let a car that leaves the road fall
 // through the void.
-build_export_mesh :: proc(doc: ^Venue_Doc, allocator := context.allocator) -> geo.Tri_Mesh {
-	m := geo.build_tri_mesh(doc.ribbon, doc.topo, doc.roughness, allocator)
-	if doc.terrain.enabled && len(doc.terrain_field.tris) > 0 {
-		geo.build_terrain_mesh(&m, &doc.terrain, &doc.terrain_field)
+//
+// An export builds this twice: once for the stage being exported, once for the
+// venue's whole road network the terrain surface comes from. `terrain` is a
+// clone of the document's because one Terrain cannot be fitted to two ribbons
+// without smearing its sculpt — see geo.terrain_clone.
+Export_Geometry :: struct {
+	ribbon:  []geo.Cross_Section,
+	terrain: geo.Terrain,
+	field:   geo.Terrain_Field,
+	mesh:    geo.Tri_Mesh,
+	order:   []int, // triangle indices, sorted by material
+	counts:  [geo.Mat_Id]int,
+}
+
+// Everything but `terrain` and `field` is temp-allocated; those two own heap
+// arrays of their own.
+export_geometry_delete :: proc(g: ^Export_Geometry) {
+	geo.terrain_delete(&g.terrain)
+	geo.terrain_field_delete(&g.field)
+	g^ = {} // safe to delete twice
+}
+
+build_geometry :: proc(doc: ^Venue_Doc, spline: geo.Spline) -> (g: Export_Geometry, msg: string, ok: bool) {
+	if len(spline.points) < 2 {
+		return g, "nothing to export: a road needs at least 2 points", false
 	}
-	return m
+	g.ribbon = geo.build_ribbon(spline, int(doc.topo), context.temp_allocator)
+	g.terrain = geo.terrain_clone(&doc.terrain)
+	if g.terrain.enabled {
+		geo.terrain_ensure(&g.terrain, g.ribbon, doc.topo, doc.roughness)
+		arc := geo.ribbon_arc(g.ribbon)
+		ds := geo.sample_spacing(g.ribbon)
+		// A fresh field is always rebuilt, so the generation only gets stored.
+		geo.terrain_field_ensure(&g.field, &g.terrain, g.ribbon, arc, ds, doc.topo, doc.roughness, 1)
+	}
+	g.mesh = geo.build_tri_mesh(g.ribbon, doc.topo, doc.roughness, context.temp_allocator)
+	if g.terrain.enabled && len(g.field.tris) > 0 {
+		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field)
+	}
+	g.order, g.counts = sort_faces_by_material(g.mesh)
+	if len(g.order) == 0 {
+		return g, "nothing to export: the mesh has no triangles", false
+	}
+	return g, "", true
 }
 
 // Triangle indices sorted by material, and the population of each group. A
@@ -213,27 +320,33 @@ sort_faces_by_material :: proc(
 	return order, counts
 }
 
-// Everything the editor holds, flattened for a target. Temp-allocated: valid for
-// the duration of one export.
-build_export_job :: proc(doc: ^Venue_Doc, name: string) -> (job: Export_Job, msg: string, ok: bool) {
-	if len(doc.spline.points) < 2 {
-		return job, "nothing to export: a stage needs at least 2 points", false
-	}
-
+// Everything the editor holds, flattened for a target. `stage` is the one
+// chain being exported, compiled out of `doc.spline`; a loose road out of
+// maps/ is its own chain and passes itself.
+//
+// Temp-allocated, except the two geometries' terrain — release with
+// export_job_delete.
+build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (job: Export_Job, msg: string, ok: bool) {
 	job.name = name
-	job.mesh = build_export_mesh(doc, context.temp_allocator)
-	job.order, job.counts = sort_faces_by_material(job.mesh)
-	if len(job.order) == 0 {
-		return job, "nothing to export: the mesh has no triangles", false
+	job.stage, msg, ok = build_geometry(doc, stage)
+	if !ok {
+		return
 	}
-	job.ribbon = doc.ribbon
+	// The venue's whole road network, which the terrain surface is built from.
+	// A loose road has no venue and is its own network, so it is not built twice.
+	if doc.open_venue != "" {
+		job.venue, msg, ok = build_geometry(doc, doc.spline)
+		if !ok {
+			return job, fmt.tprintf("road network: %s", msg), false
+		}
+	}
 	job.timing = doc.timing
 	// glTF needs no shaders, so a missing profile is only fatal for the target
 	// that names them.
 	job.profile, job.profile_msg, _ = export_profile(doc.install, doc.open_venue, context.temp_allocator)
 	job.props = geo.veg_generate(
-		doc.ribbon,
-		&doc.terrain,
+		job.stage.ribbon,
+		&job.stage.terrain,
 		doc.veg,
 		doc.topo,
 		doc.roughness,
@@ -244,10 +357,15 @@ build_export_job :: proc(doc: ^Venue_Doc, name: string) -> (job: Export_Job, msg
 	// knob at zero" rather than "unset".
 	job.pace = doc.pace.smooth_m != 0 ? doc.pace : geo.PACE_DEFAULTS
 	notes := make([dynamic]geo.Pace_Note, context.temp_allocator)
-	geo.pace_generate(doc.ribbon, job.pace, &notes)
+	geo.pace_generate(job.stage.ribbon, job.pace, &notes)
 	job.notes = notes[:]
 
 	return job, "", true
+}
+
+export_job_delete :: proc(job: ^Export_Job) {
+	export_geometry_delete(&job.stage)
+	export_geometry_delete(&job.venue)
 }
 
 // Where a target's files land.
@@ -302,15 +420,58 @@ export_dest :: proc(
 	return dir, false, "", true
 }
 
+// The directories a stage export reads its art from and writes venue-scope
+// files to.
+//
+// `venue_dir` holds the `tracksplit.pssg` the game loads beside this route, so
+// it is where `track.vis` censuses and where a venue export writes its own.
+// `template_dir` holds the base venue's tracksplit, whose art the splice keeps;
+// the debug detour separates the two, writing under `out/` while splicing the
+// base's.
+//
+// `donor_route_dir` is the base route this stage takes its trees, ornaments and
+// rigid bodies from. It is the base route in the install either way, never the
+// output directory: an export must read stock art rather than its own last
+// output, and the debug detour keeps no backup there to fall back to.
+export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (venue_dir, template_dir, donor_route_dir: string) {
+	venue_dir = filepath.dir(out)
+	template_dir = venue_dir
+	donor_route_dir = out
+	if doc.open_venue == "" {
+		if route := install_scan_route_dir(doc.install); route != "" {
+			donor_route_dir = route
+			if !installing {
+				venue_dir = filepath.dir(route)
+				template_dir = venue_dir
+			}
+		}
+		return
+	}
+	if p, _, loaded := venue_load(doc.open_venue, context.temp_allocator); loaded {
+		if venue, route, found := venue_source(doc.install, p); found {
+			donor_route_dir = route.dir
+			if !installing {
+				template_dir = venue.dir
+			}
+		}
+	}
+	return
+}
+
 // Build the job and hand it to one target. Returns a status-line message.
+//
+// `stage` is the one chain being exported, compiled out of the venue's road
+// graph. `doc.spline` stays the graph, because the venue surface is built from
+// all of it.
 //
 // `stage_id` names which of the venue's stages this is, and is what picks the
 // route directory inside the game. It is empty for a loose stage out of maps/,
 // which has no venue and lands in the selected install route instead.
 export_stage :: proc(
-	doc: ^Venue_Doc, name, stage_id: string, target: ^Export_Target,
+	doc: ^Venue_Doc, stage: geo.Spline, name, stage_id: string, target: ^Export_Target,
 ) -> (msg: string, ok: bool) {
-	job, jmsg, jok := build_export_job(doc, name)
+	job, jmsg, jok := build_export_job(doc, stage, name)
+	defer export_job_delete(&job)
 	if !jok {
 		return jmsg, false
 	}
@@ -319,6 +480,7 @@ export_stage :: proc(
 		return dmsg, false
 	}
 	job.out, job.installing = dest, installing
+	job.venue_dir, job.template_dir, job.donor_route_dir = export_venue_dirs(doc, dest, installing)
 	had_orig := false
 	if installing {
 		if infos, err := os.read_all_directory_by_path(dest, context.temp_allocator); err == nil {
@@ -414,47 +576,27 @@ export_headless :: proc(
 	}
 	defer delete(doc.spline.points)
 	defer geo.terrain_delete(&doc.terrain)
-	defer geo.terrain_field_delete(&doc.terrain_field)
 
-	load :: proc(doc: ^Venue_Doc, stage: string) -> (msg: string, ok: bool) {
-		if doc.open_venue != "" {
-			p, pmsg, pok := venue_load(doc.open_venue, context.temp_allocator)
-			if !pok { return pmsg, false }
-			// A venue stage is compiled out of the road graph, not read from a
-			// document of its own.
-			compiled, cmsg, cok := venue_compile_route(p, stage, doc, context.allocator)
-			if !cok { return cmsg, false }
-			delete(doc.spline.points)
-			doc.spline = compiled
-			return cmsg, true
-		}
-		return load_road_named(doc, stage)
+	// `doc.spline` is the road as saved: the venue's whole graph, or a loose
+	// road out of maps/. `chain` is the one stage to export, which for a loose
+	// road is the road itself.
+	chain: geo.Spline
+	if venue != "" {
+		p, pmsg, pok := venue_load(doc.open_venue, context.temp_allocator)
+		if !pok { return pmsg, false }
+		compiled, cmsg, cok := venue_compile_route(p, stage, &doc, context.allocator)
+		if !cok { return cmsg, false }
+		chain = compiled
+	} else {
+		if m, lok := load_road_named(&doc, stage); !lok { return m, false }
+		chain = doc.spline
 	}
-	if m, lok := load(&doc, stage); !lok {
-		return m, false
-	}
+	// Not inside the if: a block-scoped defer would free the chain before the
+	// export ran. A loose road's chain is doc.spline, freed above.
+	defer if venue != "" { delete(chain.points) }
 	// The document owns the sculpt and the sliders. The flag only forces ground
-	// on for a stage that has none.
+	// on for a road that has none.
 	doc.terrain.enabled = doc.terrain.enabled || terrain
-	doc.ribbon = geo.build_ribbon(doc.spline, int(doc.topo), context.allocator)
-	defer delete(doc.ribbon)
-	doc.ribbon_gen = 1
-
-	if doc.terrain.enabled {
-		geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.topo, doc.roughness)
-		arc := geo.ribbon_arc(doc.ribbon)
-		ds := geo.sample_spacing(doc.ribbon)
-		geo.terrain_field_ensure(
-			&doc.terrain_field,
-			&doc.terrain,
-			doc.ribbon,
-			arc,
-			ds,
-			doc.topo,
-			doc.roughness,
-			doc.ribbon_gen,
-		)
-	}
 	// A `--venue` export names its stage; a loose one out of maps/ has none.
-	return export_stage(&doc, stage, venue != "" ? stage : "", target)
+	return export_stage(&doc, chain, stage, venue != "" ? stage : "", target)
 }

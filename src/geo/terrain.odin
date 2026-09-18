@@ -197,6 +197,17 @@ terrain_sculpt :: proc(t: ^Terrain, allocator := context.temp_allocator) -> []Te
 	return out
 }
 
+// A throwaway copy carrying the sliders and the exact sculpt, for fitting a
+// second ribbon: terrain_controls_ensure re-derives controls per ribbon and
+// adopts the offset of the nearest old control, so refitting one Terrain to a
+// second ribbon smears the sculpt it came from. Delete with terrain_delete.
+terrain_clone :: proc(t: ^Terrain) -> (out: Terrain) {
+	out = t^
+	out.controls = nil
+	terrain_sculpt_load(&out, terrain_sculpt(t))
+	return
+}
+
 terrain_ensure :: proc(t: ^Terrain, ribbon: []Cross_Section, topo: c.int, roughness: f32) {
 	if !t.enabled {
 		return

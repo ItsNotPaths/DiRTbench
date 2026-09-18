@@ -53,16 +53,40 @@ do_save :: proc(ed: ^Editor) {
 	set_status(&ed.status, msg, ok)
 }
 
-// Export what is on screen, so the stage name doubles as the item and map name.
+// The chain this window exports, and the name it exports under.
+//
+// Only a stage window has one. A venue window is the road graph, and exporting
+// a graph as one stage means nothing — its own contribution to an export is the
+// terrain surface, which every stage export writes anyway.
+//
+// A venue stage exports its compiled chain under its route id, because that id
+// is the directory the game reads. A loose road out of maps/ is its own chain
+// and carries its own name.
+export_target_chain :: proc(ed: ^Editor) -> (chain: geo.Spline, name: string, ok: bool) {
+	if ed.kind != .Stage {
+		return
+	}
+	if ed.doc.open_venue == "" {
+		return ed.doc.spline, sanitise_stage_name(stage_name_text(ed.doc)), len(ed.doc.spline.points) >= 2
+	}
+	return ed.stage.spline, ed.stage_id, ed.stage.state == .Ready
+}
+
 // `rebuild_geometry` first because the terrain rebuild is deferred while a point
 // gizmo is dragged: a stale `terrain_field` would export the previous ribbon's
 // ground. Nothing is dragging when a menu is open, so this is a no-op in
 // practice and a guard against ever calling export from elsewhere.
 do_export :: proc(ed: ^Editor, target: ^Export_Target) {
-	name := sanitise_stage_name(stage_name_text(ed.doc))
-	set_stage_name(ed.doc, name)
+	chain, name, ready := export_target_chain(ed)
+	if !ready {
+		set_status(&ed.status, buf_text(ed.stage.msg[:]), false)
+		return
+	}
+	if ed.doc.open_venue == "" {
+		set_stage_name(ed.doc, name)
+	}
 	rebuild_geometry(ed.doc)
-	msg, ok := export_stage(ed.doc, name, ed.stage_id, target)
+	msg, ok := export_stage(ed.doc, chain, name, ed.stage_id, target)
 	set_status(&ed.status, msg, ok)
 }
 
@@ -138,7 +162,8 @@ draw_menubar :: proc(ed: ^Editor) {
 			ui.igEndMenu()
 		}
 		ui.igSeparator()
-		if ed.doc.open_venue == "" && ui.igBeginMenu("Export to", len(ed.doc.spline.points) >= 2) {
+		_, _, exportable := export_target_chain(ed)
+		if ed.kind == .Stage && ui.igBeginMenu("Export to", exportable) {
 			for &t in EXPORT_TARGETS {
 				label := fmt.ctprint(t.label)
 				if ui.igMenuItem_Bool(label, nil, false, true) {
@@ -147,7 +172,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			}
 			ui.igEndMenu()
 		}
-		if ed.doc.open_venue == "" && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.kind == .Stage && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()
@@ -661,10 +686,11 @@ draw_targets :: proc(ed: ^Editor) {
 	ui.igCheckbox("Write to out/ instead of the game", &ed.doc.debug_export)
 	ui.igSpacing()
 
+	_, name, _ := export_target_chain(ed)
 	for &t in EXPORT_TARGETS {
 		ui.igSeparatorText(fmt.ctprint(t.label))
 		ui.im_text(fmt.ctprint(t.blurb))
-		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, stage_name_text(ed.doc), ed.stage_id, &t)
+		dest, installing, dest_msg, dest_ok := export_dest(ed.doc, name, ed.stage_id, &t)
 		if !dest_ok {
 			ui.im_text_colored(DIM_COL, fmt.ctprint(dest_msg))
 		} else if installing {

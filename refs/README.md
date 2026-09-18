@@ -58,7 +58,10 @@ they call the package names directly (`d3.d3_collision_read`), which compiles
 because nothing in `scratch.odin` is marked `@(private)`.
 
 A file compiles as soon as its set is back under `src/` — there is no build flag
-to unset.
+to unset, with one exception: both app probes call
+`venue_tracksplit_collision`, which no longer returns a ribbon, and both use
+that ribbon. Take it from `build_geometry(&doc, doc.spline)` instead, which is
+where the venue's road network is turned into geometry now.
 
 ## What did not come here
 
