@@ -107,25 +107,12 @@ run_cli :: proc() -> (handled: bool) {
 	debug_out := false
 	route := ""
 	venue := ""
-	roughness := f32(0.5)
 	for i := 2; i < len(args); i += 1 {
 		switch args[i] {
 		case "--terrain":
 			terrain = true
 		case "--debug-out":
 			debug_out = true
-		case "--roughness":
-			if i + 1 >= len(args) {
-				fmt.println("--roughness needs a value in 0..1")
-				os.exit(1)
-			}
-			i += 1
-			value, valid := strconv.parse_f64(args[i])
-			if !valid {
-				fmt.printfln("invalid --roughness value %q", args[i])
-				os.exit(1)
-			}
-			roughness = f32(value)
 		case "--route":
 			if i + 1 >= len(args) {
 				fmt.println("--route needs <venue>/<route_n>")
@@ -152,7 +139,7 @@ run_cli :: proc() -> (handled: bool) {
 			os.exit(1)
 		}
 	}
-	msg, ok := export_headless(args[1], target, terrain, debug_out, route, venue, roughness)
+	msg, ok := export_headless(args[1], target, terrain, debug_out, route, venue)
 	fmt.println(msg)
 	os.exit(0 if ok else 1)
 }

@@ -26,6 +26,11 @@ import "core:strings"
 import d3 "../d3"
 import "../geo"
 
+// How far under the route's surface the venue LOD sits. Enough to beat depth
+// precision at range, small enough that the step where the route's coverage
+// ends is not a cliff.
+D3_VENUE_LOD_DROP :: f32(2)
+
 // The base venue's own `tracksplit.pssg`, whose art the splice keeps. A
 // deployed venue starts as a hardlink to it, and `d3_backup_once` leaves a
 // `.orig` beside it the first time we write, so the backup is the base file
@@ -54,7 +59,17 @@ export_dirt3_tracksplit :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !template_ok {
 		return template_msg, false
 	}
+	// Dropped below the route's own surface. Both files cover the same ground —
+	// stock does too, on all 103 routes that ship a real view-cell tree — and
+	// stock's per-cell mask draws only one of them. A single all-visible cell
+	// cannot choose, so the two would z-fight; sinking the LOD lets the route
+	// win everywhere it reaches. Remove this once the VIS has real cells.
 	collision := collision_from_mesh(job.venue.mesh, job.venue.order, context.temp_allocator)
+	for &triangle in collision {
+		for &point in triangle.Points {
+			point[1] -= D3_VENUE_LOD_DROP
+		}
+	}
 	return d3.Export_Venue_Geometry(&d3.Export_Job{
 		Out       = job.venue_dir,
 		Backup    = job.installing,
@@ -103,7 +118,14 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 		markers[i]={Kind=kind,Distance=marker.station}
 	}
-	collision := collision_from_mesh(job.stage.mesh, job.stage.order, context.temp_allocator)
+	// A route draws and collides the venue's whole road network, not just its
+	// own chain: the venue LOD covers all of it, so ground the LOD draws and
+	// the route does not would be visible with nothing under it.
+	drawn := job.stage
+	if len(job.venue.order) > 0 {
+		drawn = job.venue
+	}
+	collision := collision_from_mesh(drawn.mesh, drawn.order, context.temp_allocator)
 	out := d3.Export_Job{
 		Name = job.name, Out = job.out, Backup = job.installing,
 		Route = route, Markers = markers, Collision = collision,
@@ -536,7 +558,6 @@ export_headless :: proc(
 	debug_out: bool,
 	route: string,
 	venue: string,
-	roughness: f32 = 0.5,
 ) -> (
 	msg: string,
 	ok: bool,
@@ -560,7 +581,7 @@ export_headless :: proc(
 	doc := Venue_Doc {
 		install   = &scan,
 		topo      = geo.SAMPLES_PER_SEG,
-		roughness = roughness,
+
 		terrain   = geo.TERRAIN_DEFAULTS,
 		pace      = geo.PACE_DEFAULTS,
 		veg       = geo.VEG_DEFAULTS,

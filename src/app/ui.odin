@@ -433,13 +433,6 @@ draw_terrain_section :: proc(ed: ^Editor) {
 	if ui.igSliderInt("topo resolution", &ed.doc.topo, TOPO_MIN, TOPO_MAX, "%d /segment", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
 	}
-	// Global baseline for the road's vertical roughness (and the cliff jitter). Each
-	// control point can offset this locally — see the Selected point section. The
-	// absolute displacement is hard-capped at 7 in (ROUGH_MAX_M); this only scales
-	// up to that.
-	if ui.igSliderFloat("roughness", &ed.doc.roughness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
 	if ui.im_button(ed.wireframe ? "Wireframe: on" : "Wireframe: off") {
 		ed.wireframe = !ed.wireframe
 	}

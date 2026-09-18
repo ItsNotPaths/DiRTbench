@@ -41,6 +41,9 @@ Export_Job :: struct {
 	Backup:    bool,
 	Route:     []Route_Sample,
 	Markers:   []Progress_Marker,
+	// What this route draws and collides. `routesplit.pssg` and `track.jpk` are
+	// the same geometry by design: anything drawn locally can be driven on, and
+	// anything only the venue LOD draws cannot.
 	Collision: []Collision_Triangle,
 	// The open venue's shader template, read from its `base/` directory. An
 	// export without one is refused: every file that names a shader would

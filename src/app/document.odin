@@ -69,7 +69,9 @@ Venue_Doc :: struct {
 	saved_edits:   u64, // `edits` when this was last written home
 	snapshot_edits: u64, // `edits` when the crash snapshot was last written
 	topo:          c.int, // ribbon samples per spline segment
-	roughness:     f32,   // global roughness: road vertical jitter + cliff jitter, 0..1
+	// Baseline road/cliff jitter, 0..1. Held at zero: the game roughens each
+	// surface itself. Per-point offsets are the only way to add any.
+	roughness:     f32,
 
 	// How the co-driver calls a corner. The knobs are the venue's, because they
 	// describe the calling and not the stage being called; the notes themselves
@@ -304,7 +306,10 @@ doc_defaults :: proc() -> Venue_Doc {
 		gen = GEN_DEFAULTS,
 		gen_live = true,
 		topo = geo.SAMPLES_PER_SEG,
-		roughness = 0.5,
+		// The game adds its own per-surface roughness, and every stock track is
+		// geometrically smooth, so the baseline is flat. Per-point offsets still
+		// add on top (see geo: eff = global + cs.roughness).
+		roughness = 0,
 		terrain = geo.TERRAIN_DEFAULTS,
 		pace = geo.PACE_DEFAULTS,
 		timing = TIMING_DEFAULTS,
