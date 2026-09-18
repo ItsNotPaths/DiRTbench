@@ -368,7 +368,7 @@ build_geometry :: proc(doc: ^Venue_Doc, spline: geo.Spline) -> (g: Export_Geomet
 	}
 	g.mesh = geo.build_tri_mesh(g.ribbon, doc.roughness, context.temp_allocator)
 	if g.terrain.enabled && len(g.field.tris) > 0 {
-		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field)
+		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field, g.ribbon, doc.roughness)
 	}
 	g.order, g.counts = sort_faces_by_material(g.mesh)
 	if len(g.order) == 0 {

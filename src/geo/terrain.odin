@@ -1028,7 +1028,109 @@ field_point :: proc(t: ^Terrain, v: Terrain_Point) -> gfx.Vector3 {
 	return {v.x, field_y(t, v), v.z}
 }
 
-build_terrain_mesh :: proc(m: ^Tri_Mesh, t: ^Terrain, f: ^Terrain_Field) {
+// How far the apron drops, and how far out it leans per metre of drop. Short
+// and slightly banked: it has to read as a lip of ground, not a wall.
+TERRAIN_SKIRT_DROP : f32 : 1.6
+TERRAIN_SKIRT_LEAN : f32 : 0.35
+
+// An apron over the seams the triangulation left bare.
+//
+// The rim points *are* the verge seams, so every consecutive pair along a run
+// ought to be an edge of the terrain. Two things stop it: Delaunay is
+// unconstrained, and `TERRAIN_DEDUPE_M` drops a rim point outright when another
+// lands within half a metre. Both only bite where two rims come that close,
+// which is a fork or a weld and nowhere else — measured on dirtbench_1, the
+// bare pairs sit at the three branch nodes and at none of the other 67 edges.
+//
+// Rather than constrain the triangulation, hang a short bank off the pairs that
+// came out bare. It is buried under the ground everywhere the ground did meet
+// the road, so it costs nothing to emit on a pair that turns out to be fine.
+build_terrain_skirt :: proc(
+	m: ^Tri_Mesh,
+	t: ^Terrain,
+	f: ^Terrain_Field,
+	ribbon: []Cross_Section,
+	roughness: f32,
+) {
+	n := len(ribbon)
+	if n < 2 {
+		return
+	}
+	// Rim points by position, then the rim-to-rim edges the triangulation has.
+	// Keyed on the seam's own x/z, which `verge_seam` reproduces to the bit.
+	at := make(map[[2]f32]int, len(f.pts), context.temp_allocator)
+	defer delete(at)
+	for p, i in f.pts {
+		if p.fixed {
+			at[{p.x, p.z}] = i
+		}
+	}
+	have := make(map[[2]int]bool, context.temp_allocator)
+	defer delete(have)
+	for tri in f.tris {
+		for k in 0 ..< 3 {
+			a, b := int(tri[k]), int(tri[(k + 1) % 3])
+			if !f.pts[a].fixed || !f.pts[b].fixed {
+				continue
+			}
+			if a > b {
+				a, b = b, a
+			}
+			have[{a, b}] = true
+		}
+	}
+
+	arc := ribbon_arc(ribbon)
+	ds := sample_spacing(ribbon)
+	for side in 0 ..< 2 {
+		for i in 0 ..< n - 1 {
+			if ribbon[i + 1].break_before {
+				continue
+			}
+			a := verge_seam(ribbon[i], side, VERGE_ROWS, i, roughness, ds[i])
+			b := verge_seam(ribbon[i + 1], side, VERGE_ROWS, i + 1, roughness, ds[i + 1])
+			ia, a_ok := at[{a.x, a.z}]
+			ib, b_ok := at[{b.x, b.z}]
+			if a_ok && b_ok {
+				lo, hi := ia, ib
+				if lo > hi {
+					lo, hi = hi, lo
+				}
+				if have[{lo, hi}] {
+					continue // the ground meets the road here
+				}
+			}
+			oa := terrain_outward(ribbon[i], side)
+			ob := terrain_outward(ribbon[i + 1], side)
+			lean := TERRAIN_SKIRT_DROP * TERRAIN_SKIRT_LEAN
+			da := a + oa * lean - gfx.Vector3{0, TERRAIN_SKIRT_DROP, 0}
+			db := b + ob * lean - gfx.Vector3{0, TERRAIN_SKIRT_DROP, 0}
+			// Wound to face away from the road, so the bank is lit from the side
+			// the hole is seen from.
+			nrm := gfx.Vector3CrossProduct(b - a, da - a)
+			p0, p1, p2, p3 := a, b, db, da
+			if gfx.Vector3DotProduct(nrm, oa) < 0 {
+				p0, p1, p2, p3 = b, a, da, db
+			}
+			drop := TERRAIN_SKIRT_DROP / UV_TILE_M
+			ua := arc[i] / UV_TILE_M
+			ub := arc[i + 1] / UV_TILE_M
+			add_quad(
+				m, p0, p1, p2, p3,
+				{ua, 0}, {ub, 0}, {ub, drop}, {ua, drop},
+				lerp_col(CLIFF_BOT, CLIFF_TOP, 0.5), .Cliff,
+			)
+		}
+	}
+}
+
+build_terrain_mesh :: proc(
+	m: ^Tri_Mesh,
+	t: ^Terrain,
+	f: ^Terrain_Field,
+	ribbon: []Cross_Section,
+	roughness: f32,
+) {
 	for tri in f.tris {
 		a := field_point(t, f.pts[tri[0]])
 		b := field_point(t, f.pts[tri[1]])
@@ -1054,6 +1156,7 @@ build_terrain_mesh :: proc(m: ^Tri_Mesh, t: ^Terrain, f: ^Terrain_Field) {
 		}
 		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), terrain_tri_colour(nrm), .Terrain)
 	}
+	build_terrain_skirt(m, t, f, ribbon, roughness)
 }
 
 // --- world-space sculpt controls --------------------------------------------
@@ -1162,6 +1265,6 @@ terrain_mesh_rebuild :: proc(
 	terrain_field_ensure(f, t, ribbon, arc, ds, roughness, ribbon_gen)
 
 	m := tri_mesh_make(context.temp_allocator)
-	build_terrain_mesh(&m, t, f)
+	build_terrain_mesh(&m, t, f, ribbon, roughness)
 	tm^ = gpu_mesh_upload(m)
 }
