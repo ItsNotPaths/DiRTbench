@@ -60,6 +60,10 @@ Im_Tree_Node_Flags :: distinct c.int
 IM_TREE_NODE_NONE :: Im_Tree_Node_Flags(0)
 IM_TREE_NODE_DEFAULT_OPEN :: Im_Tree_Node_Flags(1 << 5)
 
+Im_Child_Flags :: distinct c.int
+IM_CHILD_NONE :: Im_Child_Flags(0)
+IM_CHILD_BORDERS :: Im_Child_Flags(1 << 0)
+
 // ImGuiDir_, for the arrow a button draws.
 Im_Dir :: enum c.int {
 	Left  = 0,
@@ -143,6 +147,16 @@ foreign imgui {
 	// One line of widget: the font plus the frame padding. Also the height of
 	// the main menu bar, which is what a panel pinned below it needs.
 	igGetFrameHeight :: proc() -> f32 ---
+	// The same, plus the gap to the next line: the pitch of a stack of widgets.
+	igGetFrameHeightWithSpacing :: proc() -> f32 ---
+	// What is left of the current window, from the cursor to its bottom right.
+	igGetContentRegionAvail :: proc() -> Im_Vec2 ---
+
+	// A scrolling region inside a window. A negative size component means
+	// "everything but that much", which is how a block is held back for what
+	// comes after the child. Owed igEndChild whatever it returns.
+	igBeginChild_Str :: proc(str_id: cstring, size: Im_Vec2, child_flags: Im_Child_Flags, window_flags: Im_Window_Flags) -> bool ---
+	igEndChild :: proc() ---
 
 	igBeginMainMenuBar :: proc() -> bool ---
 	igEndMainMenuBar :: proc() ---
