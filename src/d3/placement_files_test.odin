@@ -375,8 +375,11 @@ placement_ornament_references_can_reserve_ens_drawable_ids :: proc(t: ^testing.T
 	testing.expect(t, strings.contains(error_msg, "capacity cannot be smaller"))
 }
 
+// Instance order is free: 101 of 109 stock trees.bin interleave their
+// references and the game loads every one. The row's count is a population, so
+// it must be right whatever order the instances arrive in.
 @(test)
-placement_build_rejects_ungrouped_instances :: proc(t: ^testing.T) {
+placement_build_counts_interleaved_instances :: proc(t: ^testing.T) {
 	refs := []D3_Placement_Reference{
 		{reference_id=0, filename="a", bounds_max={1,1,1}},
 		{reference_id=1, filename="b", bounds_max={1,1,1}},
@@ -384,7 +387,55 @@ placement_build_rejects_ungrouped_instances :: proc(t: ^testing.T) {
 	instances := []D3_Placement_Instance{
 		{reference_id=1, basis=D3_BASIS_IDENTITY},
 		{reference_id=0, basis=D3_BASIS_IDENTITY},
+		{reference_id=1, basis=D3_BASIS_IDENTITY},
 	}
-	_, _, ok := d3_placement_build(.Trees, refs, instances, context.temp_allocator)
-	testing.expect(t, !ok)
+	data, msg, ok := d3_placement_build(.Trees, refs, instances, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	layout, _ := d3_placement_layout(data)
+	table := binary_load_i32(data, layout.ref_table_at)
+	testing.expect_value(t, binary_load_u32(data, table+36), u32(1))
+	testing.expect_value(t, binary_load_u32(data, table+layout.ref_stride+36), u32(2))
+
+	back, back_msg, back_ok := d3_placement_read(data, context.temp_allocator)
+	testing.expect(t, back_ok, back_msg); if !back_ok { return }
+	testing.expect_value(t, len(back), 3)
+	for want, i in instances {
+		testing.expect_value(t, back[i].reference_id, want.reference_id)
+	}
+}
+
+@(test)
+placement_references_round_trip_through_the_writer :: proc(t: ^testing.T) {
+	refs := []D3_Placement_Reference{
+		{reference_id = 0, filename = "dougfir_tall_02_a", bounds_min = {-4.7, -0.59, -5.1}, bounds_max = {5.3, 25.4, 5.05}, prebaked_shadows = 1},
+		{reference_id = 1, filename = "birch_full_01_a", bounds_min = {-3, 0, -3}, bounds_max = {3, 18, 3}},
+	}
+	instances := []D3_Placement_Instance{
+		{reference_id = 0, instance_id = 4, basis = D3_BASIS_IDENTITY, position = {1, 2, 3}},
+		{reference_id = 1, instance_id = 9, basis = D3_BASIS_IDENTITY, position = {4, 5, 6}},
+	}
+	data, build_msg, built := d3_placement_build(.Trees, refs, instances, context.temp_allocator)
+	testing.expect(t, built, build_msg); if !built { return }
+
+	back, read_msg, read_ok := d3_placement_read_references(data, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+	testing.expect_value(t, len(back), len(refs))
+	for want, i in refs {
+		testing.expect_value(t, back[i].reference_id, want.reference_id)
+		testing.expect_value(t, back[i].filename, want.filename)
+		testing.expect_value(t, back[i].bounds_min, want.bounds_min)
+		testing.expect_value(t, back[i].bounds_max, want.bounds_max)
+		testing.expect_value(t, back[i].prebaked_shadows, want.prebaked_shadows)
+	}
+}
+
+// A row's filename is an absolute offset, so a truncated pool must refuse
+// rather than hand back a name that runs to the end of the file.
+@(test)
+placement_references_refuse_an_unterminated_filename :: proc(t: ^testing.T) {
+	refs := []D3_Placement_Reference{{reference_id = 0, filename = "dougfir_tall_02_a", bounds_max = {1, 1, 1}}}
+	data, _, built := d3_placement_build(.Trees, refs, nil, context.temp_allocator)
+	testing.expect(t, built); if !built { return }
+	_, _, ok := d3_placement_read_references(data[:len(data)-1], context.temp_allocator)
+	testing.expect(t, !ok, "an unterminated string pool must refuse")
 }

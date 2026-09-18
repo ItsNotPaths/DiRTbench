@@ -1,6 +1,7 @@
 package d3
 
 import "core:fmt"
+import "core:mem"
 import "core:strconv"
 import "core:strings"
 
@@ -152,14 +153,13 @@ d3_placement_reference_counts :: proc(
 		if ref.reference_id != u32(i) || ref.filename == "" { delete(out, allocator); return nil, false }
 		for k in 0..<3 { if ref.bounds_min[k] > ref.bounds_max[k] { delete(out, allocator); return nil, false } }
 	}
-	last_reference: u32
-	for inst, i in instances {
+	// Instance order is free. Only 8 of 109 stock trees.bin group their
+	// instances by reference and the game loads all of them, so the row's
+	// count is a population and never a contiguous run — measured exact
+	// against every stock file.
+	for inst in instances {
 		if int(inst.reference_id) >= len(references) { delete(out, allocator); return nil, false }
-		// Stock stores each reference immediately followed by its instances in
-		// the XML, and the BIN table follows that same grouped order.
-		if i > 0 && inst.reference_id < last_reference { delete(out, allocator); return nil, false }
 		out[inst.reference_id] += 1
-		last_reference = inst.reference_id
 	}
 	return out, true
 }
@@ -418,6 +418,76 @@ d3_placement_read :: proc(
 		out[i] = d3_placement_decode_instance(data, instance_table_offset+i*layout.inst_stride)
 	}
 	return out, fmt.tprintf("%d instances, %d references", instance_num, reference_num), true
+}
+
+// The reference table: one row per unique prop mesh, with the filename read
+// out of the string pool the row points at. The mirror of the row the writer
+// lays down, so the two must stay in step.
+//
+// A filename is addressed by absolute file offset and is NUL-terminated, so a
+// row pointing outside the file or at an unterminated run is a refusal rather
+// than a silently truncated name.
+d3_placement_read_references :: proc(
+	data: []u8,
+	allocator := context.allocator,
+) -> (
+	references: []D3_Placement_Reference,
+	msg: string,
+	ok: bool,
+) {
+	layout, layout_ok := d3_placement_layout(data)
+	if !layout_ok { return nil, "not a recognised Dirt 3 placement file", false }
+
+	ref_table_offset := binary_load_i32(data, layout.ref_table_at)
+	reference_num := binary_load_i32(data, layout.ref_num_at)
+	if reference_num < 0 { return nil, "placement file has a negative reference count", false }
+	if ref_table_offset != layout.header_size {
+		return nil, "placement file layout does not match what this reader expects", false
+	}
+	if !binary_range(len(data), ref_table_offset, reference_num*layout.ref_stride) {
+		return nil, "placement file is shorter than its own reference table", false
+	}
+
+	out := make([]D3_Placement_Reference, reference_num, allocator)
+	defer if !ok {
+		for ref in out { delete(ref.filename, allocator) }
+		delete(out, allocator)
+	}
+	for i in 0 ..< reference_num {
+		at := ref_table_offset + i*layout.ref_stride
+		name_at := binary_load_i32(data, at)
+		name, name_ok := d3_placement_pool_string(data, name_at, allocator)
+		if !name_ok {
+			return nil, fmt.tprintf("reference %d names a filename outside the string pool", i), false
+		}
+		ref := D3_Placement_Reference{
+			reference_id = binary_load_u32(data, at+4),
+			filename     = name,
+		}
+		for k in 0..<3 {
+			ref.bounds_min[k] = binary_load_f32(data, at+8+k*4)
+			ref.bounds_max[k] = binary_load_f32(data, at+20+k*4)
+		}
+		if layout.format == .Trees {
+			ref.prebaked_shadows = binary_load_u32(data, at+32)
+		} else {
+			ref.sponsor = binary_load_u32(data, at+32)
+			ref.prebaked_shadows = binary_load_u32(data, at+36)
+			ref.instance_capacity = binary_load_u32(data, at+40)
+		}
+		out[i] = ref
+	}
+	return out, fmt.tprintf("%d references", reference_num), true
+}
+
+@(private = "file")
+d3_placement_pool_string :: proc(data: []u8, at: int, allocator: mem.Allocator) -> (string, bool) {
+	if at < 0 || at >= len(data) { return "", false }
+	for end in at ..< len(data) {
+		if data[end] != 0 { continue }
+		return strings.clone(string(data[at:end]), allocator), true
+	}
+	return "", false
 }
 
 // A reference mesh's local-space bounding box, straight off its row in the
