@@ -1,18 +1,22 @@
 package main
 
-// The Dirt 3 target's prop table: which of a base venue's own tree meshes each
-// scatter kind is placed as. Nothing here invents an asset: meshes, bounds and
-// rigid bodies come from the base venue's own `trees.bin` and `objects.ens`,
-// so a derived venue scatters its biome's species without shipping anything.
-// Read into our own structs and written back out from them, never patched in
-// place.
+// The Dirt 3 target's placement files: `trees.bin`, `ornaments.bin`, their XML
+// siblings and `objects.ens`.
+//
+// Two sources feed them and one pipeline carries both. The vegetation scatter
+// is bound to the base venue's own tree meshes by the table below, then handed
+// on as placements exactly like the props placed by hand (export_dirt3_props.odin).
+// Nothing here invents an asset: meshes, bounds and rigid bodies all come from
+// the base venue's own art, read into our structs and written back out from
+// them, never patched in place.
 
 import "core:fmt"
-import "core:math"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import d3 "../d3"
 import "../geo"
+import "../gfx"
 
 // Candidate meshes per scatter kind, most wanted first. Patterns, not names:
 // the art follows one naming convention across venues, so a venue missing the
@@ -34,20 +38,8 @@ D3_PROP_SPECIES := [geo.Prop_Kind][]string {
 	.Thorn_Bush            = {"kenya_bush", "bush_medium", "bush_0", "maple_bush"},
 }
 
-// One mesh of the base venue's art, as a row of the file we write.
-// `reference` is the donor's row renumbered, because reference ids must be
-// dense and ascending. `entity_id` is the objects.ens reference its rigid
-// bodies point at; instances reuse the donor's id rather than adding a second
-// one for the same mesh.
-//
-// One row per mesh: no stock placement file repeats a filename in its
-// reference table, over all 218 read.
-D3_Prop_Mesh :: struct {
-	reference: d3.D3_Placement_Reference,
-	entity_id: string,
-}
-
-// Which mesh a scatter kind is placed as, by index into the mesh list.
+// Which row a scatter kind is placed on. One row per mesh: no stock placement
+// file repeats a filename in its reference table, over all 218 read.
 D3_Prop_Binding :: struct {
 	kind: geo.Prop_Kind,
 	mesh: int,
@@ -57,6 +49,38 @@ D3_Prop_Binding :: struct {
 // the uri appends `.max`, on every stock route read.
 d3_prop_entity_uri :: proc(mesh: string, allocator := context.temp_allocator) -> string {
 	return strings.concatenate({"objecttypes.pssg#", mesh, ".max"}, allocator)
+}
+
+// The two node shapes a rigid body takes in `objects.ens`: one entity
+// reference per mesh, one instance per body.
+d3_ens_reference_node :: proc(entity, mesh: string, allocator := context.temp_allocator) -> d3.Ens_Node {
+	attrs := make([]d3.Ens_Attr, 3, allocator)
+	attrs[0] = {name = "id", value = entity}
+	attrs[1] = {name = "uri", value = d3_prop_entity_uri(mesh, allocator)}
+	attrs[2] = {name = "allocAlt", value = "5"}
+	return {tag = "TEMPLATEENTITYREFERENCE", attrs = attrs, content = .Self_Close}
+}
+
+d3_ens_body_node :: proc(id, entity: string, instance: d3.D3_Placement_Instance, allocator := context.temp_allocator) -> d3.Ens_Node {
+	attrs := make([]d3.Ens_Attr, 3, allocator)
+	attrs[0] = {name = "id", value = id}
+	attrs[1] = {name = "uri", value = fmt.aprintf("#%s", entity, allocator = allocator)}
+	attrs[2] = {name = "instance_tag", value = fmt.aprintf("%d", instance.instance_tag, allocator = allocator)}
+	children := make([]d3.Ens_Node, 1, allocator)
+	children[0] = d3.Ens_Placement_Transform(instance, allocator)
+	return {tag = "TEMPLATEBASICENTITYINSTANCE", attrs = attrs, content = .Children, children = children}
+}
+
+// `instance_tag` runs one ahead of `instance_id`, which is the id `track.vis`
+// addresses the drawable by.
+d3_placement_instance :: proc(row, id: int, basis: [3][3]f32, pos: [3]f32) -> d3.D3_Placement_Instance {
+	return {
+		reference_id = u32(row),
+		instance_id  = u32(id),
+		instance_tag = u32(id + 1),
+		basis        = basis,
+		position     = pos,
+	}
 }
 
 // Which meshes this venue gives a rigid body: mesh name -> the `objects.ens`
@@ -124,7 +148,7 @@ d3_prop_bindings :: proc(
 	bodies: map[string]string,
 	allocator := context.temp_allocator,
 ) -> (
-	meshes: []D3_Prop_Mesh,
+	meshes: []d3.D3_Placement_Reference,
 	bindings: []D3_Prop_Binding,
 	msg: string,
 	ok: bool,
@@ -134,7 +158,7 @@ d3_prop_bindings :: proc(
 		wanted[prop.kind] = true
 	}
 
-	rows := make([dynamic]D3_Prop_Mesh, allocator)
+	rows := make([dynamic]d3.D3_Placement_Reference, allocator)
 	bound := make([dynamic]D3_Prop_Binding, allocator)
 	row_of := make(map[string]int, context.temp_allocator)
 	claimed := make(map[string]bool, context.temp_allocator)
@@ -156,7 +180,7 @@ d3_prop_bindings :: proc(
 			row = len(rows)
 			row_of[reference.filename] = row
 			reference.reference_id = u32(row)
-			append(&rows, D3_Prop_Mesh{reference = reference, entity_id = bodies[reference.filename]})
+			append(&rows, reference)
 		}
 		append(&bound, D3_Prop_Binding{kind = kind, mesh = row})
 	}
@@ -168,114 +192,56 @@ d3_prop_bindings :: proc(
 
 // --- emission ----------------------------------------------------------------
 
-// The scatter as placement instances, one reference at a time — order is
-// free, most stock files interleave. Yaw and scale ride in the basis, which
-// is where a placement file carries both; `instance_id` is the id `track.vis`
-// tag 3 addresses this tree by.
-d3_prop_instances :: proc(
+// The scatter as placements, so one pipeline writes both it and the props
+// placed by hand. Binding order groups the output by species, which is the
+// order the file has always been written in; stock files interleave, so the
+// grouping is a convenience rather than a rule.
+d3_scatter_placements :: proc(
 	props: []geo.Veg_Instance,
+	meshes: []d3.D3_Placement_Reference,
 	bindings: []D3_Prop_Binding,
 	allocator := context.temp_allocator,
-) -> []d3.D3_Placement_Instance {
-	out := make([dynamic]d3.D3_Placement_Instance, 0, len(props), allocator)
+) -> []Prop_Instance {
+	out := make([dynamic]Prop_Instance, 0, len(props), allocator)
 	for binding in bindings {
 		for prop in props {
 			if prop.kind != binding.kind {
 				continue
 			}
-			sin, cos := math.sin(prop.yaw)*prop.scale, math.cos(prop.yaw)*prop.scale
-			append(&out, d3.D3_Placement_Instance{
-				reference_id = u32(binding.mesh),
-				instance_id  = u32(len(out)),
-				instance_tag = u32(len(out)+1),
-				basis        = {{cos, 0, -sin}, {0, prop.scale, 0}, {sin, 0, cos}},
-				position     = {prop.pos.x, prop.pos.y, prop.pos.z},
+			append(&out, Prop_Instance{
+				ref   = {kind = .Trees, name = meshes[binding.mesh].filename},
+				pos   = prop.pos,
+				rot   = gfx.QuaternionFromAxisAngle({0, 1, 0}, prop.yaw),
+				scale = prop.scale,
 			})
 		}
 	}
 	return out[:]
 }
 
-// Every tree's rigid body, and nothing else.
-//
-// The donor's own records are dropped. They are the base venue's hay bales,
-// fences and power lines standing along the old road, and keeping them leaves
-// invisible collision once `ornaments.bin` is emptied.
-// `frontend_track/route_0` ships 139 bytes with no references and no
-// instances, so the empty form is stock.
-//
-// Built from the same instance slice `trees.bin` is written from, so physics
-// and render cannot drift.
-d3_prop_ens_nodes :: proc(
-	meshes: []D3_Prop_Mesh,
-	instances: []d3.D3_Placement_Instance,
-	allocator := context.temp_allocator,
-) -> (
-	nodes: []d3.Ens_Node,
-	msg: string,
-	ok: bool,
-) {
-	out := make([dynamic]d3.Ens_Node, 0, len(meshes)+len(instances), allocator)
-	for mesh in meshes {
-		attrs := make([]d3.Ens_Attr, 3, allocator)
-		attrs[0] = {name = "id", value = mesh.entity_id}
-		attrs[1] = {name = "uri", value = d3_prop_entity_uri(mesh.reference.filename, allocator)}
-		attrs[2] = {name = "allocAlt", value = "5"}
-		append(&out, d3.Ens_Node{tag = "TEMPLATEENTITYREFERENCE", attrs = attrs, content = .Self_Close})
-	}
-	for instance, i in instances {
-		if int(instance.reference_id) >= len(meshes) {
-			return nil, "a placement names a mesh no binding covers", false
-		}
-		attrs := make([]d3.Ens_Attr, 3, allocator)
-		attrs[0] = {name = "id", value = fmt.aprintf("dirtbench_veg_%d", i, allocator = allocator)}
-		attrs[1] = {name = "uri", value = fmt.aprintf("#%s", meshes[instance.reference_id].entity_id, allocator = allocator)}
-		attrs[2] = {name = "instance_tag", value = fmt.aprintf("%d", instance.instance_tag, allocator = allocator)}
-		children := make([]d3.Ens_Node, 1, allocator)
-		children[0] = d3.Ens_Placement_Transform(instance, allocator)
-		append(&out, d3.Ens_Node{
-			tag      = "TEMPLATEBASICENTITYINSTANCE",
-			attrs    = attrs,
-			content  = .Children,
-			children = children,
-		})
-	}
-	return out[:], fmt.tprintf("%d meshes, %d bodies, no donor records", len(meshes), len(instances)), true
-}
-
-// Resolve the scatter against the donor's art: the reference rows to write
-// and the instances to place. With no props the donor's rows are kept as they
-// are and nothing is placed — the donor's own trees stand along the old road,
-// so the file is still rewritten empty of instances.
+// The scatter resolved against the donor's art: the tree rows it needs, and
+// itself as placements on them. With no scatter the donor's rows are kept as
+// they are — its own trees stand along the old road, so the file is still
+// rewritten empty of their instances.
 @(private = "file")
 d3_prop_resolve :: proc(
 	props: []geo.Veg_Instance,
 	references: []d3.D3_Placement_Reference,
-	donor_ens: []u8,
+	bodies: map[string]string,
 ) -> (
-	chosen: []d3.D3_Placement_Reference,
-	meshes: []D3_Prop_Mesh,
-	instances: []d3.D3_Placement_Instance,
+	rows: []d3.D3_Placement_Reference,
+	scatter: []Prop_Instance,
 	msg: string,
 	ok: bool,
 ) {
 	if len(props) == 0 {
-		return references, nil, nil, "", true
+		return references, nil, "", true
 	}
-	bodies, bodies_ok := d3_prop_bodies(donor_ens)
-	if !bodies_ok {
-		return nil, nil, nil, "the base route's objects.ens did not parse", false
-	}
-	rows, bindings, bind_msg, bind_ok := d3_prop_bindings(props, references, bodies)
+	meshes, bindings, bind_msg, bind_ok := d3_prop_bindings(props, references, bodies)
 	if !bind_ok {
-		return nil, nil, nil, bind_msg, false
+		return nil, nil, bind_msg, false
 	}
-	meshes = rows
-	picked := make([]d3.D3_Placement_Reference, len(meshes), context.temp_allocator)
-	for mesh, i in meshes {
-		picked[i] = mesh.reference
-	}
-	return picked, meshes, d3_prop_instances(props, bindings), "", true
+	return meshes, d3_scatter_placements(props, meshes, bindings), "", true
 }
 
 @(private = "file")
@@ -284,37 +250,54 @@ D3_Placement_Out :: struct {
 	data: []u8,
 }
 
-// `trees.bin`/`trees.xml`, an emptied `ornaments.bin`/`ornaments.xml`, and the
-// rigid body of every tree appended to `objects.ens`. The ornament pair is
-// rewritten because the donor's props stand where the old route ran; emptied
-// is the honest form until the editor can place them.
-// Runs before the route files, because `track.vis` censuses `trees.bin` for
-// its tag-3 objects and must see the trees this stage actually has.
-d3_write_placements :: proc(out: ^d3.Export_Job, route_dir: string, props: []geo.Veg_Instance) -> (msg: string, ok: bool) {
-	donor_trees, trees_ok := d3_stock_file(route_dir, "trees.bin")
-	donor_ornaments, ornaments_ok := d3_stock_file(route_dir, "ornaments.bin")
-	donor_ens, ens_ok := d3_stock_file(route_dir, "objects.ens")
-	if !(trees_ok && ornaments_ok && ens_ok) {
-		return "the base route has no trees.bin, ornaments.bin and objects.ens to take its art from", false
+// `trees.bin`/`trees.xml`, `ornaments.bin`/`ornaments.xml`, and a rigid body in
+// `objects.ens` for every one of ours that has one.
+//
+// Both placement files are written from our own structs rather than patched:
+// the scatter and the hand-placed props (props.odin) share each file with the
+// reference rows the donor route already had. The donor's own instances are
+// dropped either way — they stand where the old route ran.
+//
+// Runs before the route files, because `track.vis` censuses both files for its
+// tag-2 and tag-3 objects and must see what this stage actually has.
+d3_write_placements :: proc(
+	out: ^d3.Export_Job,
+	route_dir: string,
+	props: []geo.Veg_Instance,
+	placed: []Prop_Instance,
+) -> (msg: string, ok: bool) {
+	tree_refs, ornament_refs, bodies, art_msg, art_ok := d3_donor_art(route_dir)
+	if !art_ok {
+		return art_msg, false
 	}
-
-	references, ref_msg, ref_ok := d3.Placement_References(donor_trees, context.temp_allocator)
-	if !ref_ok {
-		return fmt.tprintf("trees.bin: %s", ref_msg), false
-	}
-	ornament_refs, ornament_msg, ornament_ok := d3.Placement_References(donor_ornaments, context.temp_allocator)
-	if !ornament_ok {
-		return fmt.tprintf("ornaments.bin: %s", ornament_msg), false
-	}
-	chosen, meshes, instances, resolve_msg, resolved := d3_prop_resolve(props, references, donor_ens)
+	// The libraries and the physics file sit at the venue base, one level above
+	// the route we take the rest of this art from.
+	base_dir := filepath.dir(route_dir)
+	venue_bodies := d3_place_venue_bodies(base_dir, &bodies)
+	tree_rows, scatter, resolve_msg, resolved := d3_prop_resolve(props, tree_refs, bodies)
 	if !resolved {
 		return resolve_msg, false
 	}
+	species := len(scatter) > 0 ? len(tree_rows) : 0
+
+	// One list from here down. The scatter goes first, so its instance ids are
+	// the low ones and a hand-placed tree numbers on from the last of them.
+	all := make([dynamic]Prop_Instance, 0, len(scatter)+len(placed), context.temp_allocator)
+	append(&all, ..scatter)
+	append(&all, ..placed)
+	donor_rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference
+	donor_rows[.Trees], donor_rows[.Objects] = tree_rows, ornament_refs
+	rows, placements, place_msg, placed_ok := d3_place_resolve(all[:], donor_rows, base_dir)
+	if !placed_ok {
+		return place_msg, false
+	}
+	// Only ornaments honour capacity; trees are written at their exact count.
+	d3_place_capacities(rows[.Objects], placements[.Objects])
 
 	written := make([dynamic]D3_Placement_Out, context.temp_allocator)
 	for file in ([]struct{name: string, format: d3.D3_Placement_Format, refs: []d3.D3_Placement_Reference, insts: []d3.D3_Placement_Instance}{
-		{"trees.bin", .Trees, chosen, instances},
-		{"ornaments.bin", .Ornaments, ornament_refs, nil},
+		{"trees.bin", .Trees, rows[.Trees], placements[.Trees]},
+		{"ornaments.bin", .Ornaments, rows[.Objects], placements[.Objects]},
 	}) {
 		data, build_msg, built := d3.Placement_Build(file.format, file.refs, file.insts, context.temp_allocator)
 		if !built {
@@ -329,13 +312,8 @@ d3_write_placements :: proc(out: ^d3.Export_Job, route_dir: string, props: []geo
 		append(&written, D3_Placement_Out{name, xml})
 	}
 
-	ens_msg := "unchanged, no trees to give a body"
-	if len(instances) > 0 {
-		nodes, nodes_msg, nodes_ok := d3_prop_ens_nodes(meshes, instances)
-		if !nodes_ok {
-			return nodes_msg, false
-		}
-		ens_msg = nodes_msg
+	nodes, bodied := d3_placement_ens(rows, placements, bodies)
+	if len(nodes) > 0 {
 		append(&written, D3_Placement_Out{"objects.ens", d3.Ens_Emit(nodes, context.temp_allocator)})
 	}
 
@@ -345,9 +323,70 @@ d3_write_placements :: proc(out: ^d3.Export_Job, route_dir: string, props: []geo
 		}
 	}
 	return fmt.tprintf(
-		"%d species, %d trees; ornaments emptied; objects.ens: %s",
-		len(meshes), len(instances), ens_msg,
+		"%d species, %d scattered trees; %d placed props (%d ornaments); objects.ens: %d records, %d of %d placements given a body (%d entity types off the venue)",
+		species, len(scatter), len(placed),
+		len(placements[.Objects]), len(nodes), bodied, len(all), venue_bodies,
 	), true
+}
+
+// The donor route's placement art: both reference tables and its rigid-body map.
+@(private = "file")
+d3_donor_art :: proc(route_dir: string) -> (
+	tree_refs, ornament_refs: []d3.D3_Placement_Reference,
+	bodies: map[string]string,
+	msg: string,
+	ok: bool,
+) {
+	donor_trees, trees_ok := d3_stock_file(route_dir, "trees.bin")
+	donor_ornaments, ornaments_ok := d3_stock_file(route_dir, "ornaments.bin")
+	donor_ens, ens_ok := d3_stock_file(route_dir, "objects.ens")
+	if !(trees_ok && ornaments_ok && ens_ok) {
+		return nil, nil, nil, "the base route has no trees.bin, ornaments.bin and objects.ens to take its art from", false
+	}
+	ref_msg: string
+	tree_refs, ref_msg, trees_ok = d3.Placement_References(donor_trees, context.temp_allocator)
+	if !trees_ok {
+		return nil, nil, nil, fmt.tprintf("trees.bin: %s", ref_msg), false
+	}
+	ornament_refs, ref_msg, ornaments_ok = d3.Placement_References(donor_ornaments, context.temp_allocator)
+	if !ornaments_ok {
+		return nil, nil, nil, fmt.tprintf("ornaments.bin: %s", ref_msg), false
+	}
+	bodies, ens_ok = d3_prop_bodies(donor_ens)
+	if !ens_ok {
+		return nil, nil, nil, "the base route's objects.ens did not parse", false
+	}
+	return tree_refs, ornament_refs, bodies, "", true
+}
+
+// Record ids are per file, so the two cannot collide inside one objects.ens.
+@(private = "file")
+D3_ENS_PREFIX := [Prop_Lib_Kind]string {
+	.Objects = "dirtbench_orn",
+	.Trees   = "dirtbench_tree",
+}
+
+// Every rigid body this stage places, both files sharing one set of entity
+// declarations. The donor's own records are dropped: they are the base venue's
+// hay bales, fences and power lines standing along the old road, and keeping
+// them leaves collision with nothing drawn on it. `frontend_track/route_0`
+// ships 139 bytes with no records at all, so the empty form is stock.
+@(private = "file")
+d3_placement_ens :: proc(
+	rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference,
+	placements: [Prop_Lib_Kind][]d3.D3_Placement_Instance,
+	bodies: map[string]string,
+) -> (nodes: []d3.Ens_Node, bodied: int) {
+	out := make([dynamic]d3.Ens_Node, context.temp_allocator)
+	declared := make(map[string]bool, context.temp_allocator)
+	for kind in Prop_Lib_Kind {
+		kind_nodes, kind_bodied := d3_place_ens_nodes(
+			placements[kind], rows[kind], bodies, &declared, D3_ENS_PREFIX[kind],
+		)
+		append(&out, ..kind_nodes)
+		bodied += kind_bodied
+	}
+	return out[:], bodied
 }
 
 @(private = "file")

@@ -189,9 +189,9 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		Profile = job.profile, Venue_Dir = job.venue_dir,
 		Route_Index = job.route_index,
 	}
-	// Before the route files: track.vis censuses trees.bin for its tag-3
-	// objects, so the trees have to be the ones this stage actually has.
-	placement_msg, placement_ok := d3_write_placements(&out, job.donor_route_dir, job.props)
+	// Before the route files: track.vis censuses both placement files for its
+	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
+	placement_msg, placement_ok := d3_write_placements(&out, job.donor_route_dir, job.props, job.placed)
 	if !placement_ok {
 		return fmt.tprintf("placements: %s", placement_msg), false
 	}
@@ -241,6 +241,7 @@ Export_Job :: struct {
 	// comes from. Empty for a loose road out of maps/, which has no venue.
 	venue:  Export_Geometry,
 	props:  []geo.Veg_Instance,  // scattered vegetation; empty when disabled
+	placed: []Prop_Instance,     // props placed by hand (props.odin)
 	// Which shaders the stage draws with, resolved from the open venue or from
 	// the venue the selected route lives in. Only the Dirt 3 target needs it,
 	// so a failure to resolve one is carried rather than raised.
@@ -449,6 +450,7 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 		doc.roughness,
 		context.temp_allocator,
 	)
+	job.placed = doc.props[:]
 
 	// The headless path leaves doc.pace zero-valued, which would read as "every
 	// knob at zero" rather than "unset".
