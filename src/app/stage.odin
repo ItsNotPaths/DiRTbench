@@ -35,7 +35,8 @@ STAGE_FORMAT_LEGACY_2 :: "tm-rallysculpt.stage"
 // markers a v4 venue.json holds keep naming the same edges. One insert makes
 // ids stop matching positions, so an older build must not read a v9 file.
 // v10 added the floors block, and v11 the pad's foliage flag.
-STAGE_VERSION :: 11
+// v12 added hand-placed props. Absent in older files, which load with none.
+STAGE_VERSION :: 12
 STAGE_EXT :: ".json"
 
 // The on-disk shape. Kept flat and dumb: field names are the JSON keys, and a
@@ -112,6 +113,17 @@ Stage_Floor :: struct {
 	clear_veg: bool,
 }
 
+// One hand-placed prop (v12). The library is named rather than numbered: a
+// venue's base art is what resolves it, and a prop the base does not ship must
+// stay in the file rather than becoming a different prop by index.
+Stage_Prop :: struct {
+	name:  string,
+	trees: bool, // from trees.pssg rather than objects.pssg
+	pos:   [3]f32,
+	rot:   [4]f32, // x, y, z, w
+	scale: f32,
+}
+
 Stage_File :: struct {
 	format:  string,
 	version: int,
@@ -121,6 +133,7 @@ Stage_File :: struct {
 	timing:  Stage_Timing,
 	terrain: Stage_Terrain,
 	floors:  []Stage_Floor,
+	props:   []Stage_Prop,
 }
 
 // --- paths ------------------------------------------------------------------
@@ -256,6 +269,19 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 			}
 		}
 		stage.floors = floors
+	}
+	{
+		props := make([]Stage_Prop, len(doc.props), context.temp_allocator)
+		for inst, i in doc.props {
+			props[i] = {
+				name  = inst.ref.name,
+				trees = inst.ref.kind == .Trees,
+				pos   = {inst.pos.x, inst.pos.y, inst.pos.z},
+				rot   = quat_to_array(inst.rot),
+				scale = inst.scale,
+			}
+		}
+		stage.props = props
 	}
 	data, merr := json.marshal(stage, {pretty = true, use_spaces = true}, context.temp_allocator)
 	if merr != nil {
@@ -421,6 +447,23 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 				terrain.floors[i].falloff = clamp(f.falloff, 0, geo.TERRAIN_REACH_MAX)
 				terrain.floors[i].clear_veg = stage.version < 11 || f.clear_veg
 			}
+		}
+	}
+	{
+		// Rebuilt from the file, like the floors: a road that predates the block
+		// opens with no props rather than keeping the last document's.
+		props_free(doc)
+		doc.props = make([dynamic]Prop_Instance)
+		for pr in stage.props {
+			if pr.name == "" {
+				continue
+			}
+			append(&doc.props, Prop_Instance{
+				ref   = {kind = pr.trees ? .Trees : .Objects, name = strings.clone(pr.name)},
+				pos   = {pr.pos[0], pr.pos[1], pr.pos[2]},
+				rot   = quat_from_array(pr.rot),
+				scale = clamp(pr.scale, PROP_SCALE_MIN, PROP_SCALE_MAX),
+			})
 		}
 	}
 	return fmt.tprintf("loaded %d points from %s", len(sp.points), filepath.base(path)), true
