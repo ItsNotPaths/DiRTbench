@@ -80,8 +80,12 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	route := make([]d3.Route_Sample, len(job.stage.ribbon), context.temp_allocator)
 	for section, i in job.stage.ribbon {
 		half := section.width/2
-		left := section.pos-section.right*half
-		right := section.pos+section.right*half
+		// Dirt 3's across-vector runs the other way from ours: on every stock
+		// route cross(travel, right-left).y is negative, and ours was positive.
+		// A swapped pair rotates the start grid 180 degrees, because
+		// d3_grid_frame takes its tangent from left->right.
+		left := section.pos+section.right*half
+		right := section.pos-section.right*half
 		route[i] = {
 			Centre = {section.pos.x,section.pos.y,section.pos.z},
 			Left = {left.x,left.y,left.z},
