@@ -265,3 +265,59 @@ routesplit_splits_a_group_it_cannot_index :: proc(t: ^testing.T) {
 }
 
 d3_test_f32 :: proc(data: []u8, at: int) -> f32 { v, _ := pssg_be_u32(data, at); return transmute(f32)v }
+
+// The ST invariant stock holds: one square map over the mesh, u along +X and
+// v along +Z, continuous across the tiles. The fixture mesh is 800 x 400 m, so
+// v reaching only 0.5 is the point — a per-tile or per-axis map would stretch
+// it to 1.
+@(test)
+routesplit_st_is_one_square_map_over_the_mesh :: proc(t: ^testing.T) {
+	tris := d3_test_mesh(context.temp_allocator)
+	want := d3_st_map(d3_mesh_bounds(tris))
+	testing.expect_value(t, want.side, 800)
+
+	raw, msg, built := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	file, parse_msg, parsed := pssg_read(raw, context.allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	defer pssg_delete(&file)
+
+	nodes := make([dynamic]^Pssg_Node, context.temp_allocator)
+	d3_test_walk(file.root, &nodes)
+
+	// Half floats carry the map to about this much of an ST unit.
+	TOLERANCE :: 0.001
+	checked, v_high := 0, f32(0)
+	for node in nodes {
+		if node.name != "DATABLOCK" { continue }
+		stream := pssg_walk_first(node, "DATABLOCKSTREAM")
+		payload := pssg_walk_first(node, "DATABLOCKDATA")
+		if stream == nil || payload == nil { continue }
+		stride, _ := pssg_attr_u32(&file, stream, "stride")
+		layout, known := d3_vertex_layout(stride)
+		if !known || layout.uv < 0 { continue }
+		count, _ := pssg_attr_u32(&file, node, "elementCount")
+		for i in 0..<int(count) {
+			base := i*layout.stride
+			p := [3]f32{
+				binary_load_f32(payload.data, base, .Big),
+				binary_load_f32(payload.data, base+4, .Big),
+				binary_load_f32(payload.data, base+8, .Big),
+			}
+			got := [2]f32{
+				f32(transmute(f16)binary_load_u16(payload.data, base+layout.uv, .Big)),
+				f32(transmute(f16)binary_load_u16(payload.data, base+layout.uv+2, .Big)),
+			}
+			expected := d3_st(want, p)
+			for k in 0..<2 {
+				testing.expectf(t, abs(got[k]-expected[k]) < TOLERANCE,
+					"vertex at %v got ST %v, the mesh-wide map gives %v", p, got, expected)
+			}
+			v_high = max(v_high, got[1])
+			checked += 1
+		}
+	}
+	testing.expect(t, checked > 500, fmt.tprintf("only %d textured vertices were read", checked))
+	testing.expect(t, abs(v_high-0.5) < TOLERANCE, fmt.tprintf("v reached %v, the 400 m axis of an 800 m map is 0.5", v_high))
+}

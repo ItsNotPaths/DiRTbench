@@ -150,14 +150,31 @@ d3_weld_add :: proc(w: ^D3_Weld, tri: Collision_Triangle) {
 	append(&w.tris, corner)
 }
 
-// Dirt 3's terrain shaders consume tile-local normalized atlas coordinates.
-// Stock Finland tiles span roughly 426 x 197 metres while their ST values stay
-// in 0..1. Measuring in metres (the old /16 rule) emitted values as large as
-// 26 x 12 for those same tiles, wrapping/clamping the atlas into coarse grass.
+// One square ST map over the whole mesh, u along +X and v along +Z.
+//
+// Measured over every clean planar draw call in finland, kenya, michigan and
+// norway: stock keeps ST inside 0..1 with metres-per-unit equal on both axes
+// (median |u/v| 1.000), one map per section, continuous across the tiles inside
+// it. `terrain_infield.fx` samples a unique AO and colour map at ST directly,
+// so ST normalized per tile lays that art down once per tile instead of once
+// over the venue, and a non-square tile stretches every texture with it.
+D3_St_Map :: struct {
+	origin: [2]f32,
+	side:   f32,
+}
+
+d3_st_map :: proc(lo, hi: [3]f32) -> D3_St_Map {
+	return {origin = {lo[0], lo[2]}, side = max(hi[0]-lo[0], hi[2]-lo[2], D3_MIN_EXTENT)}
+}
+
+d3_st :: proc(m: D3_St_Map, p: [3]f32) -> [2]f32 {
+	return {(p[0]-m.origin[0])/m.side, (p[2]-m.origin[1])/m.side}
+}
+
 d3_pack_vertices :: proc(
 	w: ^D3_Weld,
 	layout: D3_Vertex_Layout,
-	origin, pitch: [2]f32,
+	st: D3_St_Map,
 	colour: [4]u8,
 	allocator: mem.Allocator,
 ) -> []u8 {
@@ -168,8 +185,9 @@ d3_pack_vertices :: proc(
 		for k in 0..<3 { binary_store_f32(data, base+k*4, p[k], .Big) }
 		if layout.colour >= 0 { copy(data[base+layout.colour:][:4], rgba[:]) }
 		if layout.uv >= 0 {
-			binary_store_u16(data, base+layout.uv, d3_half((p[0]-origin[0])/pitch[0]), .Big)
-			binary_store_u16(data, base+layout.uv+2, d3_half((p[2]-origin[1])/pitch[1]), .Big)
+			t := d3_st(st, p)
+			binary_store_u16(data, base+layout.uv, d3_half(t[0]), .Big)
+			binary_store_u16(data, base+layout.uv+2, d3_half(t[1]), .Big)
 		}
 		if layout.normal >= 0 {
 			n := w.normal[i]
@@ -198,6 +216,7 @@ D3_Build :: struct {
 	ids:       ^Pssg_Ids,
 	profile:   ^D3_Venue_Profile,
 	tris:      []Collision_Triangle,
+	st:        D3_St_Map,
 	blocks:    [dynamic]^Pssg_Node,
 	segments:  [dynamic]^Pssg_Node,
 	draws:     int,
@@ -256,7 +275,6 @@ d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_G
 d3_draw_call :: proc(
 	b: ^D3_Build,
 	layout: D3_Vertex_Layout,
-	origin, pitch: [2]f32,
 	w: ^D3_Weld,
 	group: D3_Group,
 	sources, instances: ^[dynamic]^Pssg_Node,
@@ -277,7 +295,7 @@ d3_draw_call :: proc(
 			{"stride", u32(layout.stride)},
 		}))
 	}
-	payload := d3_pack_vertices(w, layout, origin, pitch, group.colour, b.allocator)
+	payload := d3_pack_vertices(w, layout, b.st, group.colour, b.allocator)
 	size := u32(len(payload))
 	append(&block_kids, d3_node(b, "DATABLOCKDATA", nil, nil, payload))
 	append(&b.blocks, d3_node(b, "DATABLOCK", []Pssg_Set{
@@ -318,7 +336,7 @@ d3_draw_call :: proc(
 	return d3_bounds(w.points[:])
 }
 
-d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell, origin, pitch: [2]f32) -> ^Pssg_Node {
+d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> ^Pssg_Node {
 	layout, supported := d3_vertex_layout(layer.stride)
 	if !supported { d3_fail(b, fmt.tprintf("unsupported Dirt 3 vertex stride %d", layer.stride)); return nil }
 
@@ -340,7 +358,7 @@ d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell, origin, pi
 		if len(current.tris) > 0 { append(&welds, current) }
 
 		for &weld in welds {
-			call_lo, call_hi := d3_draw_call(b, layout, origin, pitch, &weld, group, &sources, &instances)
+			call_lo, call_hi := d3_draw_call(b, layout, &weld, group, &sources, &instances)
 			if !b.ok { return nil }
 			if !seen { lo, hi = call_lo, call_hi; seen = true } else {
 				for k in 0..<3 { lo[k] = min(lo[k], call_lo[k]); hi[k] = max(hi[k], call_hi[k]) }
@@ -505,12 +523,7 @@ d3_scene_cells :: proc(
 	return cells
 }
 
-d3_scene_tiles :: proc(
-	b: ^D3_Build,
-	cells: []D3_Cell,
-	lo, hi: [3]f32,
-	pitch_x, pitch_z: f32,
-) -> []^Pssg_Node {
+d3_scene_tiles :: proc(b: ^D3_Build, cells: []D3_Cell) -> []^Pssg_Node {
 	tiles := make([dynamic]^Pssg_Node, b.allocator)
 	for iz := b.profile.tiles_z-1; iz >= 0; iz -= 1 {
 		for ix := b.profile.tiles_x-1; ix >= 0; ix -= 1 {
@@ -518,11 +531,9 @@ d3_scene_tiles :: proc(
 			cell.ix = ix
 			cell.iz = iz
 			if len(cell.all) == 0 { continue }
-			origin := [2]f32{lo[0]+pitch_x*f32(ix), hi[2]-pitch_z*f32(iz+1)}
-			pitch := [2]f32{pitch_x, pitch_z}
 			renders := make([dynamic]^Pssg_Node, b.allocator)
 			for layer in D3_LAYERS {
-				if node := d3_render_node(b, layer, cell, origin, pitch); node != nil { append(&renders, node) }
+				if node := d3_render_node(b, layer, cell); node != nil { append(&renders, node) }
 			}
 			if !b.ok { return nil }
 			if len(renders) > 0 {
@@ -589,18 +600,19 @@ d3_routesplit_build_with_template :: proc(
 	types := pssg_types(&file, scratch)
 	ids := pssg_ids(&file, scratch)
 
+	lo, hi := d3_mesh_bounds(collision)
 	b := D3_Build{
 		file = &file, types = &types, ids = &ids, profile = profile, tris = collision,
+		st = d3_st_map(lo, hi),
 		blocks = make([dynamic]^Pssg_Node, scratch),
 		segments = make([dynamic]^Pssg_Node, scratch),
 		allocator = scratch, ok = true,
 	}
 
-	lo, hi := d3_mesh_bounds(collision)
 	pitch_x := max(hi[0]-lo[0], D3_MIN_EXTENT)/f32(profile.tiles_x)
 	pitch_z := max(hi[2]-lo[2], D3_MIN_EXTENT)/f32(profile.tiles_z)
 	cells := d3_scene_cells(collision, profile, lo, hi, pitch_x, pitch_z, scratch)
-	tiles := d3_scene_tiles(&b, cells, lo, hi, pitch_x, pitch_z)
+	tiles := d3_scene_tiles(&b, cells)
 	if !b.ok { return nil, b.msg, false }
 	if len(tiles) == 0 { return nil, "Dirt 3 graphics need triangles inside the route bounds", false }
 
