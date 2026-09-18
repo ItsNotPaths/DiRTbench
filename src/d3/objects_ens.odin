@@ -76,6 +76,28 @@ d3_ens_static_vis_ids :: proc(nodes: []Ens_Node, allocator := context.allocator)
 	return out[:], true
 }
 
+// One past the highest `instanceID` in the file, over every
+// `TEMPLATEENTITYINSTANCE` whether or not it is flagged `staticVis`.
+//
+// This is what the `track.vis` tag-2 header count has to reach. A cooked
+// ornament receives a box and so is counted anyway; a dynamic entity receives
+// none, and an id the header does not reach is the Michigan tower failure —
+// the entity loads and never draws. Measured against stock: the header is
+// exactly `cooked ornaments + staticVis entities` on 39 of 108 routes and
+// above it on the rest, so covering every id is the conservative direction and
+// is what `refs/app/paths_place.odin` drove clean with.
+d3_ens_instance_id_span :: proc(nodes: []Ens_Node) -> (span: u32) {
+	for node in nodes {
+		if node.tag != "TEMPLATEENTITYINSTANCE" { continue }
+		id_str, has_id := ens_attr(node, "instanceID")
+		if !has_id { continue }
+		id, id_ok := strconv.parse_int(id_str)
+		if !id_ok || id < 0 { continue }
+		span = max(span, u32(id) + 1)
+	}
+	return
+}
+
 // --- parse -------------------------------------------------------------
 
 @(private = "file")

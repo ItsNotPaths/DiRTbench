@@ -272,10 +272,24 @@ d3_vis_census_build :: proc(
 		}
 		donor_msg = fmt.tprintf("tags 1..2, 4..15 floored against %s", filepath.base(donor))
 	}
+	// Our own dynamic entities on top of that. They receive no tag-2 box, so
+	// the census above cannot see them, but their `instanceID` still has to
+	// fall inside the count the header declares.
+	ens_msg := "no objects.ens to floor tag 2 against"
+	if ens_path, _ := filepath.join({route_dir, "objects.ens"}, context.temp_allocator);
+	   os.exists(ens_path) {
+		data, read_err := os.read_entire_file(ens_path, context.temp_allocator)
+		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", ens_path, read_err), false }
+		nodes, parsed := d3_ens_parse(data, context.temp_allocator)
+		if !parsed { return nil, "objects.ens did not parse, so tag 2 cannot be sized", false }
+		span := d3_ens_instance_id_span(nodes)
+		floor[2] = max(floor[2], span)
+		ens_msg = fmt.tprintf("tag 2 floored to %d for %d ens instance ids", floor[2], span)
+	}
 
 	built, build_msg, built_ok := d3_vis_build_single_cell(objects, floor, allocator)
 	if !built_ok { return nil, build_msg, false }
-	return built, fmt.tprintf("%s; %s; %s", objects_msg, donor_msg, build_msg), true
+	return built, fmt.tprintf("%s; %s; %s; %s", objects_msg, donor_msg, ens_msg, build_msg), true
 }
 
 // Runs after both PSSGs are written, because it censuses them.
