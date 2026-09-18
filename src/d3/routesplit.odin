@@ -21,13 +21,18 @@ import "core:fmt"
 import "core:math"
 import "core:mem"
 import "core:mem/virtual"
+import "core:os"
 
 // No stock render node has a box that is flat on any axis, and a flat one draws
 // nothing at all. Keep every axis at least this thick, centred on the extent.
 D3_MIN_EXTENT :: 0.1
 // One draw call is indexed by ushort, so it holds at most this many vertices.
 D3_WELD_MAX :: 65536
-D3_TILE_MAX :: 32
+// A backstop on a mistyped tile grid, not a game limit. Stock ships 2 to 81
+// tiles on a route and up to 140 tag-0 objects, and the real ceiling is the
+// u16 object count of one VIS group. More tiles only makes each draw call
+// smaller.
+D3_TILE_MAX :: 1024
 
 D3_Tile_Box :: struct { lo, hi: [3]f32 }
 
@@ -425,6 +430,51 @@ d3_tile_boxes :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profil
 		}
 	}
 	return result[:], "", true
+}
+
+// The reader counterpart of the tile writer: every tile box on a surface node,
+// read off the file's own BOUNDINGBOX children (big-endian, like every PSSG
+// float payload) rather than recomputed from our tiling. A venue splice keeps
+// the base's own tiles, so this is the only honest source of what the game
+// will draw. In file order; the caller applies the engine's registration order.
+d3_pssg_surface_tile_boxes :: proc(file: ^Pssg_File, allocator := context.allocator) -> (boxes: []D3_Tile_Box, ok: bool) {
+	surface := pssg_walk_first_by_id(file, file.root, "NODE", "surface")
+	if surface == nil || len(surface.children) <= 2 { return nil, false }
+
+	out := make([dynamic]D3_Tile_Box, allocator)
+	// The first two children of any scene node are its transform and its own
+	// box (see d3_scene_node); the tiles start after them.
+	for tile in surface.children[2:] {
+		if len(tile.children) <= 2 { continue }
+		box: D3_Tile_Box
+		seen := false
+		for render in tile.children[2:] {
+			bounds := pssg_walk_first(render, "BOUNDINGBOX")
+			if bounds == nil || len(bounds.data) != 24 { continue }
+			for k in 0..<3 {
+				low_bits, _ := pssg_be_u32(bounds.data, k*4)
+				high_bits, _ := pssg_be_u32(bounds.data, 12+k*4)
+				low, high := transmute(f32)low_bits, transmute(f32)high_bits
+				if !seen { box.lo[k] = low; box.hi[k] = high } else {
+					box.lo[k] = min(box.lo[k], low); box.hi[k] = max(box.hi[k], high)
+				}
+			}
+			seen = true
+		}
+		if seen { append(&out, box) }
+	}
+	return out[:], true
+}
+
+d3_read_surface_tile_boxes :: proc(path: string, allocator := context.allocator) -> (boxes: []D3_Tile_Box, msg: string, ok: bool) {
+	data, read_err := os.read_entire_file(path, context.temp_allocator)
+	if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", path, read_err), false }
+	file, pssg_msg, pssg_ok := pssg_read(data, context.temp_allocator)
+	if !pssg_ok { return nil, fmt.tprintf("%s: %s", path, pssg_msg), false }
+	defer pssg_delete(&file, context.temp_allocator)
+	tiles, tiles_ok := d3_pssg_surface_tile_boxes(file=&file, allocator=allocator)
+	if !tiles_ok { return nil, fmt.tprintf("%s: no tiled surface node", path), false }
+	return tiles, "", true
 }
 
 D3_Scene_Scope :: enum {

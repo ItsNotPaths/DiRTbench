@@ -102,8 +102,6 @@ d3_profile_complete :: proc(profile: D3_Venue_Profile) -> (msg: string, ok: bool
 	if len(profile.template) < 8 || profile.lod == "" || profile.batch == "" {
 		return "incomplete Dirt 3 profile", false
 	}
-	// The cap goes when we generate track.vis ourselves; until then a stage
-	// owns exactly the tag-0 slots the donor route already had.
 	if profile.tiles_x < 1 || profile.tiles_z < 1 || profile.tiles_x*profile.tiles_z > D3_TILE_MAX {
 		return fmt.tprintf("a Dirt 3 profile must name a tile grid of at most %d cells", D3_TILE_MAX), false
 	}

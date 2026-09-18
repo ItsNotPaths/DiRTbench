@@ -112,6 +112,23 @@ d3_backup_once :: proc(path: string) -> (msg: string, ok: bool) {
 	return "", true
 }
 
+// The stock form of a file we overwrite: its `.orig` backup once one exists,
+// otherwise whatever is still in place, which on a first export is the base
+// venue's own. Empty when neither is there.
+//
+// Every generated file that reads the art it is replacing goes through this:
+// a second export must read the donor, never its own previous output.
+d3_stock_path :: proc(dir, name: string) -> string {
+	live, _ := filepath.join({dir, name}, context.temp_allocator)
+	if saved := fmt.tprintf("%s.orig", live); os.exists(saved) {
+		return saved
+	}
+	if os.exists(live) {
+		return live
+	}
+	return ""
+}
+
 d3_write_out :: proc(
 	job: ^Export_Job,
 	name: string,
@@ -201,7 +218,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !visual_ok {
 		return visual_msg, false
 	}
-	vis_msg, vis_ok := d3_write_track_vis(job, profile)
+	vis_msg, vis_ok := d3_write_track_vis(job)
 	if !vis_ok {
 		return vis_msg, false
 	}

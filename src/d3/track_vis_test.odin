@@ -1,6 +1,11 @@
 package d3
 
+import "core:os"
+import "core:path/filepath"
 import "core:testing"
+
+// An object count for the encoder tests. Unrelated to any tile grid.
+VIS_TEST_OBJECTS :: 32
 
 // A group record (48-byte header, `boxes` 32-byte items) followed
 // immediately by the next group at `next_at`, or terminated with a zero
@@ -69,10 +74,44 @@ d3_vis_u16 :: proc(data: []u8, at: int) -> u16 { return u16(data[at]) | u16(data
 d3_vis_u32 :: proc(data: []u8, at: int) -> u32 { return u32(data[at]) | u32(data[at+1])<<8 | u32(data[at+2])<<16 | u32(data[at+3])<<24 }
 d3_vis_f32 :: proc(data: []u8, at: int) -> f32 { return transmute(f32)d3_vis_u32(data, at) }
 
+// A venue directory holding `tracksplit.pssg` and a route directory under it
+// holding `routesplit.pssg`, both built by our own tile writer. The census
+// reads tile boxes off the files, so it needs real files.
+@(private = "file")
+d3_test_vis_tree :: proc(t: ^testing.T, venue_tris, route_tris: []Collision_Triangle) -> (route_dir, venue_dir: string, ok: bool) {
+	dir, err := os.make_directory_temp("", "dirtbench-vis-*", context.temp_allocator)
+	if !testing.expectf(t, err == nil, "could not create test directory: %v", err) { return }
+	route_dir, _ = filepath.join({dir, "route_0"}, context.temp_allocator)
+	if !testing.expect(t, os.make_directory(route_dir) == nil) { return }
+
+	for pair in ([]struct{tris: []Collision_Triangle, path: string}{
+		{venue_tris, filepath.join({dir, "tracksplit.pssg"}, context.temp_allocator) or_else ""},
+		{route_tris, filepath.join({route_dir, "routesplit.pssg"}, context.temp_allocator) or_else ""},
+	}) {
+		data, msg, built := d3_routesplit_build(pair.tris, d3_test_profile(), context.temp_allocator)
+		if !testing.expect(t, built, msg) { return }
+		if !testing.expect(t, os.write_entire_file(pair.path, data) == nil) { return }
+	}
+	return route_dir, dir, true
+}
+
+// A two-triangle mesh offset far enough from d3_test_mesh that no box of one
+// could be mistaken for a box of the other.
+@(private = "file")
+d3_test_far_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
+	out := make([]Collision_Triangle, 2, allocator)
+	out[0] = {Points = {{1000, 0, 1000}, {1000, 0, 1010}, {1010, 0, 1000}}, Material = .Terrain}
+	out[1] = {Points = {{1010, 0, 1010}, {1010, 0, 1000}, {1000, 0, 1010}}, Material = .Terrain}
+	return out
+}
+
 @(test)
-track_vis_is_self_contained_and_indexes_every_route_tile :: proc(t: ^testing.T) {
-	tris := d3_test_mesh(context.temp_allocator)
-	raw, msg, built := d3_track_vis_build(tris, d3_test_profile(), context.allocator)
+vis_build_is_self_contained_and_indexes_every_object :: proc(t: ^testing.T) {
+	objects := make([]D3_Vis_Object, VIS_TEST_OBJECTS, context.temp_allocator)
+	for i in 0..<VIS_TEST_OBJECTS {
+		objects[i] = {tag = 0, index = u32(i), lo = {f32(i), 0, 0}, hi = {f32(i)+1, 1, 1}}
+	}
+	raw, msg, built := d3_vis_build_single_cell(objects, allocator = context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 
@@ -80,75 +119,109 @@ track_vis_is_self_contained_and_indexes_every_route_tile :: proc(t: ^testing.T) 
 	testing.expect_value(t, d3_vis_u32(raw, 0x04), u32(1))
 	testing.expect_value(t, d3_vis_u32(raw, 0x08), u32(1))
 	testing.expect_value(t, d3_vis_u32(raw, 0x0c), u32(1))
-	testing.expect_value(t, d3_vis_u32(raw, 0x40), u32(D3_TILE_MAX))
+	testing.expect_value(t, d3_vis_u32(raw, 0x40), u32(VIS_TEST_OBJECTS))
 	for tag in 1..<16 { testing.expect_value(t, d3_vis_u32(raw, 0x40+tag*4), u32(0)) }
 
 	o2 := int(d3_vis_u32(raw, 0x18)); o3 := int(d3_vis_u32(raw, 0x1c)); o4 := int(d3_vis_u32(raw, 0x2c))
 	testing.expect_value(t, d3_vis_u16(raw, 128), u16(0)) // one leaf, no donor tree
 	testing.expect_value(t, int(d3_vis_u16(raw, 130)) | int(d3_vis_u16(raw, 132))<<16, o2)
 	testing.expect_value(t, o3-o2, 16)
-	for bit in 0..=D3_TILE_MAX { testing.expect(t, raw[o2+bit/8]&(u8(1)<<u8(bit&7)) != 0) }
+	for bit in 0..=VIS_TEST_OBJECTS { testing.expect(t, raw[o2+bit/8]&(u8(1)<<u8(bit&7)) != 0) }
 
 	testing.expect_value(t, d3_vis_u16(raw, o3+28), u16(0))
-	testing.expect_value(t, d3_vis_u16(raw, o3+30), u16(D3_TILE_MAX))
-	for i in 0..<D3_TILE_MAX {
+	testing.expect_value(t, d3_vis_u16(raw, o3+30), u16(VIS_TEST_OBJECTS))
+	for i in 0..<VIS_TEST_OBJECTS {
 		box := o3+48+i*32
 		testing.expect_value(t, d3_vis_u32(raw, box+12), u32(0))
 		testing.expect_value(t, d3_vis_u32(raw, box+28), u32(i))
 	}
-	testing.expect_value(t, o4, o3+48+D3_TILE_MAX*32)
+	testing.expect_value(t, o4, o3+48+VIS_TEST_OBJECTS*32)
 	testing.expect_value(t, len(raw), o4+32)
 }
 
+// Two ascending runs, the venue's tiles then the route's, each run reversed on
+// its own. Reversing the concatenation as a unit puts the route's boxes on the
+// venue's indices.
 @(test)
-track_vis_owns_only_nonempty_tiles_without_donor_slots :: proc(t: ^testing.T) {
-	tris := []Collision_Triangle{{Points={{0,0,0},{0,0,1},{1,0,0}}, Material=.Road}}
-	raw, msg, built := d3_track_vis_build(tris, d3_test_profile())
-	testing.expect(t, built, msg); if !built { return }
-	defer delete(raw)
-	testing.expect_value(t, d3_vis_u32(raw, 0x40), u32(1))
-	o3 := int(d3_vis_u32(raw, 0x1c))
-	testing.expect_value(t, d3_vis_u16(raw, o3+30), u16(1))
-	testing.expect_value(t, d3_vis_u32(raw, o3+48+28), u32(0))
+vis_census_numbers_venue_tiles_before_route_tiles :: proc(t: ^testing.T) {
+	venue_tris := d3_test_mesh(context.temp_allocator)
+	route_tris := d3_test_far_mesh(context.temp_allocator)
+	route_dir, venue_dir, made := d3_test_vis_tree(t, venue_tris, route_tris)
+	if !made { return }
+	defer os.remove_all(venue_dir)
+
+	venue_tiles, _, venue_ok := d3_tile_boxes(venue_tris, d3_test_profile(), context.temp_allocator)
+	route_tiles, _, route_ok := d3_tile_boxes(route_tris, d3_test_profile(), context.temp_allocator)
+	testing.expect(t, venue_ok && route_ok); if !(venue_ok && route_ok) { return }
+
+	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	testing.expect_value(t, len(objects), len(venue_tiles)+len(route_tiles))
+
+	// d3_tile_boxes already emits reverse traversal order, so the census's own
+	// per-source reversal puts tile 0 of the file last within its run.
+	for object, i in objects {
+		testing.expect_value(t, object.tag, u32(0))
+		testing.expect_value(t, object.index, u32(i))
+		source := i < len(venue_tiles) ? venue_tiles : route_tiles
+		at := i < len(venue_tiles) ? i : i-len(venue_tiles)
+		testing.expect_value(t, D3_Tile_Box{object.lo, object.hi}, source[len(source)-1-at])
+	}
 }
 
 @(test)
-track_vis_boxes_match_routesplit_tile_order :: proc(t: ^testing.T) {
-	tris := d3_test_mesh(context.temp_allocator)
-	vis, vis_msg, vis_ok := d3_track_vis_build(tris, d3_test_profile(), context.allocator)
-	testing.expect(t, vis_ok, vis_msg); if !vis_ok { return }
-	defer delete(vis)
-	pssg, pssg_msg, pssg_ok := d3_routesplit_build(tris, d3_test_profile(), context.allocator)
-	testing.expect(t, pssg_ok, pssg_msg); if !pssg_ok { return }
-	defer delete(pssg)
-	file, read_msg, read_ok := pssg_read(pssg, context.allocator)
-	testing.expect(t, read_ok, read_msg); if !read_ok { return }
-	defer pssg_delete(&file)
+vis_census_fails_closed_without_a_tracksplit :: proc(t: ^testing.T) {
+	route_dir, venue_dir, made := d3_test_vis_tree(t, d3_test_mesh(context.temp_allocator), d3_test_far_mesh(context.temp_allocator))
+	if !made { return }
+	defer os.remove_all(venue_dir)
+	tracksplit, _ := filepath.join({venue_dir, "tracksplit.pssg"}, context.temp_allocator)
+	testing.expect(t, os.remove(tracksplit) == nil)
+	_, _, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	testing.expect(t, !ok, "a census with no venue tracksplit must refuse, not emit route-only indices")
+}
 
-	surface := pssg_walk_first(file.root, "NODE")
-	testing.expect(t, surface != nil); if surface == nil { return }
-	o3 := int(d3_vis_u32(vis, 0x1c))
-	count := int(d3_vis_u16(vis, o3+30))
-	testing.expect_value(t, len(surface.children)-2, count)
-	tiles := surface.children[2:]
-	for i in 0..<len(tiles) {
-		tile := tiles[len(tiles)-1-i]
-		lo, hi: [3]f32
-		seen := false
-		for render in tile.children[2:] {
-			box := pssg_walk_first(render, "BOUNDINGBOX")
-			if box == nil || len(box.data) != 24 { continue }
-			for k in 0..<3 {
-				low := d3_test_f32(box.data, k*4); high := d3_test_f32(box.data, 12+k*4)
-				if !seen { lo[k] = low; hi[k] = high } else { lo[k] = min(lo[k], low); hi[k] = max(hi[k], high) }
-			}
-			seen = true
-		}
-		testing.expect(t, seen); if !seen { continue }
-		at := o3+48+i*32
-		for k in 0..<3 {
-			testing.expect_value(t, d3_vis_f32(vis, at+k*4), lo[k])
-			testing.expect_value(t, d3_vis_f32(vis, at+16+k*4), hi[k])
-		}
-	}
+// Our derived count for a tag we leave out is zero, and the game sizes an
+// allocation from the header count regardless. The file we are replacing is
+// the only honest source for that number.
+@(test)
+vis_census_floors_header_counts_against_the_file_it_replaces :: proc(t: ^testing.T) {
+	route_dir, venue_dir, made := d3_test_vis_tree(t, d3_test_mesh(context.temp_allocator), d3_test_far_mesh(context.temp_allocator))
+	if !made { return }
+	defer os.remove_all(venue_dir)
+
+	donor := make([]u8, D3_VIS_HEADER_SIZE, context.temp_allocator)
+	binary_store_u32(donor, 0x40+2*4, 291)
+	live, _ := filepath.join({route_dir, "track.vis"}, context.temp_allocator)
+	testing.expect(t, os.write_entire_file(live, donor) == nil)
+
+	raw, msg, built := d3_vis_census_build(route_dir, venue_dir, context.allocator)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	testing.expect_value(t, d3_vis_u32(raw, 0x40+2*4), u32(291))
+	testing.expect(t, d3_vis_u32(raw, 0x40) > 0, "the census dropped its own tag-0 tiles")
+}
+
+// Tag-3 ids come from each instance's own id field, not its table position —
+// the game joins on the cooked id.
+@(test)
+vis_census_indexes_trees_by_instance_id :: proc(t: ^testing.T) {
+	route_dir, venue_dir, made := d3_test_vis_tree(t, d3_test_mesh(context.temp_allocator), d3_test_far_mesh(context.temp_allocator))
+	if !made { return }
+	defer os.remove_all(venue_dir)
+
+	trees := d3_test_placement_file(context.temp_allocator)
+	layout, layout_ok := d3_placement_layout(trees)
+	testing.expect(t, layout_ok); if !layout_ok { return }
+	inst_table := int(binary_load_u32(trees, layout.inst_table_at))
+	ids := []u32{7, 5, 9}
+	for id, i in ids { binary_store_u32(trees, inst_table+i*layout.inst_stride+4, id) }
+	trees_path, _ := filepath.join({route_dir, "trees.bin"}, context.temp_allocator)
+	testing.expect(t, os.write_entire_file(trees_path, trees) == nil)
+
+	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	got := make([dynamic]u32, context.temp_allocator)
+	for obj in objects { if obj.tag == 3 { append(&got, obj.index) } }
+	testing.expect_value(t, len(got), len(ids))
+	for id, i in ids { testing.expect_value(t, got[i], id) }
 }

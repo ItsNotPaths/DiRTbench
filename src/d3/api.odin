@@ -46,6 +46,10 @@ Export_Job :: struct {
 	// export without one is refused: every file that names a shader would
 	// otherwise name art from a venue the player may not own.
 	Profile:   ^D3_Venue_Profile,
+	// The location directory `tracksplit.pssg` lives in, one level above a
+	// route. `track.vis` censuses that file together with the route's own
+	// routesplit, because the engine numbers venue tiles before route tiles.
+	Venue_Dir: string,
 }
 
 // Public entry points used by the editor's headless CLI. The implementation
@@ -57,6 +61,14 @@ Export_Job :: struct {
 Export :: export_dirt3
 Export_Geometry :: export_dirt3_geometry
 Export_Venue_Geometry :: export_dirt3_venue_geometry
+Placement_References :: d3_placement_read_references
+Ens_Parse :: d3_ens_parse
+Ens_Emit :: d3_ens_emit
+Ens_Placement_Transform :: d3_ens_placement_transform
+Placement_Build :: d3_placement_build
+Placement_Xml_Build :: d3_placement_xml_build
+Write_Out :: d3_write_out
+Stock_Path :: d3_stock_path
 Atomic_Write :: atomic_write_file
 Prepare_Registration :: prepare_registration
 Registration_Output_Delete :: registration_output_delete

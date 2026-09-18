@@ -234,3 +234,16 @@ pssg_set_attr_string :: proc(file:^Pssg_File,node:^Pssg_Node,name,value:string,a
 pssg_walk_first :: proc(node:^Pssg_Node,name:string)->^Pssg_Node{
 	if node==nil{return nil}; if node.name==name{return node}; for child in node.children { if found:=pssg_walk_first(child,name); found!=nil{return found} }; return nil
 }
+
+// The first node of `name` whose own `id` attribute matches. A stock PSSG can
+// nest several `NODE` elements ahead of the one that groups the tiles —
+// Michigan's tracksplit.pssg opens with an empty decoy directly under
+// ROOTNODE — so a surface must be found by id, never by first match on type.
+pssg_walk_first_by_id :: proc(file: ^Pssg_File, node: ^Pssg_Node, name, id: string) -> ^Pssg_Node {
+	if node == nil { return nil }
+	if node.name == name && pssg_attr_string(file, node, "id") == id { return node }
+	for child in node.children {
+		if found := pssg_walk_first_by_id(file, child, name, id); found != nil { return found }
+	}
+	return nil
+}

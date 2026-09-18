@@ -7,6 +7,8 @@ package d3
 // correct box and per-tag registration index matter even in this shape.
 
 import "core:fmt"
+import "core:os"
+import "core:path/filepath"
 
 D3_VIS_HEADER_SIZE :: 128
 
@@ -150,29 +152,135 @@ d3_vis_build_single_cell :: proc(objects: []D3_Vis_Object, header_floor := [16]u
 	return out, fmt.tprintf("1 view cell, %d objects across %d tags", len(objects), d3_vis_tag_span(tag_counts)), true
 }
 
-// Export path: owns only the generated route's own tag-0 tiles, no donor
-// objects from the rest of a venue.
-d3_track_vis_build :: proc(collision: []Collision_Triangle, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
-	boxes, box_msg, boxes_ok := d3_tile_boxes(collision, profile, context.temp_allocator)
-	if !boxes_ok { return nil, box_msg, false }
-	if len(boxes) > 65535 { return nil, "Dirt 3 VIS has too many route tiles", false }
+// --- the census -------------------------------------------------------------
+//
+// VIS is venue-scoped: the engine numbers the venue tracksplit's tiles first
+// and the route's own routesplit tiles after, one ascending run each, and a
+// route-only file therefore names the wrong drawable for every index. So the
+// objects are censused off the files themselves after both PSSGs are written,
+// never derived from the collision soup a second time.
+//
+// Tag 0 is the surface. Tag 3 is `trees.bin`, whose own `instance_id` is the
+// real tag-3 id. Tag 2 is deliberately absent: `ornaments.bin` does not carry
+// its tag-2 id at all (that lives in `ornaments.xml`), and a wrong id there is
+// a confirmed crash while leaving an object out of tag 2 is confirmed safe.
+//
+// The two tag-0 runs are contiguous, so the route's lead is exactly the venue
+// tracksplit's tile count. Measured over every playable stock route in the
+// install: tag-0 count equals venue tiles plus route tiles exactly, and the
+// route's own tile boxes match that window with 0.000 m error, on all 94
+// routes that ship a routesplit. The only stock file that disagrees is
+// `moosylvania_rally/route_3`, in an unregistered dev venue the game cannot
+// load. Tag 0 addresses surfaces by slot position, so this is the number that
+// decides whether the terrain draws at all.
 
-	// Dirt 3 enumerates the PSSG tile nodes in reverse traversal order when it
-	// assigns tag-0 visibility indices. Keep the boxes in that engine order;
-	// direct surface-child order gives every drawable another tile's bounds.
-	objects := make([]D3_Vis_Object, len(boxes), context.temp_allocator)
-	for i in 0..<len(boxes) {
-		box := boxes[len(boxes)-1-i]
-		objects[i] = {tag = 0, index = u32(i), lo = box.lo, hi = box.hi}
+// Every `trees.bin` instance as a tag-3 object, indexed by its cooked id.
+@(private = "file")
+d3_vis_append_trees :: proc(out: ^[dynamic]D3_Vis_Object, path: string) -> (added: int, msg: string, ok: bool) {
+	data, read_err := os.read_entire_file(path, context.temp_allocator)
+	if read_err != nil { return 0, fmt.tprintf("could not read %s: %v", path, read_err), false }
+	layout, layout_ok := d3_placement_layout(data)
+	if !layout_ok { return 0, fmt.tprintf("%s: not a recognised placement file", path), false }
+	instances, read_msg, read_ok := d3_placement_read(data, context.temp_allocator)
+	if !read_ok { return 0, fmt.tprintf("%s: %s", path, read_msg), false }
+	for inst, i in instances {
+		lo, hi, box_ok := d3_placement_instance_box(data, layout, inst)
+		if !box_ok {
+			return added, fmt.tprintf("%s: instance %d names an unknown reference %d", path, i, inst.reference_id), false
+		}
+		append(out, D3_Vis_Object{tag = 3, index = inst.instance_id, lo = lo, hi = hi})
+		added += 1
 	}
-
-	built, build_msg, built_ok := d3_vis_build_single_cell(objects, allocator = allocator)
-	if !built_ok { return nil, build_msg, false }
-	return built, fmt.tprintf("1 view cell, %d owned route tiles, no donor objects", len(boxes)), true
+	return added, "", true
 }
 
-d3_write_track_vis :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg: string, ok: bool) {
-	data, detail, built := d3_track_vis_build(job.Collision, profile)
+// Every drawable this route registers, in the engine's own registration order.
+// `venue_dir` holds `tracksplit.pssg`; `route_dir` holds `routesplit.pssg` and
+// `trees.bin`. A route without trees is not an error — 14 stock routes ship
+// none — so a missing `trees.bin` contributes nothing.
+d3_vis_census_objects :: proc(
+	route_dir, venue_dir: string,
+	allocator := context.allocator,
+) -> (
+	objects: []D3_Vis_Object,
+	msg: string,
+	ok: bool,
+) {
+	out := make([dynamic]D3_Vis_Object, allocator)
+	defer if !ok { delete(out) }
+
+	// Two ascending runs, not one list reversed as a unit: reversing the
+	// concatenation scrambles which real drawable an index names.
+	tracksplit, _ := filepath.join({venue_dir, "tracksplit.pssg"}, context.temp_allocator)
+	routesplit, _ := filepath.join({route_dir, "routesplit.pssg"}, context.temp_allocator)
+	venue_tiles, route_tiles := 0, 0
+	for path, source in ([]string{tracksplit, routesplit}) {
+		tiles, tile_msg, tile_ok := d3_read_surface_tile_boxes(path, context.temp_allocator)
+		if !tile_ok { return nil, tile_msg, false }
+		if source == 0 { venue_tiles = len(tiles) } else { route_tiles = len(tiles) }
+		// Within one source the engine enumerates tile nodes in reverse
+		// traversal order.
+		for i in 0 ..< len(tiles) {
+			box := tiles[len(tiles)-1-i]
+			append(&out, D3_Vis_Object{tag = 0, index = u32(len(out)), lo = box.lo, hi = box.hi})
+		}
+	}
+
+	trees_path, _ := filepath.join({route_dir, "trees.bin"}, context.temp_allocator)
+	trees := 0
+	if os.exists(trees_path) {
+		added, trees_msg, trees_ok := d3_vis_append_trees(&out, trees_path)
+		if !trees_ok { return nil, trees_msg, false }
+		trees = added
+	}
+
+	if len(out) == 0 { return nil, "found no drawables to make visible", false }
+	return out[:], fmt.tprintf(
+		"tag 0: %d venue tiles + %d route tiles; tag 3: %d trees",
+		venue_tiles, route_tiles, trees,
+	), true
+}
+
+d3_vis_census_build :: proc(
+	route_dir, venue_dir: string,
+	allocator := context.allocator,
+) -> (
+	out: []u8,
+	msg: string,
+	ok: bool,
+) {
+	objects, objects_msg, objects_ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	if !objects_ok { return nil, objects_msg, false }
+
+	floor: [16]u32
+	donor_msg := "no donor to floor the header counts against"
+	if donor := d3_stock_path(route_dir, "track.vis"); donor != "" {
+		data, read_err := os.read_entire_file(donor, context.temp_allocator)
+		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", donor, read_err), false }
+		counts, counts_ok := d3_vis_read_header_tag_counts(data)
+		if !counts_ok { return nil, fmt.tprintf("%s: too short to hold a Dirt 3 VIS header", donor), false }
+		// Tags 0 and 3 are ours: we write both PSSGs and trees.bin, so our
+		// counts are the true ones. Every other tag keeps the donor's count —
+		// tag 2 included, even though ornaments.bin is rewritten, because the
+		// game sizes allocations off the header count (see the census note).
+		for tag in 0..<16 {
+			if tag == 0 || tag == 3 { continue }
+			floor[tag] = counts[tag]
+		}
+		donor_msg = fmt.tprintf("tags 1..2, 4..15 floored against %s", filepath.base(donor))
+	}
+
+	built, build_msg, built_ok := d3_vis_build_single_cell(objects, floor, allocator)
+	if !built_ok { return nil, build_msg, false }
+	return built, fmt.tprintf("%s; %s; %s", objects_msg, donor_msg, build_msg), true
+}
+
+// Runs after both PSSGs are written, because it censuses them.
+d3_write_track_vis :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	dir, dir_msg, dir_ok := d3_out_dir(job)
+	if !dir_ok { return dir_msg, false }
+	if job.Venue_Dir == "" { return "track.vis needs the venue directory tracksplit.pssg lives in", false }
+	data, detail, built := d3_vis_census_build(dir, job.Venue_Dir)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "track.vis", data); !written { return write_msg, false }
