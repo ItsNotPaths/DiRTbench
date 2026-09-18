@@ -88,6 +88,9 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 	veg_cache_clear(doc)
 	delete(doc.spline.points)
 	delete(doc.open_venue)
+	delete(doc.base)
+	props_free(doc)
+	prop_catalog_free(doc)
 	routes_free(&doc.routes)
 }
 
@@ -97,6 +100,7 @@ view_delete :: proc(ed: ^Editor) {
 	delete(ed.terrain_brush_offsets)
 	delete(ed.floor_draw)
 	delete(ed.stage_id)
+	prop_preview_clear(&ed.prop_preview)
 	stage_cache_clear(ed)
 }
 

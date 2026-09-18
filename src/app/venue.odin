@@ -543,7 +543,7 @@ venue_compile_route :: proc(
 		if load_msg, loaded := load_road(doc, venue_road_path(p.id)); !loaded {
 			return out, load_msg, false
 		}
-		doc.veg.preset = geo.veg_preset_for_base(p.base)
+		doc_set_base(doc, p.base)
 		return geo.compile_stage(doc.spline, route.start, route.finish, route.pins[:], allocator)
 	}
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
@@ -722,7 +722,7 @@ venue_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 	if load_msg, loaded := load_road(&doc, venue_road_path(p.id)); !loaded {
 		return load_msg, false
 	}
-	doc.veg.preset = geo.veg_preset_for_base(p.base)
+	doc_set_base(&doc, p.base)
 
 	done := make([dynamic]string, context.temp_allocator)
 	for route in p.routes {

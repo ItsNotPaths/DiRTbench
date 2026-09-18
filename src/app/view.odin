@@ -60,6 +60,7 @@ Sel_Kind :: enum {
 	Node,       // idx indexes geo.Terrain.controls
 	Floor,      // idx indexes geo.Terrain.floors: the whole pad
 	Floor_Vert, // ... and `sub` one corner of its outline
+	Prop,       // idx indexes Venue_Doc.props
 }
 
 Selection :: struct {
@@ -156,6 +157,19 @@ Editor :: struct {
 	show_demo:     bool,
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
+
+	// The prop browser (props.odin). `prop_pick` indexes the catalogue's own
+	// ref list rather than naming a prop, because the catalogue owns those
+	// strings and a reload frees them. `prop_placing` is the mode the next
+	// viewport click drops one in.
+	prop_pick:     int,
+	prop_placing:  bool,
+	prop_filter:   [64]u8,
+	prop_preview:  Prop_Preview,
+	prop_ghost:    gfx.Vector3,
+	prop_ghost_ok: bool,
+	prop_yaw:      f32,
+	prop_pitch:    f32,
 	wireframe:     bool,
 	quit:          bool,
 
@@ -420,6 +434,9 @@ view_defaults :: proc() -> Editor {
 		cam = {target = {10, 3, 48}, distance = 110, yaw = 0.6, pitch = 0.6},
 		preview_speed = 30, // ~108 km/h
 		route_sel = -1,
+		prop_pick = -1,
+		prop_yaw = 0.7,
+		prop_pitch = 0.35,
 	}
 }
 
@@ -538,6 +555,9 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	} else if selected_floor(ed) >= 0 {
 		gizmo_shown = true
 		gizmo_used = floor_gizmo(ed, cam3d)
+	} else if pi := selected_prop(ed); pi >= 0 {
+		gizmo_shown = true
+		gizmo_used = prop_gizmo(ed, pi, cam3d)
 	}
 	ed.gizmo_active = gizmo_used
 	ed.gizmo_hovered = gizmo_shown && ui.gizmo_is_over()
@@ -558,6 +578,11 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 	ctrl := gfx.IsKeyDown(.LEFT_CONTROL) || gfx.IsKeyDown(.RIGHT_CONTROL)
 	if ctrl && gfx.IsKeyPressed(.S) && len(ed.doc.spline.points) >= 2 {
 		do_save(ed)
+	}
+	// B is the prop-placing mode. Which prop it places is the Inspector's half of
+	// it, and is already picked by the time this is any use.
+	if ed.kind == .Venue && gfx.IsKeyPressed(.B) {
+		ed.prop_placing = !ed.prop_placing
 	}
 }
 
@@ -656,12 +681,18 @@ edit_road :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys:
 			}
 		}
 	}
-	// A road point or a floor. Terrain controls are generated from the terrain
-	// region rather than individually added or removed.
-	if gfx.IsKeyPressed(.DELETE) && !ui_keys && floor_delete(ed) {
+	// Delete takes a floor, a prop or a road point. Terrain controls are
+	// generated from the terrain region rather than individually added or removed.
+	del := gfx.IsKeyPressed(.DELETE) && !ui_keys
+	if del && floor_delete(ed) {
 		return
 	}
-	if pi := selected_point(ed); gfx.IsKeyPressed(.DELETE) && !ui_keys && pi >= 0 {
+	if pri := selected_prop(ed); del && pri >= 0 {
+		prop_remove(ed.doc, pri)
+		ed.sel = {}
+		return
+	}
+	if pi := selected_point(ed); del && pi >= 0 {
 		geo.remove_point(&ed.doc.spline, pi)
 		ed.sel = {}
 		mark_dirty(ed.doc)
@@ -679,6 +710,11 @@ editor_input :: proc(
 	if floor_draw_input(ed, ray, nav, ui_mouse, ui_keys) {
 		return
 	}
+	// The same bargain: while a prop is being placed, the click that places it is
+	// the only one the viewport takes.
+	if prop_place_input(ed, nav, ui_mouse, ui_keys) {
+		return
+	}
 	// A click arbitrates between a control point, a terrain node and a floor by
 	// depth, so whichever handle is actually in front wins.
 	if gfx.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
@@ -686,14 +722,19 @@ editor_input :: proc(
 		ni, nd := geo.pick_terrain_node(node_pos, node_active, geo.terrain_node_radius(&ed.doc.terrain), ray)
 		fvi, fv, fvd := pick_floor_vert(&ed.doc.terrain, ray)
 		fi, fd := pick_floor(&ed.doc.terrain, ray)
+		pri, prd := pick_prop(ed.doc, ray)
 		// A corner handle sits on its pad's surface, so it must win any tie
 		// against the pad itself.
 		if fvi >= 0 && fvd <= fd {
 			fi, fd = -1, max(f32)
 		}
+		// A prop stands on the ground the pad and the nodes describe, so it wins
+		// any tie against them: what is in front is what was clicked.
 		switch {
-		case fvi >= 0 && (pi < 0 || fvd < pd) && (ni < 0 || fvd < nd):
+		case fvi >= 0 && (pi < 0 || fvd < pd) && (ni < 0 || fvd < nd) && (pri < 0 || fvd < prd):
 			ed.sel = {kind = .Floor_Vert, idx = fvi, sub = fv}
+		case pri >= 0 && (pi < 0 || prd < pd) && (ni < 0 || prd <= nd) && (fi < 0 || prd <= fd):
+			ed.sel = {kind = .Prop, idx = pri}
 		case ni >= 0 && (pi < 0 || nd < pd) && (fi < 0 || nd < fd):
 			ed.sel = {kind = .Node, idx = ni}
 		case pi >= 0 && (fi < 0 || pd < fd):
@@ -791,6 +832,7 @@ venue_frame :: proc(ed: ^Editor) {
 	node_pos := geo.terrain_node_world(&ed.doc.terrain, ed.doc.ribbon, ed.doc.roughness)
 	node_active := geo.terrain_node_active_mask(&ed.doc.terrain, node_pos)
 	sel_node := resolve_node_selection(ed, node_pos, node_active)
+	prop_ghost_update(ed, ray)
 
 	draw_venue_scene(ed, cam3d, node_pos, node_active, sel_node)
 

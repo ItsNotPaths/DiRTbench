@@ -676,7 +676,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	delete(doc.open_venue)
 	doc.open_venue = strings.clone(p.id)
 	// The trees come with the art: the base venue picks the species, not the user.
-	doc.veg.preset = geo.veg_preset_for_base(p.base)
+	doc_set_base(doc, p.base)
 	set_stage_name(doc, p.id)
 	mark_dirty(doc)
 	doc_loaded(doc)

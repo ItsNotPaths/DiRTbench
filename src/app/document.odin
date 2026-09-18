@@ -8,6 +8,7 @@ package main
 // window (see docs_rebuild in main.odin). Nothing here knows about a camera,
 // a cursor or a window.
 
+import "core:strings"
 import "../geo"
 import "../gfx"
 
@@ -25,6 +26,10 @@ Venue_Doc :: struct {
 	// whole road graph, and the window (or the headless command) says which
 	// stage of it is being looked at or exported.
 	open_venue:    string,
+	// The stock venue this one derives its art from, "<location>/<venue>", or ""
+	// for a loose stage. The prop libraries are read out of it, and the tree
+	// species come off it too (geo.veg_preset_for_base).
+	base:          string,
 	// The venue's stage list. It belongs to venue.json and is written back when
 	// the road is saved. The project manager edits it here while a window has
 	// the venue open; a stage window's `route_sel` indexes it.
@@ -83,6 +88,11 @@ Venue_Doc :: struct {
 	veg_mesh:      geo.Gpu_Mesh,
 	veg_gen:       u64, // ribbon_gen the cache was built at; a mismatch forces a refresh
 	veg_dirty:     bool,
+
+	// Props placed by hand (props.odin). Saved with the road; drawn from the
+	// base venue's own libraries, which `props_lib` parses on first ask.
+	props:         [dynamic]Prop_Instance,
+	props_lib:     Prop_Catalog,
 
 	// ImGui edits this in place, so it is a fixed C string.
 	stage_name:    [64]u8,
@@ -228,6 +238,18 @@ stage_name_text :: proc(doc: ^Venue_Doc) -> string {
 
 set_stage_name :: proc(doc: ^Venue_Doc, name: string) {
 	set_buf(doc.stage_name[:], name)
+}
+
+// Point the document at the stock venue it derives its art from. Both things
+// that art decides are set here: the tree species of the scatter, and where the
+// prop libraries are read from.
+doc_set_base :: proc(doc: ^Venue_Doc, base: string) {
+	if doc.base != base {
+		prop_catalog_free(doc) // the catalogue is the old base's art
+	}
+	delete(doc.base)
+	doc.base = strings.clone(base)
+	doc.veg.preset = geo.veg_preset_for_base(base)
 }
 
 // Grow the road at `g`. With a point selected the new node is its child, which

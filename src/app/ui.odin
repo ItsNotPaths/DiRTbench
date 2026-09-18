@@ -459,11 +459,13 @@ draw_inspector_body :: proc(ed: ^Editor) {
 
 	draw_terrain_section(ed)
 	draw_veg_section(ed)
+	draw_props_section(ed)
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("LMB select point or terrain node")
 	ui.im_text("Terrain: RMB+LMB drag sizes brush; release RMB to raise/lower")
 	ui.im_text("Floors: draw one from the Terrain panel; Del removes a corner")
+	ui.im_text("Props: pick one in the Props panel, B places, Del removes")
 	ui.im_text("Shift+drag gizmo extrudes a point")
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")
@@ -585,6 +587,7 @@ SEL_ROWS := [Sel_Kind]f32{
 	.Node       = 3,
 	.Floor      = 7,
 	.Floor_Vert = 7,
+	.Prop       = 7,
 }
 
 // Never more than half the dock: a fifteen-row point on a short window would
@@ -607,7 +610,7 @@ draw_selection_block :: proc(ed: ^Editor) {
 	switch ed.sel.kind {
 	case .None:
 		ui.igSeparatorText("Nothing selected")
-		ui.im_text_colored(DIM_COL, "click a road point, a terrain node or a floor")
+		ui.im_text_colored(DIM_COL, "click a road point, a terrain node, a floor or a prop")
 	case .Point:
 		draw_point_selection(ed)
 	case .Node:
@@ -615,6 +618,8 @@ draw_selection_block :: proc(ed: ^Editor) {
 		ui.im_text_colored(DIM_COL, "drag its vertical handle to sculpt")
 	case .Floor, .Floor_Vert:
 		draw_floor_selection(ed)
+	case .Prop:
+		draw_prop_selection(ed)
 	}
 }
 

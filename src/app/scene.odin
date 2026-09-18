@@ -28,8 +28,8 @@ ray_ground :: proc(ray: gfx.Ray) -> (hit: gfx.Vector3, ok: bool) {
 
 // Where the cursor lands on the ground: the terrain surface as it was last
 // built, or the world plane when there is no terrain to hit. Brute force over
-// the field's triangles, which is affordable because this runs on a click and
-// never per frame.
+// the field's triangles: affordable on a click, and at worst once per frame
+// while a prop ghost tracks the cursor.
 pick_ground :: proc(ed: ^Editor, ray: gfx.Ray) -> (gfx.Vector3, bool) {
 	f := &ed.doc.terrain_field
 	at: gfx.Vector3
@@ -164,6 +164,7 @@ draw_world :: proc(ed: ^Editor) {
 	geo.gpu_mesh_draw(ed.doc.road, ed.doc.material, ed.wireframe)
 	draw_centreline(ed.doc.ribbon)
 	geo.gpu_mesh_draw(ed.doc.veg_mesh, ed.doc.material, ed.wireframe)
+	draw_props(ed.doc, ed.wireframe)
 }
 
 // The venue window's pass. What is left in the fixed-size overlay batch (see
@@ -179,6 +180,10 @@ draw_venue_scene :: proc(
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 	draw_floors(ed)
+	if pi := selected_prop(ed); pi >= 0 {
+		draw_prop_box(ed.doc, ed.doc.props[pi], {255, 140, 70, 255})
+	}
+	draw_prop_ghost(ed)
 	gfx.EndMode3D()
 }
 
