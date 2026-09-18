@@ -402,9 +402,7 @@ draw_inspector :: proc(ed: ^Editor) {
 // The numbers behind it are the venue's, in road.json.
 draw_timing_section :: proc(ed:^Editor) {
 	if !ui.igCollapsingHeader_TreeNodeFlags("Timing gates",ui.IM_TREE_NODE_DEFAULT_OPEN) { return }
-	if ui.igSliderInt("checkpoint density",&ed.doc.timing.checkpoint_count,0,20,"%d",ui.IM_SLIDER_NONE) {
-		mark_edited(ed.doc)
-	}
+	ui.im_text_colored(DIM_COL,fmt.ctprintf("%d checkpoints, fixed by the game",TIMING_CHECKPOINTS))
 	if ui.igSliderFloat("start/end buffer",&ed.doc.timing.buffer_m,0,500,"%.0f m",ui.IM_SLIDER_NONE) {
 		mark_edited(ed.doc)
 	}

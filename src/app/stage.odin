@@ -75,7 +75,6 @@ Stage_Veg :: struct {
 }
 
 Stage_Timing :: struct {
-	checkpoint_count: i32,
 	buffer_m: f32,
 }
 
@@ -213,7 +212,7 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 			road_bias = veg.road_bias,
 			seed      = i32(veg.seed),
 		},
-		timing = {checkpoint_count=i32(timing.checkpoint_count),buffer_m=timing.buffer_m},
+		timing = {buffer_m=timing.buffer_m},
 	}
 	{
 		sculpt := geo.terrain_sculpt(terrain)
@@ -362,7 +361,7 @@ load_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 	}
 	{
 		if stage.version<5 { timing^=TIMING_DEFAULTS } else {
-			timing^={checkpoint_count=c.int(clamp(stage.timing.checkpoint_count,0,20)),buffer_m=clamp(stage.timing.buffer_m,f32(0),f32(500))}
+			timing^={buffer_m=clamp(stage.timing.buffer_m,f32(0),f32(500))}
 		}
 	}
 	{

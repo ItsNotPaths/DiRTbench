@@ -1,17 +1,18 @@
 package main
 
-import "core:c"
 import "../gfx"
 import "../geo"
 
+// Dirt 3 allows 4 sections per stage, so start, 3 checkpoints, finish. A fifth
+// section kills Start Race, and there is no reason to want fewer.
+TIMING_CHECKPOINTS :: 3
+
 Timing_Params :: struct {
-	checkpoint_count: c.int,
-	buffer_m:         f32,
+	buffer_m: f32,
 }
 
 TIMING_DEFAULTS :: Timing_Params {
-	checkpoint_count = 3,
-	buffer_m         = 50,
+	buffer_m = 50,
 }
 
 Timing_Marker_Kind :: enum u8 {
@@ -42,7 +43,7 @@ timing_markers :: proc(ribbon:[]geo.Cross_Section,p:Timing_Params,allocator:=con
 	arc:=geo.ribbon_arc(ribbon,allocator)
 	length:=arc[len(arc)-1]
 	buffer:=min(max(p.buffer_m,0),length*0.25)
-	count:=max(int(p.checkpoint_count),0)+2
+	count:=TIMING_CHECKPOINTS+2
 	out:=make([]Timing_Marker,count,allocator)
 	for i in 0..<count {
 		station:=buffer+(length-2*buffer)*f32(i)/f32(count-1)
