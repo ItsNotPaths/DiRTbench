@@ -57,6 +57,24 @@ d3_billboard_kinds :: proc(
 	return out
 }
 
+// A card is a tree too, so the kickoff and finish shots are kept clear of
+// these the same way the scatter is (export.odin). Culled per card rather than
+// per cloud: a cloud is a thousand cards over a kilometre of road.
+d3_billboard_cull :: proc(cards: []geo.Billboard_Card, shots: []d3.Camera_Shot) -> []geo.Billboard_Card {
+	if len(shots) == 0 {
+		return cards
+	}
+	kept := 0
+	for card in cards {
+		if d3.Camera_Blocks(shots, {card.pos.x, card.pos.y, card.pos.z}, card.w/2) {
+			continue
+		}
+		cards[kept] = card
+		kept += 1
+	}
+	return cards[:kept]
+}
+
 // Cards to clouds: one cloud per tier per chunk of road. `cards` is sorted by arc
 // in place, so a cloud's box covers one stretch of road rather than the whole
 // stage.
@@ -127,6 +145,8 @@ d3_write_billboards :: proc(
 	// The scatter this stage places. The near tier stands where these are not, so
 	// it is the same list the placement files were given and not a second one.
 	trees: []geo.Veg_Instance,
+	// The shots no card may stand in, already culled out of `trees`.
+	shots: []d3.Camera_Shot,
 	route_index: int,
 	installing: bool,
 ) -> (
@@ -154,10 +174,10 @@ d3_write_billboards :: proc(
 	templates := d3.billboard_templates(&lib)
 	near_kinds := d3_billboard_kinds(templates, false)
 	far_kinds := d3_billboard_kinds(templates, true)
-	cards := geo.billboards_generate(
+	cards := d3_billboard_cull(geo.billboards_generate(
 		stage.ribbon, &stage.terrain, veg, roughness, trees,
 		near_kinds, far_kinds, context.temp_allocator,
-	)
+	), shots)
 
 	if len(cards) == 0 {
 		if dropped == 0 {

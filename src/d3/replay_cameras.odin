@@ -32,7 +32,6 @@ D3_CAMERA_DOLLY_M :: f32(18)
 D3_CAMERA_HOLD_S :: f32(5)
 D3_CAMERA_SPLINE_S :: f32(6.66667)
 
-@(private = "file")
 D3_Camera_Shot :: struct {
 	ident:     string,
 	// Where it sits, and the first point of what it looks at.
@@ -213,12 +212,14 @@ d3_camera_shots :: proc(
 	d3_cam_push(&out, establish, "establish_camera", route, allocator)
 
 	// The finish, and the two multiplayer finishes, all looking back up the road.
-	finish_at, finish_side, finish_ahead := d3_cam_frame(line, total)
+	finish_at, finish_side, _ := d3_cam_frame(line, total)
 	finish_eye := d3_cam_add(d3_cam_add(finish_at, d3_cam_scale(finish_side, 15)), {0, 9, 0})
 	for base in ([]string{"finishlineCam", "multifin_camera", "splitfin_camera"}) {
 		d3_cam_push(&out, D3_Camera_Shot{
 			eye      = finish_eye,
-			eye_end  = d3_cam_add(finish_eye, d3_cam_scale(finish_ahead, 8)),
+			// Still. A source spline of four identical points is stock: 220
+			// of the game's own `zoom` cameras ride one.
+			eye_end  = finish_eye,
 			aim      = d3_station_at(line, max(total-12, 0)).centre,
 			aim_end  = d3_station_at(line, max(total-90, 0)).centre,
 			duration = 7,
@@ -585,4 +586,83 @@ d3_write_replay_cameras :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		}
 	}
 	return fmt.tprintf("%s; %s; montage %s", config_msg, establish_msg, montage_msg), true
+}
+
+// --- what the kickoff and finish shots must see ------------------------------
+//
+// Two of the shots frame the car rather than the scenery: the kickoff off the
+// grid, and the finish. A tree standing between either camera and its stretch
+// of road hides the car outright, so the export culls one out of the other
+// (src/app/export.odin). The panning shots are scenery and keep their trees.
+
+// How far outside the wedge a trunk still has to stand.
+D3_CAMERA_CLEAR_M :: f32(2)
+
+// The two shots, taken from the picker itself so they cannot drift from what
+// gets written. Route index is irrelevant here: it names a shot, never places
+// one.
+d3_camera_start_finish :: proc(
+	route: []Route_Sample,
+	allocator := context.temp_allocator,
+) -> []D3_Camera_Shot {
+	if len(route) < 2 {
+		return nil
+	}
+	line := d3_route_stations(route, context.temp_allocator)
+	shots, _, ok := d3_camera_shots(line, 0, 0, context.temp_allocator)
+	if !ok {
+		return nil
+	}
+	out := make([dynamic]D3_Camera_Shot, 0, 2, allocator)
+	for shot in shots {
+		if shot.ident == "start_camera_r0" || shot.ident == "finishlineCam_r0" {
+			append(&out, shot)
+		}
+	}
+	return out[:]
+}
+
+@(private = "file")
+d3_cam_flat :: proc(v: [3]f32) -> [2]f32 { return {v[0], v[2]} }
+
+// Distance from `p` to segment `a`-`b`.
+@(private = "file")
+d3_cam_seg_dist :: proc(p, a, b: [2]f32) -> f32 {
+	ab := [2]f32{b[0]-a[0], b[1]-a[1]}
+	ap := [2]f32{p[0]-a[0], p[1]-a[1]}
+	square := ab[0]*ab[0] + ab[1]*ab[1]
+	t := square <= 0 ? f32(0) : clamp((ap[0]*ab[0] + ap[1]*ab[1])/square, 0, 1)
+	dx, dy := ap[0] - ab[0]*t, ap[1] - ab[1]*t
+	return math.sqrt(dx*dx + dy*dy)
+}
+
+@(private = "file")
+d3_cam_turn :: proc(a, b, p: [2]f32) -> f32 {
+	return (b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0])
+}
+
+// Zero inside the triangle, else the distance to its nearest edge.
+@(private = "file")
+d3_cam_tri_dist :: proc(p, a, b, c: [2]f32) -> f32 {
+	ab, bc, ca := d3_cam_turn(a, b, p), d3_cam_turn(b, c, p), d3_cam_turn(c, a, p)
+	if (ab >= 0 && bc >= 0 && ca >= 0) || (ab <= 0 && bc <= 0 && ca <= 0) {
+		return 0
+	}
+	return min(d3_cam_seg_dist(p, a, b), d3_cam_seg_dist(p, b, c), d3_cam_seg_dist(p, c, a))
+}
+
+// True when a trunk of `radius` at `pos` stands in the ground one of `shots`
+// frames: the quad from the camera's own dolly out to the stretch of road it
+// looks at, as two triangles. Flat, so a tree of any height counts — the
+// cameras sit 5 to 9 metres up and every species we place is taller than that.
+d3_camera_blocks :: proc(shots: []D3_Camera_Shot, pos: [3]f32, radius: f32) -> bool {
+	p := d3_cam_flat(pos)
+	for shot in shots {
+		eye, eye_end := d3_cam_flat(shot.eye), d3_cam_flat(shot.eye_end)
+		aim, aim_end := d3_cam_flat(shot.aim), d3_cam_flat(shot.aim_end)
+		clear := radius + D3_CAMERA_CLEAR_M
+		if d3_cam_tri_dist(p, eye, eye_end, aim_end) <= clear { return true }
+		if d3_cam_tri_dist(p, eye, aim_end, aim) <= clear { return true }
+	}
+	return false
 }

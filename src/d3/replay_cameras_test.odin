@@ -203,3 +203,63 @@ stock_crash_camera_ships_with_its_rig :: proc(t: ^testing.T) {
 	testing.expect_value(t, placeholders, 10)
 	testing.expect_value(t, transitions, 10)
 }
+
+@(private = "file")
+test_route :: proc(n: int, allocator := context.temp_allocator) -> []Route_Sample {
+	out := make([]Route_Sample, n, allocator)
+	for i in 0 ..< n {
+		z := f32(i)*10
+		out[i] = {Centre = {0, 3, z}, Left = {-4, 3, z}, Right = {4, 3, z}}
+	}
+	return out
+}
+
+// The finish shot is still, so its source spline is one point four times.
+@(test)
+camera_finish_shot_does_not_move :: proc(t: ^testing.T) {
+	shots, msg, ok := d3_camera_shots(test_line(40), 0, 3)
+	testing.expect(t, ok, msg); if !ok { return }
+	seen := 0
+	for shot in shots {
+		if !strings.has_prefix(shot.ident, "finishlineCam") &&
+		   !strings.has_prefix(shot.ident, "multifin_camera") &&
+		   !strings.has_prefix(shot.ident, "splitfin_camera") {
+			continue
+		}
+		seen += 1
+		testing.expectf(t, shot.eye == shot.eye_end,
+			"%s dollies from %v to %v", shot.ident, shot.eye, shot.eye_end)
+	}
+	testing.expect_value(t, seen, 3)
+}
+
+// The cull asks for the two shots of the car, never the scenery ones.
+@(test)
+camera_start_finish_is_the_kickoff_and_the_finish :: proc(t: ^testing.T) {
+	shots := d3_camera_start_finish(test_route(40))
+	testing.expect_value(t, len(shots), 2)
+	if len(shots) != 2 { return }
+	testing.expect_value(t, shots[0].ident, "start_camera_r0")
+	testing.expect_value(t, shots[1].ident, "finishlineCam_r0")
+	testing.expect(t, len(d3_camera_start_finish(test_route(1))) == 0)
+}
+
+// The road runs up +Z from the origin, so the kickoff sits at x=+14 and looks
+// back across the road: everything between the two is in shot, and nothing
+// behind the camera or across the road from it is.
+@(test)
+camera_blocks_inside_the_wedge_only :: proc(t: ^testing.T) {
+	shots := d3_camera_start_finish(test_route(40))
+	for c in ([]struct{pos: [3]f32, want: bool, why: string}{
+		{{7, 3, 30},    true,  "between the kickoff and the road"},
+		{{7, 3, 350},   true,  "between the finish camera and the road"},
+		{{-20, 3, 30},  false, "the far side of the road"},
+		{{14, 3, -30},  false, "behind the kickoff"},
+		{{60, 3, 200},  false, "out in the field"},
+	}) {
+		testing.expectf(t, d3_camera_blocks(shots, c.pos, 1) == c.want,
+			"%v (%s) should%s block", c.pos, c.why, c.want ? "" : " not")
+	}
+	// A wide enough canopy reaches in from outside.
+	testing.expect(t, d3_camera_blocks(shots, {-20, 3, 30}, 25))
+}

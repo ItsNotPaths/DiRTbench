@@ -164,17 +164,6 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		return fmt.tprintf("grass.grs: %s", cover_msg), false
 	}
 
-	// The clouds next, for the same reason: `trees.bin` names them and
-	// `track.vis` censuses that file. A venue whose art has no card cloud to
-	// clone writes none and says so, rather than failing the export.
-	billboards, billboard_msg, billboard_ok := d3_write_billboards(
-		job.venue_dir, export_drawn(job), job.veg, job.roughness, job.props,
-		job.route_index, job.installing,
-	)
-	if !billboard_ok {
-		return fmt.tprintf("billboards: %s", billboard_msg), false
-	}
-
 	route := make([]d3.Route_Sample, len(job.stage.ribbon), context.temp_allocator)
 	for section, i in job.stage.ribbon {
 		half := section.width/2
@@ -190,6 +179,25 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 			Right = {right.x,right.y,right.z},
 		}
 	}
+
+	// Nothing of ours may stand between the kickoff or finish camera and the
+	// road it frames: both shots are of the car, and a tree in front of one
+	// hides it. Culled here, before anything is placed or baked from the list.
+	shots := d3.Camera_Start_Finish(route)
+	props, props_cut := cull_camera_trees(shots, job.props)
+	placed, placed_cut := cull_camera_props(shots, job.placed)
+
+	// The clouds next, for the same reason: `trees.bin` names them and
+	// `track.vis` censuses that file. A venue whose art has no card cloud to
+	// clone writes none and says so, rather than failing the export.
+	billboards, billboard_msg, billboard_ok := d3_write_billboards(
+		job.venue_dir, export_drawn(job), job.veg, job.roughness, props, shots,
+		job.route_index, job.installing,
+	)
+	if !billboard_ok {
+		return fmt.tprintf("billboards: %s", billboard_msg), false
+	}
+
 	timing := timing_markers(job.stage.ribbon,job.timing)
 	markers := make([]d3.Progress_Marker,len(timing),context.temp_allocator)
 	for marker,i in timing {
@@ -212,7 +220,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
 	placement_msg, placement_ok := d3_write_placements(
-		&out, job.donor_route_dir, job.props, job.placed, billboards,
+		&out, job.donor_route_dir, props, placed, billboards,
 	)
 	if !placement_ok {
 		return fmt.tprintf("placements: %s", placement_msg), false
@@ -222,9 +230,50 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		return route_msg, false
 	}
 	return fmt.tprintf(
-		"tracksplit.pssg: %s; grass.grs: %s; %s; placements: %s; billboards: %s",
+		"tracksplit.pssg: %s; grass.grs: %s; %s; placements: %s; billboards: %s; %d trees and %d props out of the kickoff and finish shots",
 		tracksplit_msg, cover_msg, route_msg, placement_msg, billboard_msg,
+		props_cut, placed_cut,
 	), true
+}
+
+// The scatter, minus whatever stands in one of the two shots.
+cull_camera_trees :: proc(
+	shots: []d3.Camera_Shot, props: []geo.Veg_Instance,
+) -> (kept: []geo.Veg_Instance, cut: int) {
+	if len(shots) == 0 {
+		return props, 0
+	}
+	out := make([dynamic]geo.Veg_Instance, 0, len(props), context.temp_allocator)
+	for prop in props {
+		if d3.Camera_Blocks(shots, {prop.pos.x, prop.pos.y, prop.pos.z}, prop.r) {
+			continue
+		}
+		append(&out, prop)
+	}
+	return out[:], len(props) - len(out)
+}
+
+// The same for props placed by hand, trees only: a hay bale or a sign at the
+// finish line is set dressing, and a stage author who put one there meant it.
+// Their trunk radius is not in the placement, so one nominal canopy stands for
+// every species.
+CULL_PROP_R :: f32(2)
+
+cull_camera_props :: proc(
+	shots: []d3.Camera_Shot, placed: []Prop_Instance,
+) -> (kept: []Prop_Instance, cut: int) {
+	if len(shots) == 0 {
+		return placed, 0
+	}
+	out := make([dynamic]Prop_Instance, 0, len(placed), context.temp_allocator)
+	for prop in placed {
+		blocked := prop.ref.kind == .Trees_Pssg &&
+		           d3.Camera_Blocks(shots, {prop.pos.x, prop.pos.y, prop.pos.z}, CULL_PROP_R*prop.scale)
+		if !blocked {
+			append(&out, prop)
+		}
+	}
+	return out[:], len(placed) - len(out)
 }
 
 // The triangle soup, in material order, as a target-agnostic collision list.

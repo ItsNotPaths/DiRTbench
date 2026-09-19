@@ -99,6 +99,9 @@ Ground_Cell :: D3_Ground_Cell
 Ground_Tri :: D3_Ground_Tri
 GRS_TYPES :: D3_GRS_TYPES
 GRS_CELL_VERTS_MAX :: D3_GRS_CELL_VERTS_MAX
+Camera_Shot :: D3_Camera_Shot
+Camera_Start_Finish :: d3_camera_start_finish
+Camera_Blocks :: d3_camera_blocks
 Write_Out :: d3_write_out
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once

@@ -377,13 +377,13 @@ a_venue_with_no_tree_art_still_exports :: proc(t: ^testing.T) {
 	veg := geo.Veg_Params{enabled = true, billboards = true, density = 0.5, seed = 1}
 
 	clouds, msg, ok := d3_write_billboards(
-		"build/out/billboard-test-empty", &stage, veg, 0, nil, 0, false,
+		"build/out/billboard-test-empty", &stage, veg, 0, nil, nil, 0, false,
 	)
 	testing.expectf(t, ok, "a venue with no trees.pssg failed the export: %s", msg)
 	testing.expect_value(t, len(clouds), 0)
 
 	// And so is a loose road, which has no venue directory at all.
-	_, loose_msg, loose_ok := d3_write_billboards("", &stage, veg, 0, nil, 0, false)
+	_, loose_msg, loose_ok := d3_write_billboards("", &stage, veg, 0, nil, nil, 0, false)
 	testing.expectf(t, loose_ok, "a loose road failed the export: %s", loose_msg)
 }
 
@@ -572,7 +572,7 @@ the_writer_round_trips_against_real_venue_art :: proc(t: ^testing.T) {
 	run :: proc(dir: string, stage: ^Export_Geometry, veg: geo.Veg_Params) -> (clouds: int, cards: int, size: int, msg: string, ok: bool) {
 		trees := geo.veg_generate(stage.ribbon, &stage.terrain, veg, 0)
 		defer delete(trees)
-		written, run_msg, run_ok := d3_write_billboards(dir, stage, veg, 0, trees, 0, false)
+		written, run_msg, run_ok := d3_write_billboards(dir, stage, veg, 0, trees, nil, 0, false)
 		if !run_ok {
 			return 0, 0, 0, run_msg, false
 		}
