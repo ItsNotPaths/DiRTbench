@@ -137,9 +137,16 @@ card_library :: proc(
 ) {
 	sources := make([dynamic]^Pssg_Node, context.temp_allocator)
 	for pair in clouds {
+		held := make([dynamic]^Pssg_Node, context.temp_allocator)
+		for node in pair {
+			if node != nil {
+				append(&held, node)
+			}
+		}
 		append(&sources, prop_test_node(b, "SEGMENTSET", {
 			prop_test_attr(b, "id", concat_temp(pssg_attr_string(&b.file, pair[0], "id"), "_segments")),
-		}, {pair[0]}))
+			prop_test_attr_u32(b, "segmentCount", u32(len(held))),
+		}, held[:]))
 	}
 	others := make([dynamic]^Pssg_Node, context.temp_allocator)
 	append(&others, prop_test_node(b, "LIBRARY", {prop_test_attr(b, "type", "SEGMENTSET")}, sources[:]))
@@ -164,7 +171,10 @@ two_tier_library :: proc(b: ^Prop_Test_Builder, lib: ^Prop_Library, extra_name :
 	clouds := make([dynamic][2]^Pssg_Node, context.temp_allocator)
 	roots := make([dynamic]^Pssg_Node, context.temp_allocator)
 	blocks := make([dynamic]^Pssg_Node, context.temp_allocator)
-	append(&clouds, [2]^Pssg_Node{near_source, nil}, [2]^Pssg_Node{far_source, nil})
+	// The first holder carries two sources, the way norway_rally's does. A graft
+	// clones this one, so it is what a stale `segmentCount` is inherited from.
+	filler := prop_test_node(b, "RENDERDATASOURCE", {prop_test_attr(b, "id", "cloud_alpha_second")}, nil)
+	append(&clouds, [2]^Pssg_Node{near_source, filler}, [2]^Pssg_Node{far_source, nil})
 	append(&roots, near_root, far_root)
 	append(&blocks, near_block, far_block)
 	if extra_name != "" {
@@ -251,6 +261,15 @@ a_grafted_cloud_has_its_own_ids :: proc(t: ^testing.T) {
 
 	clash, clashed := billboard_duplicate_id(&lib)
 	testing.expectf(t, !clashed, "the graft left two nodes with the id %s", clash)
+
+	// The donor holder carries two sources and ours carries one. A holder that
+	// declares more than it holds hangs the load on the source that is missing.
+	holder := lib.by_id["bb_r0_far_00_segments"]
+	if testing.expect(t, holder != nil, "the graft wrote no segment holder") {
+		count, _ := pssg_attr_u32(&lib.file, holder, "segmentCount")
+		testing.expect_value(t, int(count), len(holder.children))
+		testing.expect_value(t, len(holder.children), 1)
+	}
 
 	// The box has to contain every card turned any way around: a 55 m card at
 	// x = 90 reaches 117.5, and the same width applies across z.

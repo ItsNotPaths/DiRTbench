@@ -517,6 +517,9 @@ billboard_cloud_write :: proc(
 	pssg_set_attr_u32(file, block, "elementCount", u32(len(places) * 4), allocator)
 	pssg_set_data(billboard_child(block, "DATABLOCKDATA"), vertices, allocator)
 
+	// `segmentCount` is how many data sources the holder carries, and the donor
+	// may carry two or three. Stock never disagrees; a holder that declares more
+	// than it holds hangs the load looking up a source that is not there.
 	holder := pssg_clone_node(segments.children[0], allocator)
 	for child in holder.children {
 		pssg_node_delete(child, allocator)
@@ -524,6 +527,7 @@ billboard_cloud_write :: proc(
 	clear(&holder.children)
 	append(&holder.children, source)
 	pssg_set_attr_string(file, holder, "id", fmt.tprintf("%s_segments", name), allocator)
+	pssg_set_attr_u32(file, holder, "segmentCount", u32(len(holder.children)), allocator)
 
 	append(&nodes.children, root)
 	append(&segments.children, holder)
