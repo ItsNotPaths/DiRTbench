@@ -526,6 +526,15 @@ row_clone :: proc(t: ^Table, row: Row, allocator := context.allocator) -> Row {
 	return out
 }
 
+row_delete :: proc(t: ^Table, row: Row, allocator := context.allocator) {
+	for value, i in row {
+		if text, is_string := value.(string); is_string && t.fields[i].kind == .String {
+			delete(text, allocator)
+		}
+	}
+	delete(row, allocator)
+}
+
 row_set_int :: proc(t: ^Table, row: Row, name: string, value: i32) -> bool {
 	i, found := table_field(t, name)
 	if !found {
@@ -599,12 +608,7 @@ schema_delete :: proc(tables: []Schema_Table, allocator := context.allocator) {
 database_delete :: proc(db: ^Database, allocator := context.allocator) {
 	for &table in db.tables {
 		for row in table.rows {
-			for value, i in row {
-				if s, is_string := value.(string); is_string && table.fields[i].kind == .String {
-					delete(s, allocator)
-				}
-			}
-			delete(row, allocator)
+			row_delete(&table, row, allocator)
 		}
 		delete(table.rows)
 	}
