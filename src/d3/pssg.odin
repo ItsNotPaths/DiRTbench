@@ -73,6 +73,50 @@ pssg_node_delete :: proc(node: ^Pssg_Node, allocator := context.allocator) {
 	free(node, allocator)
 }
 
+// A deep copy that owns everything it holds, so it can be grafted into a file
+// whose own nodes borrow the input buffer and still be freed by one pssg_delete.
+//
+// Attribute ids and the node type id are kept exactly: they are scoped to the
+// node type, and a clone that renumbers them round-trips cleanly while the game
+// reads nothing. The point of cloning rather than building is that every id in
+// the copy is already known-good.
+pssg_clone_node :: proc(node: ^Pssg_Node, allocator := context.allocator) -> ^Pssg_Node {
+	if node == nil {
+		return nil
+	}
+	out := new(Pssg_Node, allocator)
+	out.type_id = node.type_id
+	out.name = node.name
+	out.attrs = make([dynamic]Pssg_Attr, allocator)
+	out.children = make([dynamic]^Pssg_Node, allocator)
+	for attr in node.attrs {
+		value := make([]u8, len(attr.value), allocator)
+		copy(value, attr.value)
+		append(&out.attrs, Pssg_Attr{type_id = attr.type_id, value = value, owned = true})
+	}
+	if len(node.data) > 0 {
+		out.data = make([]u8, len(node.data), allocator)
+		copy(out.data, node.data)
+		out.data_owned = true
+	}
+	for child in node.children {
+		append(&out.children, pssg_clone_node(child, allocator))
+	}
+	return out
+}
+
+// Replace a leaf's payload with one this file now owns.
+pssg_set_data :: proc(node: ^Pssg_Node, data: []u8, allocator := context.allocator) {
+	if node == nil {
+		return
+	}
+	if node.data_owned {
+		delete(node.data, allocator)
+	}
+	node.data = data
+	node.data_owned = true
+}
+
 pssg_delete :: proc(file: ^Pssg_File, allocator := context.allocator) {
 	pssg_node_delete(file.root, allocator)
 	delete(file.node_names)

@@ -155,6 +155,17 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 			return fmt.tprintf("tracksplit.pssg: %s", tracksplit_msg), false
 		}
 	}
+	// The clouds next, for the same reason: `trees.bin` names them and
+	// `track.vis` censuses that file. A venue whose art has no card cloud to
+	// clone writes none and says so, rather than failing the export.
+	billboards, billboard_msg, billboard_ok := d3_write_billboards(
+		job.venue_dir, export_drawn(job), job.veg, job.roughness, job.props,
+		job.route_index, job.installing,
+	)
+	if !billboard_ok {
+		return fmt.tprintf("billboards: %s", billboard_msg), false
+	}
+
 	route := make([]d3.Route_Sample, len(job.stage.ribbon), context.temp_allocator)
 	for section, i in job.stage.ribbon {
 		half := section.width/2
@@ -191,7 +202,9 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	}
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
-	placement_msg, placement_ok := d3_write_placements(&out, job.donor_route_dir, job.props, job.placed)
+	placement_msg, placement_ok := d3_write_placements(
+		&out, job.donor_route_dir, job.props, job.placed, billboards,
+	)
 	if !placement_ok {
 		return fmt.tprintf("placements: %s", placement_msg), false
 	}
@@ -199,7 +212,10 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !route_ok {
 		return route_msg, false
 	}
-	return fmt.tprintf("tracksplit.pssg: %s; %s; placements: %s", tracksplit_msg, route_msg, placement_msg), true
+	return fmt.tprintf(
+		"tracksplit.pssg: %s; %s; placements: %s; billboards: %s",
+		tracksplit_msg, route_msg, placement_msg, billboard_msg,
+	), true
 }
 
 // The triangle soup, in material order, as a target-agnostic collision list.
@@ -242,6 +258,11 @@ Export_Job :: struct {
 	venue:  Export_Geometry,
 	props:  []geo.Veg_Instance,  // scattered vegetation; empty when disabled
 	placed: []Prop_Instance,     // props placed by hand (props.odin)
+	// What `props` was generated from. The card billboards are generated inside
+	// the target instead, because their sizes come off the venue's own art
+	// (export_dirt3_billboards.odin), so it needs the knobs rather than a list.
+	veg:       geo.Veg_Params,
+	roughness: f32,
 	// Which shaders the stage draws with, resolved from the open venue or from
 	// the venue the selected route lives in. Only the Dirt 3 target needs it,
 	// so a failure to resolve one is carried rather than raised.
@@ -451,6 +472,7 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 		context.temp_allocator,
 	)
 	job.placed = doc.props[:]
+	job.veg, job.roughness = doc.veg, doc.roughness
 
 	// The headless path leaves doc.pace zero-valued, which would read as "every
 	// knob at zero" rather than "unset".

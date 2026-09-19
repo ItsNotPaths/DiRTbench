@@ -353,7 +353,7 @@ an_ornament_gets_no_body_even_where_the_art_has_one :: proc(t: ^testing.T) {
 		if node.tag != "TEMPLATEBASICENTITYINSTANCE" {
 			continue
 		}
-		tag, has_tag := d3.Ens_Attr_Value(node, "instance_tag")
+		tag, has_tag := d3.ens_attr(node, "instance_tag")
 		testing.expect(t, has_tag && tag == "2", "the ornament was given the body")
 	}
 }
@@ -402,11 +402,11 @@ an_object_is_a_dynamic_entity_and_the_scatter_is_not :: proc(t: ^testing.T) {
 		switch node.tag {
 		case "TEMPLATEBASICENTITYINSTANCE":
 			basic += 1
-			_, has_id := d3.Ens_Attr_Value(node, "instanceID")
+			_, has_id := d3.ens_attr(node, "instanceID")
 			testing.expect(t, !has_id, "a static body was given a drawable id")
 		case "TEMPLATEENTITYINSTANCE":
 			full += 1
-			id, has_id := d3.Ens_Attr_Value(node, "instanceID")
+			id, has_id := d3.ens_attr(node, "instanceID")
 			testing.expect(t, has_id && id == "7", "the dynamic entity did not take the next id")
 		}
 	}

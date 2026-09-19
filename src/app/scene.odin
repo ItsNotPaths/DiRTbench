@@ -164,6 +164,7 @@ draw_world :: proc(ed: ^Editor) {
 	geo.gpu_mesh_draw(ed.doc.road, ed.doc.material, ed.wireframe)
 	draw_centreline(ed.doc.ribbon)
 	geo.gpu_mesh_draw(ed.doc.veg_mesh, ed.doc.material, ed.wireframe)
+	geo.gpu_mesh_draw(ed.doc.card_mesh, ed.doc.material, ed.wireframe)
 	draw_props(ed.doc, ed.wireframe)
 }
 

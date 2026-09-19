@@ -90,6 +90,14 @@ prop_lib_bind :: proc(lib: ^Prop_Library, allocator := context.allocator) {
 	slice.sort_by(lib.props[:], proc(a, b: Prop_Entry) -> bool { return a.name < b.name })
 }
 
+// Re-index after nodes have been grafted in or stripped out. `by_id` and `props`
+// are caches over the tree, and either change invalidates both.
+prop_lib_rebind :: proc(lib: ^Prop_Library, allocator := context.allocator) {
+	delete(lib.props)
+	delete(lib.by_id)
+	prop_lib_bind(lib, allocator)
+}
+
 prop_lib_delete :: proc(lib: ^Prop_Library, allocator := context.allocator) {
 	delete(lib.props)
 	delete(lib.by_id)

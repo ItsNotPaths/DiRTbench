@@ -166,7 +166,7 @@ d3_michigan_treeplace_cluster :: proc(allocator := context.allocator) -> []d3.D3
 // Read the written trees.bin back and confirm every instance still resolves
 // to the reference asked for, at the position asked for.
 d3_michigan_treeplace_verify :: proc(new_trees: []u8, want_reference_id: u32, count: int) -> (msg: string, ok: bool) {
-	layout, layout_ok := d3.d3_placement_layout(new_trees)
+	layout, layout_ok := d3.Placement_Layout(new_trees)
 	if !layout_ok { return "wrote trees.bin, but it does not parse back", false }
 	inst_at := d3.binary_load_i32(new_trees, layout.inst_table_at)
 	for i in 0 ..< count {
@@ -188,9 +188,9 @@ dirt3_michigan_treeplace_headless :: proc(route_dir, out_dir: string) -> (msg: s
 	if ornaments_err != nil { return fmt.tprintf("could not read %s: %v", ornaments_path, ornaments_err), false }
 
 	instances := d3_michigan_treeplace_cluster(context.temp_allocator)
-	new_trees, trees_msg, trees_ok := d3.d3_placement_relocate(trees_data, instances, context.temp_allocator)
+	new_trees, trees_msg, trees_ok := d3.Placement_Relocate(trees_data, instances, context.temp_allocator)
 	if !trees_ok { return fmt.tprintf("trees.bin: %s", trees_msg), false }
-	new_ornaments, ornaments_msg, ornaments_ok := d3.d3_placement_relocate(ornaments_data, nil, context.temp_allocator)
+	new_ornaments, ornaments_msg, ornaments_ok := d3.Placement_Relocate(ornaments_data, nil, context.temp_allocator)
 	if !ornaments_ok { return fmt.tprintf("ornaments.bin: %s", ornaments_msg), false }
 
 	if err := os.make_directory_all(out_dir); err != nil && err != os.General_Error.Exist {
@@ -217,12 +217,12 @@ dirt3_michigan_treeplace_headless :: proc(route_dir, out_dir: string) -> (msg: s
 dirt3_placement_raise_headless :: proc(path: string, dy: f32, out_path: string) -> (msg: string, ok: bool) {
 	data, err := os.read_entire_file(path, context.temp_allocator)
 	if err != nil { return fmt.tprintf("could not read %s: %v", path, err), false }
-	instances, read_msg, read_ok := d3.d3_placement_read(data, context.temp_allocator)
+	instances, read_msg, read_ok := d3.Placement_Read(data, context.temp_allocator)
 	if !read_ok { return fmt.tprintf("%s: %s", path, read_msg), false }
 	for &instance in instances { instance.position[1] += dy }
-	out, write_msg, write_ok := d3.d3_placement_relocate(data, instances, context.temp_allocator)
+	out, write_msg, write_ok := d3.Placement_Relocate(data, instances, context.temp_allocator)
 	if !write_ok { return fmt.tprintf("%s: %s", path, write_msg), false }
-	check, check_msg, check_ok := d3.d3_placement_read(out, context.temp_allocator)
+	check, check_msg, check_ok := d3.Placement_Read(out, context.temp_allocator)
 	if !check_ok || len(check) != len(instances) {
 		return fmt.tprintf("raised placement did not parse back: %s", check_msg), false
 	}

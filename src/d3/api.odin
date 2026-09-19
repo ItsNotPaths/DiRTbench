@@ -59,8 +59,14 @@ Export_Job :: struct {
 	Route_Index: int,
 }
 
-// Public entry points used by the editor's headless CLI. The implementation
-// stays package-private; these names are the deliberately small package seam.
+// The names the editor calls this package by.
+//
+// An alias earns its place here for one reason: to strip the `d3_` prefix off a
+// name that would otherwise stutter as `d3.d3_ens_parse`. A proc already named
+// without that prefix — `prop_lib_open`, `billboard_templates` — is called by its
+// own name and gets no entry. Odin exports everything a package does not mark
+// `@(private)`, so this list is a convention, not a barrier, and two live names
+// for one proc is the thing it exists to prevent.
 //
 // The probe entry points that scratch.odin backed are not here: that file lives
 // in `refs/` and is not compiled. Reinstating one means moving the file back and
@@ -70,20 +76,16 @@ Export_Geometry :: export_dirt3_geometry
 Export_Venue_Geometry :: export_dirt3_venue_geometry
 Placement_References :: d3_placement_read_references
 Ens_Parse :: d3_ens_parse
-Ens_Attr_Value :: ens_attr
 Ens_Emit :: d3_ens_emit
 Ens_Placement_Transform :: d3_ens_placement_transform
 Placement_Build :: d3_placement_build
-Prop_Lib_Open :: prop_lib_open
-Prop_Lib_Delete :: prop_lib_delete
-Prop_Lib_Bounds :: prop_lib_reference_bounds
+Placement_Read :: d3_placement_read
+Placement_Layout :: d3_placement_layout
+Placement_Relocate :: d3_placement_relocate
 Placement_Xml_Build :: d3_placement_xml_build
 Write_Out :: d3_write_out
 Stock_Path :: d3_stock_path
-Atomic_Write :: atomic_write_file
-Prepare_Registration :: prepare_registration
-Registration_Output_Delete :: registration_output_delete
-Database_Bytes_Have_Venue :: database_bytes_have_venue
+Backup_Once :: d3_backup_once
 Venue_Profile :: D3_Venue_Profile
 Profile_Load :: d3_profile_load
 Pack_Stamp :: D3_PACK_STAMP

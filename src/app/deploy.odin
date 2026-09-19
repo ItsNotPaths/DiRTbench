@@ -268,7 +268,7 @@ restore_registration_files :: proc(paths, backups: [3]string) -> (msg: string, o
 
 	first_error := ""
 	for path, i in paths {
-		if write_msg, written := d3.Atomic_Write(path, saved[i]); !written {
+		if write_msg, written := d3.atomic_write_file(path, saved[i]); !written {
 			if first_error == "" {
 				first_error = write_msg
 			}
@@ -339,7 +339,7 @@ venue_already_deployed :: proc(vs: ^Install_Scan, p: Venue) -> bool {
 
 @(private = "file")
 venue_deployment_delete :: proc(deployment: ^Venue_Deployment) {
-	d3.Registration_Output_Delete(&deployment.registration)
+	d3.registration_output_delete(&deployment.registration)
 	deployment^ = {}
 }
 
@@ -385,7 +385,7 @@ prepare_venue_deployment :: proc(
 	}
 
 	ids, names := route_ids(p)
-	deployment.registration, msg, ok = d3.Prepare_Registration(
+	deployment.registration, msg, ok = d3.prepare_registration(
 		vs.install.root,
 		source_route.model_id,
 		p.location,
@@ -439,7 +439,7 @@ publish_venue_deployment :: proc(
 		return fmt.tprintf("could not publish %s: %v", target, publish_err), false
 	}
 	for path, i in paths {
-		if write_msg, written := d3.Atomic_Write(path, replacements[i]); !written {
+		if write_msg, written := d3.atomic_write_file(path, replacements[i]); !written {
 			rollback_msg, rolled_back := restore_registration_files(paths, backups)
 			_ = os.remove_all(target)
 			if !rolled_back {
@@ -519,7 +519,7 @@ revert_order_ok :: proc(vs: ^Install_Scan, p: Venue, database_backup: []u8) -> (
 		if !found || !d3.venue_playable(installed^) {
 			continue
 		}
-		if !d3.Database_Bytes_Have_Venue(database_backup, other.location, other.id) {
+		if !d3.database_bytes_have_venue(database_backup, other.location, other.id) {
 			return fmt.tprintf(
 				"revert %s before %s; deployments must be reverted newest first",
 				other.id,

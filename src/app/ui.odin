@@ -668,6 +668,32 @@ draw_veg_section :: proc(ed: ^Editor) {
 	if ui.igCheckbox("vegetation", &v.enabled) {
 		mark_veg_dirty(ed.doc)
 	}
+	// Above the early return on purpose. The wall of cards hides the void past
+	// the terrain, which a stage with no trees at all still has; the near tier
+	// needs the scatter, and takes care of that itself.
+	if ui.igCheckbox("distant billboards", &v.billboards) {
+		// The card sizes come off the venue's own sheets, so read the art now
+		// rather than previewing the nominal pair until a browser is opened.
+		if v.billboards && ed.doc.venue_art.state == .Unloaded {
+			venue_art_load(ed.doc)
+		}
+		mark_veg_dirty(ed.doc)
+	}
+	if v.billboards {
+		near := 0
+		for card in ed.doc.card_cache {
+			if card.tier == .Near {
+				near += 1
+			}
+		}
+		ui.im_text(fmt.ctprintf(
+			"%d wall cards over %.0f m, %d tree cards",
+			len(ed.doc.card_cache) - near, geo.BILLBOARD_WALL_M, near,
+		))
+		if ed.doc.venue_art.state != .Ready {
+			ui.im_text_colored(DIM_COL, "sized off nominal cards until the venue's art is read")
+		}
+	}
 	if !v.enabled {
 		return
 	}

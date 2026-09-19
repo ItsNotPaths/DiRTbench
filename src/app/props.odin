@@ -77,7 +77,7 @@ Prop_Instance :: struct {
 	scale: f32,
 }
 
-Prop_Catalog_State :: enum u8 {
+Venue_Art_State :: enum u8 {
 	Unloaded,
 	Ready,
 	Failed,
@@ -96,7 +96,9 @@ Prop_Drawable :: struct {
 	found: bool,
 }
 
-// The base venue's libraries, parsed once per document.
+// Everything the editor reads off the base venue's art, parsed once per document:
+// which props exist, which of them can collide, the meshes it has uploaded, and
+// the billboard card shapes.
 //
 // `meshes` is filled on demand and never evicted: a venue places a handful of
 // distinct props out of a library of two hundred, and uploading the ones it
@@ -106,19 +108,65 @@ Prop_Drawable :: struct {
 // `bodies` is the venue's `objecttypes.pssg`, which decides what may be placed
 // as an object at all. Small beside the libraries (760 KB at the worst venue in
 // the game against 30 MB of geometry), so it is read in the same pass.
-Prop_Catalog :: struct {
+Venue_Art :: struct {
 	base:   string, // the "<location>/<venue>" it was read for
-	state:  Prop_Catalog_State,
+	state:  Venue_Art_State,
 	msg:    string,
 	libs:   [Prop_Lib_Kind]d3.Prop_Library,
 	refs:   [dynamic]Prop_Ref, // objects then trees, each sorted by name
 	bodies: map[string]string, // mesh -> the entity id an objects.ens body points at
 	meshes: map[Prop_Ref]Prop_Drawable,
+	// The card shapes the venue's treesheet art offers, per tier. Read off
+	// trees.pssg in the same pass because decoding walks every card of every
+	// cloud, which is too much for a rebuild to redo.
+	card_kinds: [geo.Billboard_Tier][]geo.Billboard_Kind,
+}
+
+// Those shapes, or the nominal pair when the art has not been read yet: the
+// preview is then the right shape in the wrong size, which beats no preview.
+//
+// The export does not come through here. It reads the deployed venue's own
+// trees.pssg, which is the one the content pack put there
+// (export_dirt3_billboards.odin).
+venue_art_card_kinds :: proc(doc: ^Venue_Doc) -> (out: [geo.Billboard_Tier][]geo.Billboard_Kind) {
+	out[.Near], out[.Far] = geo.BILLBOARD_NOMINAL_NEAR, geo.BILLBOARD_NOMINAL_FAR
+	cat := &doc.venue_art
+	if cat.state != .Ready {
+		return
+	}
+	for tier in geo.Billboard_Tier {
+		if len(cat.card_kinds[tier]) > 0 {
+			out[tier] = cat.card_kinds[tier]
+		}
+	}
+	return
+}
+
+// The two tiers' card shapes, off whichever clouds the venue's art offers. A
+// venue with no card cloud at all leaves both empty, and both the preview and the
+// export then fall back or write nothing.
+@(private = "file")
+venue_art_read_card_kinds :: proc(lib: ^d3.Prop_Library) -> (out: [geo.Billboard_Tier][]geo.Billboard_Kind) {
+	templates := d3.billboard_templates(lib, context.temp_allocator)
+	defer d3.billboard_templates_delete(templates, context.temp_allocator)
+	for tier in geo.Billboard_Tier {
+		template, found := d3.billboard_template_pick(templates, tier == .Far)
+		if !found {
+			continue
+		}
+		sizes := d3.billboard_template_sizes(template, context.temp_allocator)
+		kinds := make([]geo.Billboard_Kind, len(sizes))
+		for size, i in sizes {
+			kinds[i] = {size[0], size[1]}
+		}
+		out[tier] = kinds
+	}
+	return
 }
 
 // Whether the base venue can collide this mesh. Both browsers list off one
 // `refs` array, so the Objects list is this test rather than a second array.
-prop_has_body :: proc(cat: ^Prop_Catalog, ref: Prop_Ref) -> bool {
+prop_has_body :: proc(cat: ^Venue_Art, ref: Prop_Ref) -> bool {
 	return ref.name in cat.bodies
 }
 
@@ -148,7 +196,7 @@ prop_venue_bodies :: proc(
 		if node.tag != "TEMPLATEENTITY" {
 			continue
 		}
-		id, has_id := d3.Ens_Attr_Value(node, "id")
+		id, has_id := d3.ens_attr(node, "id")
 		if !has_id {
 			continue
 		}
@@ -169,7 +217,7 @@ prop_venue_bodies :: proc(
 
 // Where the prop art lives: the stock venue under the document's content pack.
 // The three library files sit there, one level above `route_n`.
-prop_base_dir :: proc(doc: ^Venue_Doc) -> (dir: string, ok: bool) {
+venue_art_dir :: proc(doc: ^Venue_Doc) -> (dir: string, ok: bool) {
 	if doc.install == nil {
 		return "", false
 	}
@@ -179,13 +227,13 @@ prop_base_dir :: proc(doc: ^Venue_Doc) -> (dir: string, ok: bool) {
 
 // Parse both libraries. Idempotent: already loaded for this base is a no-op, and
 // a base that changed under the document reloads.
-prop_catalog_load :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
-	cat := &doc.props_lib
+venue_art_load :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
+	cat := &doc.venue_art
 	if cat.state == .Ready && cat.base == doc.base {
 		return "", true
 	}
-	prop_catalog_free(doc)
-	dir, have_dir := prop_base_dir(doc)
+	venue_art_free(doc)
+	dir, have_dir := venue_art_dir(doc)
 	if !have_dir {
 		cat.state = .Failed
 		cat.msg = strings.clone("the base venue is not in the installed game")
@@ -195,7 +243,7 @@ prop_catalog_load :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
 		path, _ := filepath.join({dir, file}, context.temp_allocator)
 		lib, lib_msg, lib_ok := d3.prop_lib_open(path)
 		if !lib_ok {
-			prop_catalog_free(doc)
+			venue_art_free(doc)
 			cat.state = .Failed
 			cat.msg = strings.clone(lib_msg)
 			return cat.msg, false
@@ -209,13 +257,14 @@ prop_catalog_load :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
 		}
 	}
 	cat.bodies = prop_venue_bodies(dir)
+	cat.card_kinds = venue_art_read_card_kinds(&cat.libs[.Trees_Pssg])
 	cat.base = strings.clone(doc.base)
 	cat.state = .Ready
 	return "", true
 }
 
-prop_catalog_free :: proc(doc: ^Venue_Doc) {
-	cat := &doc.props_lib
+venue_art_free :: proc(doc: ^Venue_Doc) {
+	cat := &doc.venue_art
 	for ref, &drawable in cat.meshes {
 		geo.gpu_mesh_unload(&drawable.mesh)
 		delete(ref.name)
@@ -229,6 +278,9 @@ prop_catalog_free :: proc(doc: ^Venue_Doc) {
 	for kind in Prop_Lib_Kind {
 		d3.prop_lib_delete(&cat.libs[kind])
 	}
+	for tier in geo.Billboard_Tier {
+		delete(cat.card_kinds[tier])
+	}
 	delete(cat.base)
 	delete(cat.msg)
 	cat^ = {}
@@ -237,7 +289,7 @@ prop_catalog_free :: proc(doc: ^Venue_Doc) {
 // The uploaded geometry for one prop, read from the cache or built into it.
 // Not ok when the catalogue is not loaded, or the library has no such prop.
 prop_drawable :: proc(doc: ^Venue_Doc, ref: Prop_Ref) -> (drawable: Prop_Drawable, ok: bool) {
-	cat := &doc.props_lib
+	cat := &doc.venue_art
 	if cat.state != .Ready {
 		return
 	}
@@ -409,8 +461,8 @@ pick_prop :: proc(doc: ^Venue_Doc, ray: gfx.Ray) -> (idx: int, dist: f32) {
 // venue with props opens showing them rather than waiting to be asked. A failed
 // parse stays failed and is not retried every frame.
 draw_props :: proc(doc: ^Venue_Doc, wireframe: bool) {
-	if len(doc.props) > 0 && doc.props_lib.state == .Unloaded {
-		prop_catalog_load(doc)
+	if len(doc.props) > 0 && doc.venue_art.state == .Unloaded {
+		venue_art_load(doc)
 	}
 	for inst in doc.props {
 		drawable, have := prop_drawable(doc, inst.ref)

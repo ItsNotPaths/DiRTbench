@@ -63,6 +63,9 @@ Rebuild_Job :: struct {
 	ground_mesh: geo.Tri_Mesh,
 	veg:         []geo.Veg_Instance,
 	veg_mesh:    geo.Tri_Mesh,
+	card_kinds:  [geo.Billboard_Tier][]geo.Billboard_Kind, // borrowed; the venue art outlives the job
+	cards:       []geo.Billboard_Card,
+	card_mesh:   geo.Tri_Mesh,
 }
 
 // --- the main thread ---------------------------------------------------------
@@ -125,6 +128,7 @@ rebuild_dispatch :: proc(doc: ^Venue_Doc, dragging, point_drag: bool) {
 		spline     = spline_snapshot(doc.spline),
 		terrain    = terrain_snapshot(doc.terrain),
 		veg_params = doc.veg,
+		card_kinds = venue_art_card_kinds(doc),
 		roughness  = doc.roughness,
 		ribbon_gen = doc.ribbon_gen + (doc.dirty_road ? 1 : 0),
 		held       = doc.ribbon,
@@ -175,12 +179,15 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 		veg_cache_clear(doc)
 		doc.veg_cache = j.veg
 		doc.veg_mesh = geo.gpu_mesh_upload(j.veg_mesh)
+		doc.card_cache = j.cards
+		doc.card_mesh = geo.gpu_mesh_upload(j.card_mesh)
 		doc.veg_gen = j.ribbon_gen
 	}
 
 	geo.tri_mesh_delete(&j.road_mesh)
 	geo.tri_mesh_delete(&j.ground_mesh)
 	geo.tri_mesh_delete(&j.veg_mesh)
+	geo.tri_mesh_delete(&j.card_mesh)
 	delete(j.spline.points)
 	delete(j.terrain.controls)
 	geo.floors_delete(&j.terrain)
@@ -277,6 +284,11 @@ rebuild_job_run :: proc(j: ^Rebuild_Job) {
 	if j.do_veg {
 		j.veg = geo.veg_generate(ribbon, &j.terrain, j.veg_params, j.roughness, context.allocator)
 		j.veg_mesh = geo.veg_build_mesh(j.veg, context.allocator)
+		j.cards = geo.billboards_generate(
+			ribbon, &j.terrain, j.veg_params, j.roughness, j.veg,
+			j.card_kinds[.Near], j.card_kinds[.Far], context.allocator,
+		)
+		j.card_mesh = geo.billboards_build_mesh(j.cards, context.allocator)
 	}
 }
 

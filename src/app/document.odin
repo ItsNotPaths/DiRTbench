@@ -88,11 +88,17 @@ Venue_Doc :: struct {
 	veg_mesh:      geo.Gpu_Mesh,
 	veg_gen:       u64, // ribbon_gen the cache was built at; a mismatch forces a refresh
 	veg_dirty:     bool,
+	// The card billboards (billboards.odin), regenerated on the same tick as the
+	// scatter. Sizes come off the venue's art when that has been
+	// read and off geo's nominal pair when it has not, so the preview can be the
+	// right shape in the wrong size. The export never uses these.
+	card_cache:    []geo.Billboard_Card,
+	card_mesh:     geo.Gpu_Mesh,
 
 	// Props placed by hand (props.odin). Saved with the road; drawn from the
-	// base venue's own libraries, which `props_lib` parses on first ask.
+	// base venue's own libraries, which `venue_art` parses on first ask.
 	props:         [dynamic]Prop_Instance,
-	props_lib:     Prop_Catalog,
+	venue_art:     Venue_Art,
 
 	// ImGui edits this in place, so it is a fixed C string.
 	stage_name:    [64]u8,
@@ -171,6 +177,9 @@ veg_cache_clear :: proc(doc: ^Venue_Doc) {
 	delete(doc.veg_cache)
 	doc.veg_cache = nil
 	geo.gpu_mesh_unload(&doc.veg_mesh)
+	delete(doc.card_cache)
+	doc.card_cache = nil
+	geo.gpu_mesh_unload(&doc.card_mesh)
 }
 
 // Resample the ribbon and re-upload whichever mesh went stale, here and now.
@@ -240,7 +249,7 @@ set_stage_name :: proc(doc: ^Venue_Doc, name: string) {
 // prop libraries are read from.
 doc_set_base :: proc(doc: ^Venue_Doc, base: string) {
 	if doc.base != base {
-		prop_catalog_free(doc) // the catalogue is the old base's art
+		venue_art_free(doc) // this art belongs to the old base
 	}
 	delete(doc.base)
 	doc.base = strings.clone(base)

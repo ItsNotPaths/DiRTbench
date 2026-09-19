@@ -302,6 +302,7 @@ d3_write_placements :: proc(
 	route_dir: string,
 	props: []geo.Veg_Instance,
 	placed: []Prop_Instance,
+	billboards: []d3.Billboard_Cloud = nil,
 ) -> (msg: string, ok: bool) {
 	tree_refs, ornament_refs, bodies, art_msg, art_ok := d3_donor_art(route_dir)
 	if !art_ok {
@@ -318,10 +319,34 @@ d3_write_placements :: proc(
 	species := len(scatter) > 0 ? len(tree_rows) : 0
 
 	// One list from here down. The scatter goes first, so its instance ids are
-	// the low ones and a hand-placed tree numbers on from the last of them.
-	all := make([dynamic]Prop_Instance, 0, len(scatter)+len(placed), context.temp_allocator)
+	// the low ones and a hand-placed tree numbers on from the last of them. The
+	// card clouds come last, and bring their own reference rows: the mesh was
+	// written into `trees.pssg` a moment ago (export_dirt3_billboards.odin), so
+	// it is in no library the row resolver could look it up in, and the bounds
+	// are the ones the graft measured.
+	all := make([dynamic]Prop_Instance, 0, len(scatter)+len(placed)+len(billboards), context.temp_allocator)
 	append(&all, ..scatter)
 	append(&all, ..placed)
+	if len(billboards) > 0 {
+		rows := make([dynamic]d3.D3_Placement_Reference, 0, len(tree_rows)+len(billboards), context.temp_allocator)
+		append(&rows, ..tree_rows)
+		for cloud in billboards {
+			append(&rows, d3.D3_Placement_Reference {
+				reference_id = u32(len(rows)),
+				filename     = cloud.name,
+				bounds_min   = cloud.lo,
+				bounds_max   = cloud.hi,
+			})
+			append(&all, Prop_Instance {
+				ref   = {kind = .Trees_Pssg, name = cloud.name},
+				role  = .Ornament, // drawn and never collided, like every stock cloud
+				pos   = {cloud.centre[0], cloud.centre[1], cloud.centre[2]},
+				rot   = gfx.Quaternion(1),
+				scale = 1,
+			})
+		}
+		tree_rows = rows[:]
+	}
 	donor_rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference
 	donor_rows[.Trees_Pssg], donor_rows[.Objects_Pssg] = tree_rows, ornament_refs
 	rows, placements, forms, place_msg, placed_ok := d3_place_resolve(

@@ -161,14 +161,20 @@ Veg_Params :: struct {
 	density:   f32,   // 0..1; drives the grid spacing
 	road_bias: f32,   // 0..1; how hard the forest is pulled in against the verge
 	seed:      c.int,
+	// Distant card billboards (billboards.odin): the wall that hides the void past
+	// the terrain, and single-tree cards on terrain the trees below do not cover.
+	// Independent of `enabled` — a stage with no trees still has a void, and its
+	// whole terrain is ground with no tree on it.
+	billboards: bool,
 }
 
 VEG_DEFAULTS :: Veg_Params {
-	enabled   = false,
-	preset    = .Firs,
-	density   = 0.5,
-	road_bias = 0.25,
-	seed      = 1,
+	enabled    = false,
+	preset     = .Firs,
+	density    = 0.5,
+	road_bias  = 0.25,
+	seed       = 1,
+	billboards = false,
 }
 
 // Grid spacing (metres) at density 0 and density 1. The scatter walks from sparse
@@ -304,6 +310,22 @@ veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 		y = level
 	}
 	return y, true
+}
+
+// How far out a world point lies, in the same measure `reach` is in: distance
+// from the nearest leg's verge seam, so 0 at the seam and negative on the
+// carriageway. `ok` is false only when no leg is within range at all, which means
+// the point is a long way outside every terrain the road lays.
+//
+// The billboard generator works in this number directly: where the terrain ends
+// is `su > reach`, and that is a property of the *nearest* leg, so it is right on
+// a branch and in a hairpin where a fixed offset from one verge is not.
+veg_field_su :: proc(vf: ^Veg_Field, p: [2]f32) -> (su: f32, ok: bool) {
+	if !vf.ok {
+		return 0, false
+	}
+	pr := field_probe(vf.hash, vf.fs, vf.near_other, p, vf.limit)
+	return pr.su, pr.ok
 }
 
 // --- the scatter -------------------------------------------------------------

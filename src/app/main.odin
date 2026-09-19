@@ -90,7 +90,7 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 	delete(doc.open_venue)
 	delete(doc.base)
 	props_free(doc)
-	prop_catalog_free(doc)
+	venue_art_free(doc)
 	routes_free(&doc.routes)
 }
 

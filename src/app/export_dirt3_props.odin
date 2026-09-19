@@ -85,7 +85,7 @@ d3_place_resolve :: proc(
 	libs, lib_msg, lib_ok := d3_place_libraries(placed, donor_rows, base_dir)
 	defer for &entry in libs {
 		if entry.open {
-			d3.Prop_Lib_Delete(&entry.lib)
+			d3.prop_lib_delete(&entry.lib)
 		}
 	}
 	if !lib_ok {
@@ -137,7 +137,7 @@ d3_place_references :: proc(
 		if lib == nil {
 			return nil, nil, fmt.tprintf("the base venue's library is needed to place %s", inst.ref.name), false
 		}
-		lo, hi, bounds_ok := d3.Prop_Lib_Bounds(lib, inst.ref.name)
+		lo, hi, bounds_ok := d3.prop_lib_reference_bounds(lib, inst.ref.name)
 		if !bounds_ok {
 			return nil, nil, fmt.tprintf("the base venue's art has no prop named %s", inst.ref.name), false
 		}
@@ -335,7 +335,7 @@ d3_place_libraries :: proc(
 			return libs, "placing a prop needs the base venue directory its art lives in", false
 		}
 		path, _ := filepath.join({base_dir, PROP_LIB_FILES[inst.ref.kind]}, context.temp_allocator)
-		lib, lib_msg, lib_ok := d3.Prop_Lib_Open(path)
+		lib, lib_msg, lib_ok := d3.prop_lib_open(path)
 		if !lib_ok {
 			return libs, fmt.tprintf("%s: %s", PROP_LIB_FILES[inst.ref.kind], lib_msg), false
 		}

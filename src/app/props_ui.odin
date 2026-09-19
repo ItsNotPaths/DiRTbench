@@ -6,7 +6,7 @@ package main
 // Two sections of the Inspector, beside Terrain and Vegetation. One browser per
 // `Prop_Role`, because an object and an ornament are placed for different
 // reasons and get picked from different ends of the catalogue. They share the
-// one parse: both list out of `Prop_Catalog.refs`, and the Objects section is
+// one parse: both list out of `Venue_Art.refs`, and the Objects section is
 // that list filtered down to the meshes the venue can collide.
 //
 // Picking a prop happens in the filtered list and nowhere else; the thumbnail
@@ -36,8 +36,8 @@ PROP_PREVIEW_SENS :: 0.01 // radians per pixel of drag
 // One of the two browsers: what it has picked out of the catalogue, the text
 // narrowing its list, and the thumbnail it is spinning.
 //
-// `pick` indexes the catalogue's own ref list rather than naming a prop,
-// because the catalogue owns those strings and a reload frees them.
+// `pick` indexes the venue art's own ref list rather than naming a prop,
+// because that art owns those strings and a reload frees them.
 Prop_Browser :: struct {
 	pick:    int,
 	filter:  [64]u8,
@@ -50,11 +50,11 @@ prop_browser_defaults :: proc() -> Prop_Browser {
 	return {pick = -1, yaw = 0.7, pitch = 0.35}
 }
 
-// The catalogue entry one browser has selected, if any. A pick is dropped when
+// The entry one browser has selected, if any. A pick is dropped when
 // the mesh under it can no longer take the role — a base venue change can turn
 // an object's mesh into one this venue has no rigid body for.
 prop_picked :: proc(ed: ^Editor, role: Prop_Role) -> (ref: Prop_Ref, ok: bool) {
-	cat := &ed.doc.props_lib
+	cat := &ed.doc.venue_art
 	pick := ed.prop_browse[role].pick
 	if cat.state != .Ready || pick < 0 || pick >= len(cat.refs) {
 		return
@@ -65,7 +65,7 @@ prop_picked :: proc(ed: ^Editor, role: Prop_Role) -> (ref: Prop_Ref, ok: bool) {
 
 // Whether a mesh may be placed in this role. Every mesh can be an ornament;
 // only the ones the venue declares an entity type for can be an object.
-prop_role_allowed :: proc(cat: ^Prop_Catalog, ref: Prop_Ref, role: Prop_Role) -> bool {
+prop_role_allowed :: proc(cat: ^Venue_Art, ref: Prop_Ref, role: Prop_Role) -> bool {
 	return role == .Ornament || prop_has_body(cat, ref)
 }
 
@@ -93,7 +93,7 @@ selected_prop :: proc(ed: ^Editor) -> int {
 // Objects first: a prop is more often placed to be hit than to be looked at,
 // and the Objects list is the shorter of the two.
 draw_props_sections :: proc(ed: ^Editor) {
-	if !draw_prop_catalog_gate(ed) {
+	if !draw_venue_art_gate(ed) {
 		return
 	}
 	draw_prop_role_section(ed, .Object)
@@ -101,9 +101,9 @@ draw_props_sections :: proc(ed: ^Editor) {
 }
 
 // The one block both sections would otherwise repeat: no base venue, or a
-// catalogue that has not been parsed yet. True when there is art to browse.
-draw_prop_catalog_gate :: proc(ed: ^Editor) -> bool {
-	cat := &ed.doc.props_lib
+// art that has not been parsed yet. True when there is art to browse.
+draw_venue_art_gate :: proc(ed: ^Editor) -> bool {
+	cat := &ed.doc.venue_art
 	if cat.state == .Ready {
 		return true
 	}
@@ -119,7 +119,7 @@ draw_prop_catalog_gate :: proc(ed: ^Editor) -> bool {
 		ui.im_text_colored(WARN_COL, fmt.ctprint(cat.msg))
 	}
 	if ui.im_button("Load prop library") {
-		msg, ok := prop_catalog_load(ed.doc)
+		msg, ok := venue_art_load(ed.doc)
 		set_status(&ed.status, ok ? "prop library loaded" : msg, ok)
 	}
 	return false
@@ -133,7 +133,7 @@ draw_prop_role_section :: proc(ed: ^Editor, role: Prop_Role) {
 	) {
 		return
 	}
-	cat := &ed.doc.props_lib
+	cat := &ed.doc.venue_art
 	browser := &ed.prop_browse[role]
 
 	listed := 0
@@ -182,7 +182,7 @@ draw_prop_role_section :: proc(ed: ^Editor, role: Prop_Role) {
 //
 // The ids carry the role, so the two lists do not share ImGui state.
 draw_prop_list :: proc(ed: ^Editor, role: Prop_Role) {
-	cat := &ed.doc.props_lib
+	cat := &ed.doc.venue_art
 	browser := &ed.prop_browse[role]
 	filter := strings.to_lower(buf_text(browser.filter[:]), context.temp_allocator)
 	if !ui.igBeginChild_Str(
@@ -238,7 +238,7 @@ prop_preview_build :: proc(doc: ^Venue_Doc, ref: Prop_Ref, out: ^Prop_Preview) {
 		return
 	}
 	prop_preview_clear(out)
-	cat := &doc.props_lib
+	cat := &doc.venue_art
 	if cat.state != .Ready {
 		return
 	}
@@ -246,7 +246,7 @@ prop_preview_build :: proc(doc: ^Venue_Doc, ref: Prop_Ref, out: ^Prop_Preview) {
 	if !ok {
 		return
 	}
-	// Owns the name: the catalogue's copy dies on a reload.
+	// Owns the name: the venue art's copy dies on a reload.
 	out.ref = {kind = ref.kind, name = strings.clone(ref.name)}
 	out.size = {mesh.hi[0] - mesh.lo[0], mesh.hi[1] - mesh.lo[1], mesh.hi[2] - mesh.lo[2]}
 	out.count = len(mesh.tris) / 3
@@ -426,7 +426,7 @@ draw_prop_selection :: proc(ed: ^Editor) {
 // is nothing for an `objects.ens` body to point at, and the prop would export as
 // scenery while claiming to collide.
 draw_prop_role_switch :: proc(ed: ^Editor, inst: ^Prop_Instance) {
-	cat := &ed.doc.props_lib
+	cat := &ed.doc.venue_art
 	for role in Prop_Role {
 		if role != .Ornament {
 			ui.im_same_line()

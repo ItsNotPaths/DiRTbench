@@ -50,6 +50,9 @@ Stage_Veg :: struct {
 	density:   f32,
 	road_bias: f32,
 	seed:      i32,
+	// Distant card billboards. A new key rather than a version bump: a venue
+	// written before it reads as false, which is what an old venue meant.
+	billboards: bool,
 }
 
 Stage_Timing :: struct {
@@ -170,10 +173,11 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 	}
 	road.points = pts
 	road.veg = {
-		enabled   = veg.enabled,
-		density   = veg.density,
-		road_bias = veg.road_bias,
-		seed      = i32(veg.seed),
+		enabled    = veg.enabled,
+		density    = veg.density,
+		road_bias  = veg.road_bias,
+		seed       = i32(veg.seed),
+		billboards = veg.billboards,
 	}
 	road.timing = {buffer_m = timing.buffer_m}
 	{
@@ -293,10 +297,11 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		// them exactly as the venue set them. The file has no say in it.
 		preset := veg.preset
 		veg^ = geo.Veg_Params {
-			enabled   = road.veg.enabled,
-			density   = road.veg.density,
-			road_bias = road.veg.road_bias,
-			seed      = c.int(road.veg.seed),
+			enabled    = road.veg.enabled,
+			density    = road.veg.density,
+			road_bias  = road.veg.road_bias,
+			seed       = c.int(road.veg.seed),
+			billboards = road.veg.billboards,
 		}
 		veg.preset = preset
 	}
