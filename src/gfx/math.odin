@@ -65,6 +65,12 @@ QuaternionToMatrix :: proc(q: Quaternion) -> Matrix { return auto_cast linalg.ma
 QuaternionFromAxisAngle :: proc(axis: Vector3, angle: f32) -> Quaternion {
 	return linalg.quaternion_angle_axis(angle, axis)
 }
+// Shortest-arc rotation taking `from` onto `to`. Applied on the left of a
+// transform's rotation it turns the whole frame in world space, so whatever
+// roll that frame carried comes along untouched.
+QuaternionFromVector3ToVector3 :: proc(from, to: Vector3) -> Quaternion {
+	return linalg.quaternion_between_two_vector3(from, to)
+}
 
 MatrixTranslate :: proc(x, y, z: f32) -> Matrix { return auto_cast linalg.matrix4_translate(Vector3{x, y, z}) }
 MatrixTranspose :: proc(m: Matrix) -> Matrix { return linalg.transpose(m) }

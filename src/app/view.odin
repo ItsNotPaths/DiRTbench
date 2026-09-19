@@ -137,12 +137,20 @@ Editor :: struct {
 	gizmo_active:  bool,
 	gizmo_hovered: bool,
 	gizmo_mode:    Gizmo_Mode,
-	// The terrain brush (brush.odin): the shared gesture state, plus the mask
-	// over the controls it selects and the offsets a move is measured from.
+	// The two brushes (brush.odin). Each holds the shared gesture state plus
+	// what only it selects: terrain a flat mask over the controls, the road a
+	// weight per control point and the transforms a move is measured from.
 	terrain_brush:        Brush,
 	terrain_brush_anchor: f32, // the anchor's offset, held still while sizing
 	terrain_brush_mask:   [dynamic]bool,
 	terrain_brush_offsets: [dynamic]f32,
+	road_brush:           Brush,
+	road_brush_taper:     f32, // share of the reach spent tapering, 0..1
+	road_brush_anchor:    gfx.Transform,
+	road_brush_anchor_id: int, // the point the weights hang off, by id; -1 for none
+	road_brush_weight:    [dynamic]f32,
+	road_brush_snap:      [dynamic]Road_Brush_Snap,
+	road_gizmo_drag:      bool, // a gizmo drag of the selection is under way
 	// The floor outline being drawn, empty when none is (floor_edit.odin). Held
 	// as world points, so the corners keep the heights they were picked at.
 	floor_draw:    [dynamic]gfx.Vector3,
@@ -367,6 +375,8 @@ view_defaults :: proc() -> Editor {
 	return Editor{
 		cam = {target = {10, 3, 48}, distance = 110, yaw = 0.6, pitch = 0.6},
 		preview_speed = 30, // ~108 km/h
+		road_brush_taper = 1, // all taper, so the default road brush is a ramp
+		road_brush_anchor_id = -1,
 		route_sel = -1,
 		prop_browse = {
 			.Ornament = prop_browser_defaults(),
@@ -406,6 +416,7 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	// An unfocused window manipulates nothing and drops any brush it held.
 	if !gfx.WindowFocused(&ed.window) {
 		terrain_brush_clear(ed)
+		road_brush_clear(ed)
 		ed.gizmo_active, ed.gizmo_hovered = false, false
 		return false
 	}
@@ -413,10 +424,7 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	gizmo_used, gizmo_shown := false, false
 	if pi := selected_point(ed); pi >= 0 {
 		gizmo_shown = true
-		gizmo_used = gizmo_manipulate(&ed.doc.spline.points[pi], cam3d, ed.gizmo_mode)
-		if gizmo_used {
-			mark_dirty(ed.doc) // dragging moves a point, so the mesh is stale
-		}
+		gizmo_used = road_brush_gizmo(ed, pi, cam3d)
 	} else if sel_node >= 0 {
 		gizmo_shown = true
 		gizmo_used = terrain_brush_gizmo(ed, node_pos, sel_node, cam3d)
@@ -702,6 +710,7 @@ venue_frame :: proc(ed: ^Editor) {
 	node_pos := geo.terrain_node_world(&ed.doc.terrain, ed.doc.ribbon, ed.doc.roughness)
 	node_active := geo.terrain_node_active_mask(&ed.doc.terrain, node_pos)
 	sel_node := resolve_node_selection(ed, node_pos, node_active)
+	road_brush_resolve(ed)
 	prop_ghost_update(ed, ray)
 
 	draw_venue_scene(ed, cam3d, node_pos, node_active, sel_node)

@@ -107,6 +107,8 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 view_delete :: proc(ed: ^Editor) {
 	delete(ed.terrain_brush_mask)
 	delete(ed.terrain_brush_offsets)
+	delete(ed.road_brush_weight)
+	delete(ed.road_brush_snap)
 	delete(ed.floor_draw)
 	delete(ed.stage_id)
 	for role in Prop_Role {

@@ -13,6 +13,13 @@ GRID_SLICES :: 256
 
 GRID_SPACING :: 32
 
+color_mix :: proc(a, b: gfx.Color, t: f32) -> (out: gfx.Color) {
+	for i in 0 ..< 4 {
+		out[i] = u8(f32(a[i]) + (f32(b[i]) - f32(a[i])) * clamp(t, 0, 1))
+	}
+	return
+}
+
 // --- Picking ----------------------------------------------------------------
 
 ray_ground :: proc(ray: gfx.Ray) -> (hit: gfx.Vector3, ok: bool) {
@@ -121,7 +128,10 @@ draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: gfx.Color) {
 	gfx.DrawLine3D(r, r + cs.up * 4, col)
 }
 
-draw_handles :: proc(sp: geo.Spline, selected: int) {
+// `weights` is the live road brush's hold on each point, or empty. A point it
+// has caught is tinted toward the brush colour by how much of a move it takes,
+// so the falloff is visible before the drag that uses it.
+draw_handles :: proc(sp: geo.Spline, selected: int, weights: []f32 = nil) {
 	for p, i in sp.points {
 		// A weld is an edge with no ribbon handle of its own, so draw the join
 		// itself or there is no way to see that a loop is closed.
@@ -134,7 +144,13 @@ draw_handles :: proc(sp: geo.Spline, selected: int) {
 		}
 		l, r := geo.point_ends(p)
 		gfx.DrawLine3D(l, r, {200, 210, 225, 255}) // rung
-		hcol := i == selected ? gfx.Color{255, 120, 60, 255} : gfx.Color{120, 200, 255, 255}
+		hcol := gfx.Color{120, 200, 255, 255}
+		if i < len(weights) && weights[i] > 0 {
+			hcol = color_mix(hcol, {255, 190, 80, 255}, weights[i])
+		}
+		if i == selected {
+			hcol = {255, 120, 60, 255}
+		}
 		gfx.DrawSphere(p.xform.translation, geo.handle_radius(p.width), hcol)
 		// forward + up ticks so orientation is legible
 		fwd_tip := p.xform.translation + geo.point_forward(p) * (p.width * 0.5)
@@ -180,7 +196,7 @@ draw_venue_scene :: proc(
 	gfx.BeginMode3D(cam3d)
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
 	draw_world(ed.doc, ed.wireframe)
-	draw_handles(ed.doc.spline, selected_point(ed))
+	draw_handles(ed.doc.spline, selected_point(ed), ed.road_brush_weight[:])
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 	draw_floors(ed)
 	if pi := selected_prop(ed); pi >= 0 {
