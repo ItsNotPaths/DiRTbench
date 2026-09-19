@@ -28,7 +28,7 @@ D3_MATERIALS_FILE :: "materials.pssg"
 // A pack is shared and outlives the build that wrote it, so it says which build
 // that was. Raise this whenever the extraction changes, and every pack already
 // on disk is rebuilt instead of silently reused.
-D3_PACK_STAMP :: 1
+D3_PACK_STAMP :: 2
 
 D3_MATERIAL_KEY := [Collision_Material]string {
 	.Road      = "road",

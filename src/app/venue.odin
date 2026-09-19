@@ -929,11 +929,12 @@ pack_headless :: proc(only: string) -> bool {
 		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, context.temp_allocator)
 		if ok {
 			fmt.printfln(
-				"%-18s %6d bytes  road=%-26s terrain=%-26s lod=%-24s batch=%s",
+				"%-18s %6d bytes  road=%-26s terrain=%-26s cliff=%-26s lod=%-24s batch=%s",
 				venue.id,
 				len(profile.template),
 				profile.visual[.Road],
 				profile.visual[.Terrain],
+				profile.visual[.Cliff],
 				profile.lod,
 				profile.batch,
 			)
@@ -970,8 +971,8 @@ venues_headless :: proc() -> bool {
 		if profile, profile_msg, profile_ok := export_profile(&vs, p, context.temp_allocator);
 		   profile_ok {
 			fmt.printfln(
-				"    shaders        road %s, terrain %s, lod %s",
-				profile.visual[.Road], profile.visual[.Terrain], profile.lod,
+				"    shaders        road %s, terrain %s, cliff %s, lod %s",
+				profile.visual[.Road], profile.visual[.Terrain], profile.visual[.Cliff], profile.lod,
 			)
 		} else {
 			fmt.printfln("    shaders        none: %s", profile_msg)

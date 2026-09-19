@@ -55,6 +55,84 @@ d3_shader_base :: proc(id: string) -> string {
 	return id[:at]
 }
 
+// --- the cliff material ------------------------------------------------------
+//
+// No venue ships a surface material for a rock face. Stock rock lives in
+// `terrain_rockbank.fx`, and that group reads a tangent and a binormal our
+// vertex buffer never fills. So the cliff material is made rather than found:
+// the venue's own infield shader, with both its diffuse layers repointed at the
+// venue's rock art.
+//
+// It is made twice, once into the pack and once into the installed venue
+// tracksplit. A route's draw calls name it, and a name no instance answers to
+// draws nothing and says nothing.
+
+D3_CLIFF_MATERIAL :: "dirtbench_cliff"
+
+// The two diffuse layers of `terrain_infield.fx`. A parameter id belongs to the
+// shader group, not to the venue, so these hold everywhere — measured over all
+// nine base-eligible tracksplits. Both layers take the same texture, which
+// leaves the blend map between them nothing to decide.
+d3_infield_diffuse := [?]u32{0x0c, 0x15}
+
+// Rock art, by Codemasters' own texture naming: `rck` is rock, `fea` is a
+// terrain feature, `_d` is the diffuse of the set. Every stock venue holds one,
+// and Kenya's own infield materials draw with them, so the shader takes one.
+d3_rock_words := [?]string{"_rck_", "_fea_", "rock"}
+
+d3_texture_ids :: proc(file: ^Pssg_File, node: ^Pssg_Node, out: ^[dynamic]string) {
+	if node.name == "TEXTURE" {
+		if id := pssg_attr_string(file, node, "id"); id != "" { append(out, id) }
+	}
+	for child in node.children { d3_texture_ids(file, child, out) }
+}
+
+// The first naming that matches, and the lowest name under it, so one venue
+// always yields the same cliff.
+d3_rock_texture :: proc(file: ^Pssg_File, allocator: mem.Allocator) -> string {
+	ids := make([dynamic]string, allocator)
+	d3_texture_ids(file, file.root, &ids)
+	for word in d3_rock_words {
+		best := ""
+		for id in ids {
+			lower := strings.to_lower(id, allocator)
+			if !strings.has_suffix(lower, "_d.tga") || !strings.contains(lower, word) { continue }
+			if best == "" || id < best { best = id }
+		}
+		if best != "" { return best }
+	}
+	return ""
+}
+
+// Clone `donor_id` under the cliff name, repoint its diffuse layers at rock,
+// and hang it in the shader instance library beside the material it came from.
+// Returns the name for the profile, or "" when this venue offers no rock.
+d3_cliff_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	donor_id: string,
+	allocator: mem.Allocator,
+) -> string {
+	donor := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", donor_id)
+	rock := d3_rock_texture(file, allocator)
+	if donor == nil || rock == "" { return "" }
+
+	clone := pssg_clone_node(donor, allocator)
+	if !pssg_set_attr_string(file, clone, "id", D3_CLIFF_MATERIAL, allocator) { return "" }
+	// Local form, as a tracksplit names its own textures. The pack requalifies
+	// every reference it keeps, this one with the rest.
+	local := strings.concatenate({"#", rock}, allocator)
+	painted := 0
+	for input in clone.children {
+		id, known := pssg_attr_u32(file, input, "parameterID")
+		if !known || !slice.contains(d3_infield_diffuse[:], id) { continue }
+		if pssg_set_attr_string(file, input, "texture", local, allocator) { painted += 1 }
+	}
+	if painted != len(d3_infield_diffuse) { return "" }
+	append(&instances.children, clone)
+	return D3_CLIFF_MATERIAL
+}
+
 d3_pack_source_sizes :: proc(file: ^Pssg_File, node: ^Pssg_Node, out: ^map[string]u64) {
 	if node.name == "RENDERDATASOURCE" {
 		id := pssg_attr_string(file, node, "id")
@@ -227,8 +305,20 @@ d3_pack_build :: proc(
 	for pick in surface {
 		if d3_shader_base(pick.id) != d3_shader_base(road) { ground = pick.id; break }
 	}
+	// The cliff draws with rock the venue already owns. Failing that, any third
+	// surface material still beats cutting the cliff out of the road's gravel,
+	// and a venue offering two materials has no choice but the road.
+	cliff := d3_cliff_material(&file, instances, road, scratch)
+	if cliff == "" {
+		cliff = road
+		for pick in surface {
+			base := d3_shader_base(pick.id)
+			if base != d3_shader_base(road) && base != d3_shader_base(ground) { cliff = pick.id; break }
+		}
+	}
 	for material in Collision_Material { profile.visual[material] = road }
 	profile.visual[.Terrain] = ground
+	profile.visual[.Cliff] = cliff
 
 	wanted := make(map[string]bool, scratch)
 	for material in Collision_Material { wanted[profile.visual[material]] = true }

@@ -40,6 +40,10 @@ pack_extract_yields_a_template_the_exporter_can_build_from :: proc(t: ^testing.T
 	// Road and terrain must not collapse onto one name while the source offers
 	// two, or every stage draws in one flat colour.
 	testing.expect(t, profile.visual[.Road] != profile.visual[.Terrain])
+	// The fixture carries shader metadata and no art, so there is no rock to
+	// point a cliff material at. The cliff must fall back to a material that
+	// exists rather than name one nothing answers to.
+	testing.expect(t, profile.visual[.Cliff] != D3_CLIFF_MATERIAL)
 
 	file, read_msg, read_ok := pssg_read(pack, context.temp_allocator)
 	testing.expect(t, read_ok, read_msg); if !read_ok { return }
