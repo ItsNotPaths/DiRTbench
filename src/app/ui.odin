@@ -30,6 +30,11 @@ OBJECT_COL :: ui.Im_Vec4{0.86, 0.29, 0.29, 1.0}
 ORNAMENT_COL :: ui.Im_Vec4{0.82, 0.66, 0.16, 1.0}
 TERRAIN_COL :: ui.Im_Vec4{0.26, 0.59, 0.98, 1.0}
 
+// The generator's own two sections. Its third is Side guards, which borrows
+// GUARD_COL: the same hue as the sidebar panel that edits what it lays down.
+SHAPE_COL :: ui.Im_Vec4{0.64, 0.45, 0.90, 1.0}
+ROAD_COL :: ui.Im_Vec4{0.22, 0.72, 0.70, 1.0}
+
 // --- actions ----------------------------------------------------------------
 
 // The document goes home to its venue file. The road and the markers that make
@@ -191,22 +196,34 @@ draw_generator :: proc(ed: ^Editor) {
 		changed = true
 	}
 
-	ui.igSeparatorText("Shape")
-	if ui.igSliderFloat("length", &g.length_m, 400, 8000, "%.0f m", ui.IM_SLIDER_NONE) {changed = true}
-	if ui.igSliderFloat("curviness", &g.curviness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
-	if ui.igSliderFloat("hairpins", &g.hairpins, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
-	if ui.igSliderFloat("hilliness", &g.hilliness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
-	if ui.igSliderFloat("banking", &g.bank, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
-
-	ui.igSeparatorText("Road")
-	if ui.igSliderFloat("min width", &g.width_min, 3, 20, "%.1f m", ui.IM_SLIDER_NONE) {changed = true}
-	if ui.igSliderFloat("max width", &g.width_max, 3, 20, "%.1f m", ui.IM_SLIDER_NONE) {changed = true}
-	// Sliders can cross; keep the pair ordered rather than letting the
-	// generator emit a negative width range.
-	if g.width_max < g.width_min {
-		g.width_max = g.width_min
+	if ui.im_section_begin("Shape", SHAPE_COL) {
+		if ui.igSliderFloat("length", &g.length_m, 400, 8000, "%.0f m", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("curviness", &g.curviness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("hairpins", &g.hairpins, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("hilliness", &g.hilliness, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("banking", &g.bank, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		ui.im_section_end()
 	}
-	if ui.igSliderFloat("point spacing", &g.spacing_m, 8, 60, "%.0f m", ui.IM_SLIDER_NONE) {changed = true}
+
+	if ui.im_section_begin("Road", ROAD_COL) {
+		if ui.igSliderFloat("min width", &g.width_min, 3, 20, "%.1f m", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("max width", &g.width_max, 3, 20, "%.1f m", ui.IM_SLIDER_NONE) {changed = true}
+		// Sliders can cross; keep the pair ordered rather than letting the
+		// generator emit a negative width range.
+		if g.width_max < g.width_min {
+			g.width_max = g.width_min
+		}
+		if ui.igSliderFloat("point spacing", &g.spacing_m, 8, 60, "%.0f m", ui.IM_SLIDER_NONE) {changed = true}
+		ui.im_section_end()
+	}
+
+	if ui.im_section_begin("Side guards", GUARD_COL) {
+		if ui.igSliderFloat("cliff", &g.guard_cliff, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("bank", &g.guard_bank, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		if ui.igSliderFloat("gutter", &g.guard_gutter, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {changed = true}
+		draw_guard_share_text(g^)
+		ui.im_section_end()
+	}
 
 	ui.igSeparatorText("")
 	if ui.im_button("Generate") {
@@ -226,6 +243,25 @@ draw_generator :: proc(ed: ^Editor) {
 	if changed && ed.doc.gen_live && !ed.gizmo_active {
 		do_generate(ed, false)
 	}
+}
+
+// What the three weights add up to on the road. They are shares of one edge,
+// so a total over 1 is scaled down rather than clipped, and the slider readings
+// stop matching what lands.
+draw_guard_share_text :: proc(g: Gen_Params) {
+	shares := gen_guard_shares(g)
+	bare := f32(1)
+	for w in shares {
+		bare -= w
+	}
+	if bare > 0.005 {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%.0f%% of each edge is bare verge", bare * 100))
+		return
+	}
+	ui.im_text_colored(DIM_COL, fmt.ctprintf(
+		"every edge covered: %.0f/%.0f/%.0f%% cliff/bank/gutter",
+		shares[.Cliff] * 100, shares[.Bank] * 100, shares[.Gutter] * 100,
+	))
 }
 
 // A stage window's panel. The road is read-only here, so this is the stage and
