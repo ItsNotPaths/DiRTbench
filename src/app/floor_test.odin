@@ -155,7 +155,7 @@ editing_one_outline_leaves_the_others_whole :: proc(t: ^testing.T) {
 @(test)
 a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seeds := [?]gfx.Vector3{{0, 0, 0}, {0, 0, 100}, {0, 0, 200}, {0, 0, 300}}
 	for pos, i in seeds {
 		rot := i > 0 ? geo.heading_quat(seeds[i - 1], pos) : gfx.Quaternion(1)
@@ -193,7 +193,7 @@ a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	doc := doc_defaults()
 	defer geo.terrain_delete(&doc.terrain)
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	seed_spline(&doc.spline)
 	doc.terrain.enabled = true
 	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
@@ -209,7 +209,7 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 
 	back := doc_defaults()
 	defer geo.terrain_delete(&back.terrain)
-	defer delete(back.spline.points)
+	defer geo.spline_free(&back.spline)
 	if _, ok := load_road(&back, path); !ok {
 		testing.fail_now(t, "could not read the road back")
 	}
@@ -235,7 +235,7 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 a_road_without_floors_loads_as_none :: proc(t: ^testing.T) {
 	doc := doc_defaults()
 	defer geo.terrain_delete(&doc.terrain)
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	seed_spline(&doc.spline)
 	doc.terrain.enabled = true
 

@@ -151,6 +151,10 @@ Editor :: struct {
 	road_brush_weight:    [dynamic]f32,
 	road_brush_snap:      [dynamic]Road_Brush_Snap,
 	road_gizmo_drag:      bool, // a gizmo drag of the selection is under way
+	// What the Side guards panel's Add button would add. Window state, not the
+	// document's: the venue does not remember which kind you reached for last.
+	guard_kind: geo.Guard_Kind,
+	guard_side: int,
 	// The floor outline being drawn, empty when none is (floor_edit.odin). Held
 	// as world points, so the corners keep the heights they were picked at.
 	floor_draw:    [dynamic]gfx.Vector3,
@@ -238,7 +242,7 @@ stage_resync :: proc(ed: ^Editor) -> bool {
 }
 
 stage_cache_clear :: proc(ed: ^Editor) {
-	delete(ed.stage.spline.points)
+	geo.spline_free(&ed.stage.spline)
 	delete(ed.stage.ribbon)
 	delete(ed.stage.notes)
 	delete(ed.stage.pins)

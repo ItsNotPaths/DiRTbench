@@ -182,7 +182,7 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 	geo.tri_mesh_delete(&j.ground_mesh)
 	geo.tri_mesh_delete(&j.veg_mesh)
 	geo.tri_mesh_delete(&j.card_mesh)
-	delete(j.spline.points)
+	geo.spline_free(&j.spline)
 	delete(j.terrain.controls)
 	geo.floors_delete(&j.terrain)
 	j^ = {}
@@ -232,7 +232,12 @@ terrain_snapshot :: proc(t: geo.Terrain) -> (out: geo.Terrain) {
 }
 
 spline_snapshot :: proc(sp: geo.Spline) -> geo.Spline {
-	return {points = slice.clone_to_dynamic(sp.points[:]), next_id = sp.next_id}
+	return {
+		points = slice.clone_to_dynamic(sp.points[:]),
+		guards = slice.clone_to_dynamic(sp.guards[:]),
+		next_id = sp.next_id,
+		next_guard_id = sp.next_guard_id,
+	}
 }
 
 // --- the worker --------------------------------------------------------------

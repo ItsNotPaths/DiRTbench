@@ -23,12 +23,22 @@ DEFAULT_WIDTH :: 8.0    // metres — plausible rally road width
 SAMPLES_PER_SEG :: 14   // curve subdivisions between two control points
 HERMITE_TENSION :: 1.0  // tangent scale; higher == wider swoops
 
-DEFAULT_CLIFF_SPAN :: 48.0  // metres of road a cliff covers, end to end
-DEFAULT_CLIFF_TAPER :: 16.0 // metres of that span spent rising and falling
+// A new guard's numbers, per kind. See Guard.
+DEFAULT_GUARD_SPAN :: 48.0  // metres of road a guard covers, end to end
+DEFAULT_GUARD_TAPER :: 16.0 // metres of that span spent rising and falling
+
+DEFAULT_CLIFF_HEIGHT :: 4.0
 DEFAULT_CLIFF_ANGLE :: 6.0  // degrees off vertical, leaning away from the road
 // Rock, not a smooth ramp. Mid-slider: the field behind it cannot fold a face at
-// any setting (see CLIFF_ROCK_SLOPE), so this is a look, not a safe limit.
+// any setting, so this is a look, not a safe limit.
 DEFAULT_CLIFF_ROUGH :: 0.5
+
+DEFAULT_BANK_HEIGHT :: 1.2
+DEFAULT_BANK_WIDTH :: 3.0
+DEFAULT_BANK_ROUGH :: 0.35
+
+DEFAULT_GUTTER_DEPTH :: 0.8
+DEFAULT_GUTTER_WIDTH :: 2.5
 
 Point :: struct {
 	// Stable identity, handed out by spline_push/spline_inject and never
@@ -51,48 +61,94 @@ Point :: struct {
 	xform:       gfx.Transform, // translation = centre, rotation = road frame
 	width:       f32,          // road width, metres
 
-	// Cliffs rise from the road's edges, centred on this control point.
-	//
-	//   height  |    ______________              <- cliff_l / cliff_r
-	//           |   /              \
-	//           |  /                \
-	//           |_/__________________\____  road
-	//            <-> <------------> <->
-	//           taper    plateau   taper
-	//            <-------- span -------->
-	//
-	// `span` is the *total* length of road the cliff covers, tapers included,
-	// so the plateau is span - 2*taper. A zero height or a zero span means no
-	// cliff on that side. The taper and the angle are shared by both sides.
-	cliff_l:     f32, // height, metres
-	cliff_r:     f32,
-	span_l:      f32, // total length along the road, metres
-	span_r:      f32,
-	cliff_taper: f32,
-	// Degrees off vertical. Positive leans the face away from the road;
-	// negative leans it back over the road, overhanging it.
-	cliff_angle: f32,
-	// How broken the cliff face reads, 0..1, shared by both sides and lerped
-	// along the road like `cliff_angle`. Nothing to do with `roughness` below:
-	// that one is the road surface a car drives on, this one is rock. See
-	// CLIFF_JITTER in mesh.odin for the amplitude it buys.
-	cliff_rough: f32,
-
 	// Per-node **road surface** roughness offset, added to the global roughness
 	// slider and then clamped to [0,1] along the road (lerped between control
-	// points, like `cliff_angle`). Lets one stretch read rougher or smoother
-	// than the stage baseline. The absolute displacement is hard-capped —
-	// see ROUGH_MAX_M in mesh.odin — because the tightest target is the Trackmania
-	// Stadium car. Signed: negative smooths a stretch below the global baseline.
+	// points). Lets one stretch read rougher or smoother than the stage
+	// baseline. The absolute displacement is hard-capped — see ROUGH_MAX_M in
+	// mesh.odin — because the tightest target is the Trackmania Stadium car.
+	// Signed: negative smooths a stretch below the global baseline.
+	//
+	// Side guards are **not** here: they are their own objects (see Guard), so
+	// one cliff is one thing to edit however many control points it runs past.
 	roughness:   f32,
+}
+
+// What a guard is made of. Each kind is one shape swept along one road edge,
+// and they stack outward in this order: the gutter is cut at the edge, the bank
+// is heaped outside it, and the cliff rises behind both. See verge_profile.
+Guard_Kind :: enum u8 {
+	Cliff,  // rock face, rising away from the road
+	Bank,   // heaped snow or spoil: up to a crest, back down to road level
+	Gutter, // a drainage cut: down to a bottom, back up to road level
+}
+
+// A **side guard**: one run of raised or sunken ground along one edge of the
+// road, shared by every control point it reaches.
+//
+//   size    |    ______________              <- the guard's own shape
+//           |   /              \
+//           |  /                \
+//           |_/__________________\____  road
+//            <-> <------------> <->
+//           taper    plateau   taper
+//            <-------- span -------->
+//
+// `span` is the *total* length of road the guard covers, tapers included, so
+// the plateau is span - 2*taper. The run is measured along the road from the
+// anchor (`at`), by the same graph walk the stage search uses, so it carries
+// past a fork into both branches and over a weld into the road it closes.
+//
+// This is deliberately not a per-control-point number. Shaping a run that
+// covers five nodes used to mean editing five copies of the same slider set and
+// keeping them in step by hand; one guard is one slider set.
+Guard :: struct {
+	// Stable identity, handed out by guard_add and never reused, so the
+	// inspector can hold on to a guard across an edit that reorders the list.
+	id:    int,
+	kind:  Guard_Kind,
+	// Which edge: 0 is the ribbon's left (+right), 1 the other. The same
+	// numbering the verge geometry uses.
+	side:  int,
+	// The control point this guard is centred on, by **array position** — the
+	// same convention Point.parent and Point.weld use, and shift_links and
+	// remove_point keep it honest. The file holds an id instead.
+	at:    int,
+	// Height for Cliff and Bank, depth for Gutter. Metres. Zero is no guard.
+	size:  f32,
+	span:  f32, // total length along the road, metres
+	taper: f32,
+	// Metres outward the shape occupies. Bank and Gutter only: a cliff's run is
+	// its height leaned over by `angle`, so it has none of its own.
+	width: f32,
+	// Cliff only. Degrees off vertical: positive leans the face away from the
+	// road, negative leans it back over the road, overhanging it.
+	angle: f32,
+	// How broken the face reads, 0..1. Cliff and Bank only — a gutter is a cut
+	// drain, not rock. Nothing to do with Point.roughness: that one is the road
+	// surface a car drives on.
+	rough: f32,
 }
 
 Spline :: struct {
 	points:  [dynamic]Point,
+	// Side guards, in no particular order. A guard names its anchor point, and
+	// the control points it covers fall out of the graph walk — see guard_reaches.
+	guards:  [dynamic]Guard,
 	// Hands out point ids. Only ever grows, never on a remove: an id is never
 	// reused, so a marker naming a point that is gone stays unresolvable
 	// rather than quietly landing on some later point.
 	next_id: int,
+	// The same for guards, and for the same reason.
+	next_guard_id: int,
+}
+
+// Everything a spline owns. Two arrays now, which is exactly why this exists:
+// a hand-written `delete(sp.points)` at two dozen call sites was one array
+// behind the moment guards landed.
+spline_free :: proc(sp: ^Spline) {
+	delete(sp.points)
+	delete(sp.guards)
+	sp.points, sp.guards = nil, nil
 }
 
 first_child :: proc(sp: Spline, idx: int) -> int {
@@ -184,6 +240,11 @@ shift_links :: proc(sp: ^Spline, at, skip: int) {
 		if p.parent >= at { p.parent += 1 }
 		if p.weld >= at { p.weld += 1 }
 	}
+	// A guard anchor is an array position too, and it has no `skip`: the guard
+	// stays on the node it was on, wherever that node ended up.
+	for &g in sp.guards {
+		if g.at >= at { g.at += 1 }
+	}
 }
 
 // A sampled slice across the road: everything needed to lay a ribbon rung and
@@ -203,20 +264,29 @@ Cross_Section :: struct {
 	e_from:  int,
 	e_to:    int,
 	t:       f32,
-	// Cliff height at this slice, resolved from every nearby control point's
-	// tapered contribution. Filled by build_ribbon, not by sample_at.
-	cliff_l: f32,
-	cliff_r: f32,
-	// Cliff face angle, degrees off vertical. Unlike the heights this simply
-	// interpolates along the segment, the way width does.
-	cliff_angle: f32,
-	// Cliff face roughness at this slice, lerped the same way. Drives the verge
-	// jitter (verge_vertex); the road surface never reads it.
-	cliff_rough: f32,
+	// Every side guard resolved at this slice: one shape per kind, per edge.
+	// Indexed [side][kind], side 0 being the ribbon's left. Filled by
+	// build_ribbon through resolve_guards, not by sample_at.
+	verge: [2][Guard_Kind]Guard_Shape,
 	// Per-node **road surface** roughness offset at this slice, lerped between
-	// the two control points (like `cliff_angle`). Combined with the global
-	// slider and clamped where the road is displaced (build_road_surface).
+	// the two control points, the way width is. Combined with the global slider
+	// and clamped where the road is displaced (build_road_surface).
 	roughness:   f32,
+}
+
+// One guard kind's shape at one road edge, after every guard that reaches this
+// slice has had its say.
+//
+// Not a lerp between the two neighbouring control points: a span can cover many
+// slices and several spans can overlap one. Overlaps take the **largest**
+// contribution rather than summing, which unions adjacent guards into one run
+// instead of stacking them into a spike, and the winner brings its own shape
+// knobs with it.
+Guard_Shape :: struct {
+	size:  f32, // height (Cliff, Bank) or depth (Gutter), metres
+	width: f32, // metres outward; Cliff leans by `angle` instead
+	angle: f32,
+	rough: f32,
 }
 
 // --- frame helpers ----------------------------------------------------------
@@ -264,30 +334,84 @@ make_point :: proc(
 	pos: gfx.Vector3,
 	rot: gfx.Quaternion,
 	width: f32,
-	cliff_l: f32 = 0,
-	cliff_r: f32 = 0,
-	span_l: f32 = DEFAULT_CLIFF_SPAN,
-	span_r: f32 = DEFAULT_CLIFF_SPAN,
-	cliff_taper: f32 = DEFAULT_CLIFF_TAPER,
-	cliff_angle: f32 = DEFAULT_CLIFF_ANGLE,
-	cliff_rough: f32 = DEFAULT_CLIFF_ROUGH,
-	roughness:   f32 = 0,
-	parent:      int = -1,
+	roughness: f32 = 0,
+	parent:    int = -1,
 ) -> Point {
 	return Point {
-		parent      = parent,
-		weld        = -1,
-		xform       = {translation = pos, rotation = rot, scale = {1, 1, 1}},
-		width       = width,
-		cliff_l     = cliff_l,
-		cliff_r     = cliff_r,
-		span_l      = span_l,
-		span_r      = span_r,
-		cliff_taper = cliff_taper,
-		cliff_angle = cliff_angle,
-		cliff_rough = cliff_rough,
-		roughness   = roughness,
+		parent    = parent,
+		weld      = -1,
+		xform     = {translation = pos, rotation = rot, scale = {1, 1, 1}},
+		width     = width,
+		roughness = roughness,
 	}
+}
+
+// --- guards -----------------------------------------------------------------
+
+// A new guard of `kind` on `side`, anchored at the control point `at`, carrying
+// that kind's defaults. Not yet in any spline: guard_add puts it there.
+guard_make :: proc(kind: Guard_Kind, side, at: int) -> Guard {
+	g := Guard {
+		kind  = kind,
+		side  = side,
+		at    = at,
+		span  = DEFAULT_GUARD_SPAN,
+		taper = DEFAULT_GUARD_TAPER,
+	}
+	switch kind {
+	case .Cliff:
+		g.size, g.angle, g.rough = DEFAULT_CLIFF_HEIGHT, DEFAULT_CLIFF_ANGLE, DEFAULT_CLIFF_ROUGH
+	case .Bank:
+		g.size, g.width, g.rough = DEFAULT_BANK_HEIGHT, DEFAULT_BANK_WIDTH, DEFAULT_BANK_ROUGH
+	case .Gutter:
+		g.size, g.width = DEFAULT_GUTTER_DEPTH, DEFAULT_GUTTER_WIDTH
+	}
+	return g
+}
+
+// Put a guard in the spline and hand it its identity. Returns its index.
+guard_add :: proc(sp: ^Spline, g: Guard) -> int {
+	g := g
+	g.id = sp.next_guard_id
+	sp.next_guard_id += 1
+	append(&sp.guards, g)
+	return len(sp.guards) - 1
+}
+
+guard_remove :: proc(sp: ^Spline, idx: int) {
+	if idx >= 0 && idx < len(sp.guards) {
+		ordered_remove(&sp.guards, idx)
+	}
+}
+
+guard_index :: proc(sp: Spline, id: int) -> int {
+	for g, i in sp.guards { if g.id == id { return i } }
+	return -1
+}
+
+// How far a guard's shape carries from its anchor, in metres of road.
+guard_reach :: proc(g: Guard) -> f32 {
+	return g.size > 0 ? g.span * 0.5 : 0
+}
+
+// Does this guard reach the control point at `idx`? Measured the way the shape
+// itself is measured, so what the inspector offers you to edit at a node is
+// exactly what you can see there.
+guard_reaches :: proc(sp: Spline, g: Guard, idx: int) -> bool {
+	reach := guard_reach(g)
+	if reach <= 0 || g.at < 0 || g.at >= len(sp.points) || idx < 0 || idx >= len(sp.points) {
+		return false
+	}
+	if g.at == idx {
+		return true
+	}
+	// Road distance is never shorter than the straight line, so this rejects
+	// almost every guard without walking anything. The inspector asks once per
+	// guard per frame, and a walk allocates a distance per control point.
+	if gfx.Vector3Distance(sp.points[g.at].xform.translation, sp.points[idx].xform.translation) >= reach {
+		return false
+	}
+	return graph_reach(sp, g.at, reach)[idx] < reach
 }
 
 // --- cubic Hermite ----------------------------------------------------------
@@ -342,12 +466,10 @@ sample_at :: proc(sp: Spline, seg: int, t: f32) -> Cross_Section {
 	right := gfx.Vector3Normalize(gfx.Vector3CrossProduct(up_ref, fwd))
 	up := gfx.Vector3Normalize(gfx.Vector3CrossProduct(fwd, right))
 	width := p0.width + (p1.width - p0.width) * t
-	angle := p0.cliff_angle + (p1.cliff_angle - p0.cliff_angle) * t
 	rough := p0.roughness + (p1.roughness - p0.roughness) * t
-	cliff_rough := p0.cliff_rough + (p1.cliff_rough - p0.cliff_rough) * t
 	return Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
-		width = width, cliff_angle = angle, cliff_rough = cliff_rough, roughness = rough,
+		width = width, roughness = rough,
 		e_from = seg, e_to = seg + 1, t = t,
 	}
 }
@@ -366,8 +488,6 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
 		width = p0.width + (p1.width-p0.width)*t,
 		e_from = parent, e_to = child, t = t,
-		cliff_angle = p0.cliff_angle+(p1.cliff_angle-p0.cliff_angle)*t,
-		cliff_rough = p0.cliff_rough+(p1.cliff_rough-p0.cliff_rough)*t,
 		roughness = p0.roughness+(p1.roughness-p0.roughness)*t,
 	}
 }
@@ -410,7 +530,7 @@ build_ribbon :: proc(
 				append(&out, cs)
 			}
 		}
-		resolve_cliffs(sp, out[:])
+		resolve_guards(sp, out[:])
 		return out[:]
 	}
 	for seg in 0 ..< nseg {
@@ -421,7 +541,7 @@ build_ribbon :: proc(
 		}
 	}
 	append(&out, sample_at(sp, nseg - 1, 1.0))
-	resolve_cliffs(sp, out[:])
+	resolve_guards(sp, out[:])
 	return out[:]
 }
 
@@ -473,12 +593,15 @@ ribbon_curvature :: proc(
 	return k
 }
 
-// The cliff profile along the road: 1 across the plateau, smoothly down to 0
-// at the ends of `span`. `d` is metres of road from the control point.
+// A guard's profile along the road: 1 across the plateau, smoothly down to 0
+// at the ends of `span`. `d` is metres of road from the anchor.
 //
 // The taper is clamped to half the span, so a span narrower than two tapers
 // degenerates into a plateau-less bump rather than inverting.
-cliff_envelope :: proc(d, span, taper: f32) -> f32 {
+//
+// The road brush borrows this for its falloff (app/brush.odin): a weighted
+// selection along the road is the same shape as a guard along the road.
+span_envelope :: proc(d, span, taper: f32) -> f32 {
 	if span <= 0 {
 		return 0
 	}
@@ -495,8 +618,8 @@ cliff_envelope :: proc(d, span, taper: f32) -> f32 {
 	return math.smoothstep(f32(0), f32(1), 1 - (a - plateau) / t)
 }
 
-// Resolve each slice's cliff height from every control point whose span reaches
-// it, measured along the road rather than along the array.
+// Resolve every slice's side guards from each guard whose span reaches it,
+// measured along the road rather than along the array.
 //
 // Distance is the road walk the stage search uses, so a span runs past a fork
 // into both of its branches and over a weld into the road it closes. Nothing
@@ -504,22 +627,15 @@ cliff_envelope :: proc(d, span, taper: f32) -> f32 {
 // branched venue: on a branched one the ribbon is a run per edge, and arc
 // length across those runs means nothing.
 //
-// A slice's height is *not* a lerp between its two neighbouring points: a span
-// can cover many slices and several spans can overlap one. Overlaps take the
-// maximum, which unions adjacent cliffs into one ridge instead of stacking them
-// into a spike.
-//
-// Only points that carry a cliff are walked, and a walk settles only what its
-// own span reaches, so a venue pays for the cliffs it has rather than for its
-// length.
-resolve_cliffs :: proc(sp: Spline, ribbon: []Cross_Section) {
-	for p, i in sp.points {
-		if (p.cliff_l <= 0 || p.span_l <= 0) && (p.cliff_r <= 0 || p.span_r <= 0) {
+// A guard settles only what its own span reaches, so a venue pays for the
+// guards it has rather than for its length.
+resolve_guards :: proc(sp: Spline, ribbon: []Cross_Section) {
+	for g in sp.guards {
+		reach := guard_reach(g)
+		if reach <= 0 || g.at < 0 || g.at >= len(sp.points) {
 			continue
 		}
-		// The wider of the two sides bounds the road this point can touch.
-		reach := max(p.span_l, p.span_r) * 0.5
-		dist := graph_reach(sp, i, reach)
+		dist := graph_reach(sp, g.at, reach)
 		// One length per edge, not per sample: a ribbon runs an edge at a time.
 		last_from, last_to := -1, -1
 		edge_len: f32
@@ -535,8 +651,13 @@ resolve_cliffs :: proc(sp: Spline, ribbon: []Cross_Section) {
 			// `t` stands in for arc fraction across the edge. Control points sit
 			// metres apart, so the two differ by well under the taper.
 			d := min(da + cs.t * edge_len, db + (1 - cs.t) * edge_len)
-			cs.cliff_l = max(cs.cliff_l, p.cliff_l * cliff_envelope(d, p.span_l, p.cliff_taper))
-			cs.cliff_r = max(cs.cliff_r, p.cliff_r * cliff_envelope(d, p.span_r, p.cliff_taper))
+			size := g.size * span_envelope(d, g.span, g.taper)
+			// Largest wins whole, knobs and all: a taller cliff brings its own
+			// angle rather than wearing the one next door. See Guard_Shape.
+			sh := &cs.verge[g.side][g.kind]
+			if size > sh.size {
+				sh^ = {size = size, width = g.width, angle = g.angle, rough = g.rough}
+			}
 		}
 	}
 }
@@ -577,15 +698,10 @@ insert_point :: proc(
 	// Fill around `mid`, never over it: a whole-struct literal here would put
 	// the "nothing was cut" -1 back to 0, which is a live point id.
 	split.a, split.b, split.t = sp.points[from].id, sp.points[to].id, frame.t
-	src := sp.points[from]
+	// Guards are not per point, so inserting into a guarded stretch cannot
+	// punch a notch out of the guard: there is nothing here to keep in step.
 	np := make_point(
-		at, quat_from_frame(frame.fwd, frame.up), frame.width,
-		// Adopt the cliff already resolved at this slice, so inserting into a
-		// cliffed stretch does not punch a notch out of the cliff. The frame
-		// carries the lerped roughness for the same reason.
-		frame.cliff_l, frame.cliff_r,
-		src.span_l, src.span_r, src.cliff_taper, frame.cliff_angle,
-		frame.cliff_rough, frame.roughness, from,
+		at, quat_from_frame(frame.fwd, frame.up), frame.width, frame.roughness, from,
 	)
 	if sp.points[to].parent != from {
 		at_idx := spline_push(sp, np)
@@ -628,6 +744,9 @@ extrude_point :: proc(sp: ^Spline, idx: int) -> int {
 				if p.weld >= 0 { p.weld += 1 }
 			}
 		}
+		// The new head is the copy, so everything that was anchored at the old
+		// head stays on it at its new position.
+		for &g in sp.guards { g.at += 1 }
 		sp.points[0].parent = -1
 		sp.points[0].weld = -1
 		sp.points[1].parent = 0
@@ -655,18 +774,34 @@ remove_point :: proc(sp: ^Spline, idx: int) {
 		// it closed is gone, so drop the edge rather than aim it somewhere else.
 		if p.weld == idx { p.weld = -1 }
 	}
+	// A guard anchored on the node being removed falls back to that node's
+	// parent, so deleting one control point out of a long run does not delete
+	// the run with it. A root with no parent has nothing to fall back on.
+	for i := len(sp.guards) - 1; i >= 0; i -= 1 {
+		if sp.guards[i].at == idx {
+			if parent < 0 {
+				ordered_remove(&sp.guards, i)
+			} else {
+				sp.guards[i].at = parent
+			}
+		}
+	}
 	ordered_remove(&sp.points, idx)
-	// Parents and welds are array positions and shift; ids stay (see next_id).
+	// Parents, welds and guard anchors are array positions and shift; ids stay
+	// (see next_id).
 	for &p in sp.points {
 		if p.parent > idx { p.parent -= 1 }
 		if p.weld > idx { p.weld -= 1 }
+	}
+	for &g in sp.guards {
+		if g.at > idx { g.at -= 1 }
 	}
 }
 
 // Reverse the driving direction: the last control point becomes the first. The
 // physical road is unchanged — only which way it is travelled — so each frame's
-// forward is negated while its surface normal (up) is kept, and the per-side
-// cliffs swap (the old left is the new right). Everything downstream keys off
+// forward is negated while its surface normal (up) is kept, and each guard
+// changes sides (the old left is the new right). Everything downstream keys off
 // travel direction: the ribbon, the pace notes and their left/right, and the
 // preview camera all flip together. Use it on a stage authored end-first.
 reverse_spline :: proc(sp: ^Spline) {
@@ -681,17 +816,22 @@ reverse_spline :: proc(sp: ^Spline) {
 		p.parent = i - 1
 		p.weld = -1
 	}
+	// Anchors are array positions, and every one of them just moved.
+	for &g in sp.guards {
+		g.at = n - 1 - g.at
+		g.side = 1 - g.side
+	}
 }
 
-// The same control point faced the other way: forward negated, the surface
-// normal kept, and the physical sides swapped, because the old left is the new
-// right. A whole chain of these is reverse_spline; one of them is a stage
+// The same control point faced the other way: forward negated and the surface
+// normal kept. A whole chain of these is reverse_spline; one of them is a stage
 // crossing an edge against the way the road was drawn.
+//
+// The physical sides swap with it, but that is the guards' business, not the
+// point's — see reverse_spline.
 point_flipped :: proc(p: Point) -> Point {
 	out := p
 	out.xform.rotation = quat_from_frame(-point_forward(p), point_up(p))
-	out.cliff_l, out.cliff_r = p.cliff_r, p.cliff_l
-	out.span_l, out.span_r = p.span_r, p.span_l
 	return out
 }
 
@@ -699,27 +839,17 @@ point_flipped :: proc(p: Point) -> Point {
 append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
 	rot := gfx.Quaternion(1)
 	width := f32(DEFAULT_WIDTH)
-	cliff_l, cliff_r: f32
-	span_l := f32(DEFAULT_CLIFF_SPAN)
-	span_r := f32(DEFAULT_CLIFF_SPAN)
-	taper := f32(DEFAULT_CLIFF_TAPER)
-	angle := f32(DEFAULT_CLIFF_ANGLE)
-	cliff_rough := f32(DEFAULT_CLIFF_ROUGH)
 	rough: f32
 	if n := len(sp.points); n > 0 {
 		last := sp.points[n - 1]
 		rot = heading_quat(last.xform.translation, at)
-		width = last.width
-		// Carry the cliffs forward: extending a cliffed road should keep its cliffs.
-		cliff_l, cliff_r = last.cliff_l, last.cliff_r
-		span_l, span_r, taper = last.span_l, last.span_r, last.cliff_taper
-		angle = last.cliff_angle
-		cliff_rough, rough = last.cliff_rough, last.roughness
+		width, rough = last.width, last.roughness
 	}
+	// No guard is carried forward. A guard covers the road its own span reaches,
+	// so extending a guarded road runs off the end of the guard rather than
+	// cloning it — bump the span to bring the new road inside it.
 	parent := len(sp.points) - 1
-	return spline_push(sp, make_point(
-		at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, cliff_rough, rough, parent,
-	))
+	return spline_push(sp, make_point(at, rot, width, rough, parent))
 }
 
 // --- markers -----------------------------------------------------------------
@@ -834,18 +964,11 @@ marker_valid :: proc(sp: Spline, m: Road_Marker) -> bool {
 // The control point a marker stands for, framed by the road it sits on.
 marker_point :: proc(sp: Spline, e: Edge_At) -> Point {
 	t := clamp(e.t, MARKER_MARGIN, 1 - MARKER_MARGIN)
-	// Through the resolver, because a start line inside a cliffed stretch has
-	// to come out of a compile standing at the height the road already stands
-	// at. The point itself holds no cliff until this fills it.
-	one := []Cross_Section{sample_edge(sp, e.from, e.to, t)}
-	resolve_cliffs(sp, one)
-	cs := one[0]
-	src := sp.points[e.from]
-	return make_point(
-		cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width,
-		cs.cliff_l, cs.cliff_r, src.span_l, src.span_r,
-		src.cliff_taper, cs.cliff_angle, cs.cliff_rough, cs.roughness, -1,
-	)
+	// No guard to carry: a start line inside a guarded stretch comes out of a
+	// compile guarded because the guard anchored up the road reaches it, the
+	// same as it reached this spot in the venue.
+	cs := sample_edge(sp, e.from, e.to, t)
+	return make_point(cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width, cs.roughness, -1)
 }
 
 // --- the road graph ----------------------------------------------------------
@@ -1281,6 +1404,32 @@ compile_stage :: proc(
 	for &p, i in out.points {
 		p.parent = i - 1
 		p.weld = -1
+	}
+
+	// Carry the guards across. Anchors are array positions, and this chain is a
+	// different array: a venue node at `walk[i]` is `out.points[i + 1]`, past
+	// the start line the chain opens with. A node the stage crosses backwards
+	// takes its guards over to the other side with it, the same swap
+	// point_flipped makes to the frame.
+	//
+	// A guard anchored off the walk is dropped, not re-anchored: moving an
+	// anchor moves the shape, and a stage is meant to be what the venue looks
+	// like along that road, not a redrawn version of it.
+	out.guards = make([dynamic]Guard, allocator)
+	for nd, i in walk {
+		flipped := false
+		if i > 0 {
+			if d, _ := edge_between(sp, walk[i - 1], nd); d == .Against { flipped = true }
+		} else {
+			flipped = dirs[0] == .Against
+		}
+		for g in sp.guards {
+			if g.at != nd { continue }
+			g := g
+			g.at = i + 1
+			if flipped { g.side = 1 - g.side }
+			guard_add(&out, g)
+		}
 	}
 	if len(pins) > 0 {
 		return out, fmt.tprintf("%d control points, %d pins", len(out.points), len(pins)), true

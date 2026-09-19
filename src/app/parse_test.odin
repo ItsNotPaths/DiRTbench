@@ -63,24 +63,24 @@ config_value_may_contain_equals :: proc(t: ^testing.T) {
 @(test)
 cliff_envelope_covers_its_span_and_no_more :: proc(t: ^testing.T) {
 	// span 100, taper 20: plateau out to 30 m either side, zero at 50 m.
-	testing.expect_value(t, geo.cliff_envelope(0, 100, 20), 1)
-	testing.expect_value(t, geo.cliff_envelope(30, 100, 20), 1)
-	testing.expect_value(t, geo.cliff_envelope(-30, 100, 20), 1) // symmetric about the point
-	testing.expect_value(t, geo.cliff_envelope(50, 100, 20), 0)
-	testing.expect_value(t, geo.cliff_envelope(80, 100, 20), 0)
+	testing.expect_value(t, geo.span_envelope(0, 100, 20), 1)
+	testing.expect_value(t, geo.span_envelope(30, 100, 20), 1)
+	testing.expect_value(t, geo.span_envelope(-30, 100, 20), 1) // symmetric about the point
+	testing.expect_value(t, geo.span_envelope(50, 100, 20), 0)
+	testing.expect_value(t, geo.span_envelope(80, 100, 20), 0)
 
-	mid := geo.cliff_envelope(40, 100, 20)
+	mid := geo.span_envelope(40, 100, 20)
 	testing.expect(t, mid > 0 && mid < 1, "the taper must actually ramp")
 
-	testing.expect_value(t, geo.cliff_envelope(0, 0, 20), 0) // no span, no cliff
+	testing.expect_value(t, geo.span_envelope(0, 0, 20), 0) // no span, no cliff
 
 	// A taper wider than half the span degenerates to a bump, never inverting.
 	for d in ([]f32{0, 10, 24, 25, 40}) {
-		v := geo.cliff_envelope(d, 50, 90)
+		v := geo.span_envelope(d, 50, 90)
 		testing.expect(t, v >= 0 && v <= 1, "a fat taper must stay in [0,1]")
 	}
-	testing.expect_value(t, geo.cliff_envelope(0, 50, 90), 1)
-	testing.expect_value(t, geo.cliff_envelope(25, 50, 90), 0)
+	testing.expect_value(t, geo.span_envelope(0, 50, 90), 1)
+	testing.expect_value(t, geo.span_envelope(25, 50, 90), 0)
 }
 
 // --- helper ------------------------------------------------------------------

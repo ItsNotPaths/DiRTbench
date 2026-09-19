@@ -76,7 +76,7 @@ fixture_of :: proc(sp: geo.Spline) -> (f: Fixture) {
 	geo.terrain_ensure(&f.terr, f.ribbon, 0)
 	ds := geo.sample_spacing(f.ribbon)
 	mid := len(f.ribbon) / 2
-	f.seam_x = abs(geo.verge_seam(f.ribbon[mid], 0, geo.VERGE_ROWS, 0).x)
+	f.seam_x = abs(geo.verge_seam(f.ribbon[mid], 0, 0).x)
 	return
 }
 
@@ -84,7 +84,7 @@ fixture_of :: proc(sp: geo.Spline) -> (f: Fixture) {
 fixture_delete :: proc(f: ^Fixture) {
 	geo.terrain_delete(&f.terr)
 	delete(f.ribbon)
-	delete(f.sp.points)
+	geo.spline_free(&f.sp)
 }
 
 // Every card of one tier, with the scatter the stage would really have under it:

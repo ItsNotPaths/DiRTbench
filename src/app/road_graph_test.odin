@@ -9,7 +9,7 @@ import "../geo"
 @(test)
 road_graph_branch_and_remove :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	branch := geo.extrude_point(&sp, 1)
@@ -36,7 +36,7 @@ road_graph_branch_and_remove :: proc(t: ^testing.T) {
 @(test)
 reversing_a_chain_rebuilds_valid_parents :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	original_head := sp.points[0].xform.translation
 	original_tail := sp.points[len(sp.points)-1].xform.translation
@@ -53,7 +53,7 @@ reversing_a_chain_rebuilds_valid_parents :: proc(t: ^testing.T) {
 @(test)
 weld_closes_a_loop_without_touching_the_parent_tree :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 
@@ -82,7 +82,7 @@ weld_closes_a_loop_without_touching_the_parent_tree :: proc(t: ^testing.T) {
 @(test)
 insert_on_a_welded_stretch_stays_on_that_stretch :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	testing.expect(t, geo.weld_points(&sp, tail, 0), "tail should weld back onto the root")
@@ -113,14 +113,14 @@ insert_on_a_welded_stretch_stays_on_that_stretch :: proc(t: ^testing.T) {
 	// compiles the whole way round.
 	pins := []geo.Road_Marker{{tail, idx, 0.5}}
 	lap, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {idx, 0, 0.9}, pins, context.allocator)
-	defer delete(lap.points)
+	defer geo.spline_free(&lap)
 	testing.expect(t, ok, msg)
 }
 
 @(test)
 weld_indices_survive_every_graph_edit :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	// Not to its own parent: that edge already exists, and weld_points says so.
@@ -169,13 +169,13 @@ stage_file_round_trips_a_welded_loop :: proc(t: ^testing.T) {
 @(test)
 compile_trims_the_road_to_the_two_markers :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	stage, msg, ok := geo.compile_stage(
 		sp, {0, 1, 0.5}, {2, 3, 0.5}, nil, context.allocator,
 	)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 
 	// The marker on (0,1), then nodes 1 and 2, then the marker on (2,3).
@@ -193,18 +193,18 @@ compile_trims_the_road_to_the_two_markers :: proc(t: ^testing.T) {
 @(test)
 compile_accepts_two_markers_on_one_edge :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	stage, msg, ok := geo.compile_stage(sp, {1, 2, 0.2}, {1, 2, 0.8}, nil, context.allocator)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, len(stage.points), 2)
 
 	// The same stretch the other way round is a stage too, and the points that
 	// come out of it face the other way.
 	back, back_msg, back_ok := geo.compile_stage(sp, {1, 2, 0.8}, {1, 2, 0.2}, nil, context.allocator)
-	defer delete(back.points)
+	defer geo.spline_free(&back)
 	testing.expect(t, back_ok, back_msg); if !back_ok { return }
 	testing.expect_value(t, len(back.points), 2)
 	dot := gfx.Vector3DotProduct(
@@ -224,7 +224,7 @@ compile_accepts_two_markers_on_one_edge :: proc(t: ^testing.T) {
 @(test)
 compile_runs_a_loop_the_short_way_until_a_pin_says_otherwise :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	testing.expect(t, geo.weld_points(&sp, tail, 0), "tail should weld back onto the root")
@@ -232,14 +232,14 @@ compile_runs_a_loop_the_short_way_until_a_pin_says_otherwise :: proc(t: ^testing
 	// Start just after the root, finish on the weld edge coming back into it.
 	// Both are a few metres from node 0, the short way between them.
 	short, msg, ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, nil, context.allocator)
-	defer delete(short.points)
+	defer geo.spline_free(&short)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, len(short.points), 3) // start, node 0, finish
 
 	// A pin on the far side of the loop forces the whole lap.
 	pins := []geo.Road_Marker{{1, 2, 0.5}}
 	lap, lap_msg, lap_ok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, pins, context.allocator)
-	defer delete(lap.points)
+	defer geo.spline_free(&lap)
 	testing.expect(t, lap_ok, lap_msg); if !lap_ok { return }
 	// Start marker, nodes 1..tail, finish marker on the closing edge.
 	testing.expect_value(t, len(lap.points), 5)
@@ -256,11 +256,13 @@ compile_runs_a_loop_the_short_way_until_a_pin_says_otherwise :: proc(t: ^testing
 @(test)
 compile_runs_a_stage_back_down_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
+	// A right-hand cliff on node 2, which the backwards stage runs past.
+	geo.guard_add(&sp, geo.guard_make(.Cliff, 1, 2))
 
 	stage, msg, ok := geo.compile_stage(sp, {2, 3, 0.5}, {0, 1, 0.5}, nil, context.allocator)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, len(stage.points), 4)
 	testing.expect(t, geo.is_linear(stage))
@@ -268,14 +270,16 @@ compile_runs_a_stage_back_down_the_road :: proc(t: ^testing.T) {
 	fwd := geo.point_forward(stage.points[0])
 	toward_2 := gfx.Vector3Normalize(sp.points[2].xform.translation - stage.points[0].xform.translation)
 	testing.expect(t, gfx.Vector3DotProduct(fwd, toward_2) > 0.5, "a backwards stage must face backwards")
-	// Every side swaps with the direction: what was the left cliff is now right.
-	testing.expect_value(t, stage.points[1].cliff_l, sp.points[2].cliff_r)
+	// Every side swaps with the direction: what was the right-hand guard in the
+	// venue stands on the left of the stage that drives past it backwards.
+	testing.expect_value(t, len(stage.guards), 1)
+	testing.expect_value(t, stage.guards[0].side, 0)
 }
 
 @(test)
 compile_refuses_a_marker_that_is_not_on_an_edge :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	// An edge that is neither a parent edge nor a weld.
@@ -291,7 +295,7 @@ compile_refuses_a_marker_that_is_not_on_an_edge :: proc(t: ^testing.T) {
 @(test)
 compile_crosses_a_fork_between_two_branches :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp) // 0 -> 1 -> 2 -> 3
 	// A second child of node 1, so 1 is a fork with branches (1,2) and (1,spur).
 	spur_at := gfx.Vector3{-60, 4, 60}
@@ -308,7 +312,7 @@ compile_crosses_a_fork_between_two_branches :: proc(t: ^testing.T) {
 
 	// Up one branch, through the apex, down the other.
 	stage, msg, ok := geo.compile_stage(sp, {spur, tip, 0.5}, {2, 3, 0.5}, nil, context.allocator)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 	// Start marker, spur, node 1, node 2, finish marker.
 	testing.expect_value(t, len(stage.points), 5)
@@ -337,7 +341,7 @@ compile_crosses_a_fork_between_two_branches :: proc(t: ^testing.T) {
 @(test)
 compile_takes_the_pins_in_order :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	testing.expect(t, geo.weld_points(&sp, tail, 0))
@@ -345,10 +349,10 @@ compile_takes_the_pins_in_order :: proc(t: ^testing.T) {
 	one := geo.Road_Marker{1, 2, 0.5}
 	two := geo.Road_Marker{2, 3, 0.5}
 	fwd, fmsg, fok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, []geo.Road_Marker{one, two}, context.allocator)
-	defer delete(fwd.points)
+	defer geo.spline_free(&fwd)
 	testing.expect(t, fok, fmsg); if !fok { return }
 	back, bmsg, bok := geo.compile_stage(sp, {0, 1, 0.1}, {tail, 0, 0.9}, []geo.Road_Marker{two, one}, context.allocator)
-	defer delete(back.points)
+	defer geo.spline_free(&back)
 	testing.expect(t, bok, bmsg); if !bok { return }
 	// Same two roads, opposite orders: the second has to double back, so it is
 	// the longer road of the two.
@@ -358,7 +362,7 @@ compile_takes_the_pins_in_order :: proc(t: ^testing.T) {
 @(test)
 compile_refuses_a_pin_that_is_not_on_an_edge :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	_, msg, ok := geo.compile_stage(
@@ -371,13 +375,13 @@ compile_refuses_a_pin_that_is_not_on_an_edge :: proc(t: ^testing.T) {
 @(test)
 compile_keeps_markers_clear_of_the_nodes_they_sit_between :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 
 	// t of exactly 1 would land the marker on node 1 and make a zero-length
 	// first segment, which has no tangent to follow.
 	stage, msg, ok := geo.compile_stage(sp, {0, 1, 1}, {2, 3, 0}, nil, context.allocator)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 	for i in 1 ..< len(stage.points) {
 		d := gfx.Vector3Distance(stage.points[i-1].xform.translation, stage.points[i].xform.translation)
@@ -405,7 +409,7 @@ cliff_r_near :: proc(ribbon: []geo.Cross_Section, at: gfx.Vector3) -> f32 {
 	best, h := max(f32), f32(0)
 	for cs in ribbon {
 		if d := gfx.Vector3Distance(cs.pos, at); d < best {
-			best, h = d, cs.cliff_r
+			best, h = d, cs.verge[1][.Cliff].size
 		}
 	}
 	return h
@@ -417,10 +421,34 @@ cliff_r_on_edge :: proc(ribbon: []geo.Cross_Section, from, to: int) -> f32 {
 	h: f32
 	for cs in ribbon {
 		if cs.e_from == from && cs.e_to == to {
-			h = max(h, cs.cliff_r)
+			h = max(h, cs.verge[1][.Cliff].size)
 		}
 	}
 	return h
+}
+
+// A guard long enough to cover a whole test road at full size: anchored in the
+// middle, square-ended, and spanning further than the road runs.
+@(private = "file")
+guard_everywhere :: proc(sp: ^geo.Spline, kind: geo.Guard_Kind, side: int, size, rough: f32) {
+	g := geo.guard_make(kind, side, len(sp.points) / 2)
+	g.size, g.span, g.taper, g.rough = size, 100_000, 0, rough
+	geo.guard_add(sp, g)
+}
+
+// One cliff on every control point, each with the default run. What a cliff
+// built by hand along a road comes out as: the spans overlap, and the height
+// dips a little between anchors wherever the nodes are further apart than one
+// plateau. Tests that want the height to vary along the road use this.
+@(private = "file")
+cliffs_along :: proc(
+	sp: ^geo.Spline, side: int, size, rough: f32, angle := f32(geo.DEFAULT_CLIFF_ANGLE),
+) {
+	for i in 0 ..< len(sp.points) {
+		g := geo.guard_make(.Cliff, side, i)
+		g.size, g.rough, g.angle = size, rough, angle
+		geo.guard_add(sp, g)
+	}
 }
 
 // A span is metres of road, and a road forks. This is the bug the dirtbench_1
@@ -430,7 +458,7 @@ cliff_r_on_edge :: proc(ribbon: []geo.Cross_Section, from, to: int) -> f32 {
 @(test)
 cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 5, 40) // nodes at z = 0, 40, 80, 120, 160
 
 	// A branch off node 3, far enough past it that no lerp between two ends
@@ -439,9 +467,11 @@ cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
 	sp.points[branch].xform.translation = {30, 0, 150}
 	testing.expect(t, !geo.is_linear(sp), "the test road must take the graph sampler")
 
-	sp.points[2].cliff_r = 5     // at z = 80
-	sp.points[2].cliff_taper = 0 // square ends, so the span is exactly readable
-	sp.points[2].span_r = 60     // 30 m either way: z = 50 .. 110
+	// A right-hand cliff anchored at node 2 (z = 80), square-ended so the span
+	// is exactly readable, 30 m either way: z = 50 .. 110.
+	g := geo.guard_make(.Cliff, 1, 2)
+	g.size, g.taper, g.span = 5, 0, 60
+	gi := geo.guard_add(&sp, g)
 
 	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
 	testing.expect_value(t, cliff_r_near(ribbon, {0, 0, 80}), 5)
@@ -452,7 +482,7 @@ cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
 
 	// Widen it past the fork and it runs into the branch, which is the whole
 	// point of walking the road: 40 m to node 3, then 20 m down the branch.
-	sp.points[2].span_r = 120 // 60 m either way, so z = 20 .. 140
+	sp.guards[gi].span = 120 // 60 m either way, so z = 20 .. 140
 	wide := geo.build_ribbon(sp, 14, context.temp_allocator)
 	testing.expect_value(t, cliff_r_near(wide, {0, 0, 130}), 5)
 	testing.expect(t, cliff_r_on_edge(wide, 3, branch) > 0, "a span past a fork must reach into the branch")
@@ -461,7 +491,7 @@ cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
 	testing.expect_value(t, cliff_r_near(wide, tip), 0)
 
 	// And it comes back when the span is taken away again.
-	sp.points[2].span_r = 0
+	sp.guards[gi].span = 0
 	none := geo.build_ribbon(sp, 14, context.temp_allocator)
 	testing.expect_value(t, cliff_r_near(none, {0, 0, 80}), 0)
 }
@@ -472,21 +502,21 @@ cliff_span_runs_along_the_road_not_the_array :: proc(t: ^testing.T) {
 @(test)
 a_stage_carries_the_cliff_the_venue_shows :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 5, 40)
 	branch := geo.extrude_point(&sp, 3)
 	sp.points[branch].xform.translation = {30, 0, 150}
 
-	sp.points[2].cliff_r = 4
-	sp.points[2].cliff_taper = 10
-	sp.points[2].span_r = 100
+	g := geo.guard_make(.Cliff, 1, 2)
+	g.size, g.taper, g.span = 4, 10, 100
+	geo.guard_add(&sp, g)
 
 	venue := geo.build_ribbon(sp, 14, context.temp_allocator)
 
 	// Drawn direction, so no side swaps: from the first edge to the last of the
 	// main chain.
 	stage, msg, ok := geo.compile_stage(sp, {0, 1, 0.5}, {3, 4, 0.5}, nil, context.allocator)
-	defer delete(stage.points)
+	defer geo.spline_free(&stage)
 	testing.expect(t, ok, msg); if !ok { return }
 	compiled := geo.build_ribbon(stage, 14, context.temp_allocator)
 
@@ -502,7 +532,7 @@ a_stage_carries_the_cliff_the_venue_shows :: proc(t: ^testing.T) {
 @(test)
 graph_reach_measures_the_road_in_metres :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 5, 40)
 
 	near := geo.graph_reach(sp, 2, 50)
@@ -524,9 +554,9 @@ graph_reach_measures_the_road_in_metres :: proc(t: ^testing.T) {
 @(test)
 cliff_roughness_moves_the_face_and_the_road_knob_does_not :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 4, 40)
-	for &p in sp.points { p.cliff_r, p.cliff_rough = 4, 0 }
+	guard_everywhere(&sp, .Cliff, 1, 4, 0)
 	smooth := road_mesh(&sp)
 
 	for &p in sp.points { p.roughness = 1 }
@@ -534,7 +564,9 @@ cliff_roughness_moves_the_face_and_the_road_knob_does_not :: proc(t: ^testing.T)
 	testing.expect_value(t, cliff_dev, 0) // the road knob leaves rock alone
 	testing.expect(t, road_dev > 0.01, "the road knob must move the road")
 
-	for &p in sp.points { p.roughness, p.cliff_rough = 0, 1 }
+	for &p in sp.points { p.roughness = 0 }
+	clear(&sp.guards)
+	guard_everywhere(&sp, .Cliff, 1, 4, 1)
 	cliff_dev, road_dev = mesh_deviation(smooth, road_mesh(&sp))
 	testing.expect(t, cliff_dev > 0.1, "the cliff knob must break up the face")
 	testing.expect_value(t, road_dev, 0) // and leave the road alone
@@ -584,18 +616,15 @@ a_rough_cliff_keeps_its_crest_in_order :: proc(t: ^testing.T) {
 @(private = "file")
 rough_cliff_holds :: proc(t: ^testing.T, spacing: f32) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, spacing) // up +z, so the right-hand cliff stands on -x
-	for &p in sp.points {
-		p.cliff_r = geo.CLIFF_HEIGHT_MAX
-		p.cliff_rough = 1
-	}
+	cliffs_along(&sp, 1, geo.CLIFF_HEIGHT_MAX, 1)
 	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
 	ds := geo.sample_spacing(ribbon)
 
 	moved, prev := false, gfx.Vector3{}
 	for cs, i in ribbon {
-		seam := geo.verge_seam(cs, 1, geo.VERGE_ROWS, 0)
+		seam := geo.verge_seam(cs, 1, 0)
 		if i > 0 {
 			testing.expect(t, seam.z > prev.z, "the crest must not double back along the road")
 			step := abs(seam.x-prev.x) + abs(seam.z-prev.z)
@@ -627,11 +656,12 @@ rough_cliff_holds :: proc(t: ^testing.T, spacing: f32) {
 @(test)
 rock_stands_off_the_face_and_never_over_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, 24) // the cliff stands on -x, the road is 8 m wide
-	for &p in sp.points { p.cliff_r, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 0 }
+	guard_everywhere(&sp, .Cliff, 1, geo.CLIFF_HEIGHT_MAX, 0)
 	smooth := road_mesh(&sp)
-	for &p in sp.points { p.cliff_rough = 1 }
+	clear(&sp.guards)
+	guard_everywhere(&sp, .Cliff, 1, geo.CLIFF_HEIGHT_MAX, 1)
 	rough := road_mesh(&sp)
 
 	relief, n := f32(0), f32(0)
@@ -656,13 +686,13 @@ rock_stands_off_the_face_and_never_over_the_road :: proc(t: ^testing.T) {
 	testing.expect(t, relief/max(n, 1) > 0.4, "a face at full roughness must actually stand off the smooth cut")
 
 	bend: geo.Spline
-	defer delete(bend.points)
+	defer geo.spline_free(&bend)
 	for i in 0 ..< 10 {
 		a := f32(i) * 0.25
 		pos := gfx.Vector3{25*math.cos(a) - 25, 0, 25*math.sin(a)}
 		geo.spline_push(&bend, geo.make_point(pos, gfx.QuaternionFromAxisAngle({0,1,0}, -a), geo.DEFAULT_WIDTH, parent = i - 1))
 	}
-	for &p in bend.points { p.cliff_l, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 1 }
+	guard_everywhere(&bend, .Cliff, 0, geo.CLIFF_HEIGHT_MAX, 1)
 	ribbon := geo.build_ribbon(bend, 14, context.temp_allocator)
 	mesh := geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
 	bend_faces := 0
@@ -694,14 +724,14 @@ rock_stands_off_the_face_and_never_over_the_road :: proc(t: ^testing.T) {
 @(test)
 node_twins_build_the_same_cliff :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, 40)
 	// A branch makes the road a graph, which is what a venue always is, and the
 	// graph sampler is the one that emits the twins.
 	branch := geo.extrude_point(&sp, 3)
 	sp.points[branch].xform.translation = {30, 0, 150}
 	testing.expect(t, !geo.is_linear(sp), "the test road must take the graph sampler")
-	for &p in sp.points { p.cliff_l, p.cliff_r, p.cliff_rough = 5, 5, 1 }
+	for side in 0 ..< 2 { guard_everywhere(&sp, .Cliff, side, 5, 1) }
 
 	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
 	twins := 0
@@ -713,8 +743,8 @@ node_twins_build_the_same_cliff :: proc(t: ^testing.T) {
 				pa := geo.verge_profile(ribbon[i], side)
 				pb := geo.verge_profile(ribbon[j], side)
 				for row in 0 ..= geo.VERGE_ROWS {
-					a := geo.verge_vertex(ribbon[i], pa, side, row, geo.VERGE_ROWS, 0)
-					b := geo.verge_vertex(ribbon[j], pb, side, row, geo.VERGE_ROWS, 0)
+					a := geo.verge_vertex(ribbon[i], pa, side, row, 0)
+					b := geo.verge_vertex(ribbon[j], pb, side, row, 0)
 					testing.expect_value(t, gfx.Vector3Length(a - b), 0)
 				}
 			}
@@ -734,20 +764,21 @@ node_twins_build_the_same_cliff :: proc(t: ^testing.T) {
 @(test)
 the_crest_never_moves :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, 40)
 	branch := geo.extrude_point(&sp, 3)
 	sp.points[branch].xform.translation = {30, 0, 150}
-	for &p in sp.points { p.cliff_l, p.cliff_r, p.cliff_rough = 5, 5, 0 }
+	for side in 0 ..< 2 { guard_everywhere(&sp, .Cliff, side, 5, 0) }
 	smooth := geo.build_ribbon(sp, 14, context.temp_allocator)
-	for &p in sp.points { p.cliff_rough = 1 }
+	clear(&sp.guards)
+	for side in 0 ..< 2 { guard_everywhere(&sp, .Cliff, side, 5, 1) }
 	rough := geo.build_ribbon(sp, 14, context.temp_allocator)
 
 	testing.expect_value(t, len(rough), len(smooth))
 	for i in 0 ..< len(smooth) {
 		for side in 0 ..< 2 {
-			a := geo.verge_seam(smooth[i], side, geo.VERGE_ROWS, 0)
-			b := geo.verge_seam(rough[i], side, geo.VERGE_ROWS, 0)
+			a := geo.verge_seam(smooth[i], side, 0)
+			b := geo.verge_seam(rough[i], side, 0)
 			testing.expect_value(t, gfx.Vector3Length(a - b), 0)
 		}
 	}
@@ -762,21 +793,22 @@ the_crest_never_moves :: proc(t: ^testing.T) {
 a_laid_back_cliff_grows_no_bigger_rock :: proc(t: ^testing.T) {
 	worst_at :: proc(angle: f32) -> f32 {
 		sp: geo.Spline
-		defer delete(sp.points)
+		defer geo.spline_free(&sp)
 		straight_road(&sp, 6, 24)
-		for &p in sp.points { p.cliff_r, p.cliff_angle, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, angle, 0 }
+		cliffs_along(&sp, 1, geo.CLIFF_HEIGHT_MAX, 0, angle)
 		smooth := geo.build_ribbon(sp, 14, context.temp_allocator)
-		for &p in sp.points { p.cliff_rough = 1 }
+		clear(&sp.guards)
+		cliffs_along(&sp, 1, geo.CLIFF_HEIGHT_MAX, 1, angle)
 		rough := geo.build_ribbon(sp, 14, context.temp_allocator)
 
 		worst: f32
 		for i in 0 ..< len(smooth) {
 			ps := geo.verge_profile(smooth[i], 1)
 			pr := geo.verge_profile(rough[i], 1)
-			if ps.n < 2 { continue }
+			if !ps.any { continue }
 			for row in 1 ..< geo.VERGE_ROWS {
-				a := geo.verge_vertex(smooth[i], ps, 1, row, geo.VERGE_ROWS, 0)
-				b := geo.verge_vertex(rough[i], pr, 1, row, geo.VERGE_ROWS, 0)
+				a := geo.verge_vertex(smooth[i], ps, 1, row, 0)
+				b := geo.verge_vertex(rough[i], pr, 1, row, 0)
 				worst = max(worst, gfx.Vector3Length(a - b))
 			}
 		}
@@ -796,9 +828,9 @@ a_laid_back_cliff_grows_no_bigger_rock :: proc(t: ^testing.T) {
 @(test)
 the_cliff_texture_keeps_its_density :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, 24)
-	for &p in sp.points { p.cliff_r, p.cliff_angle, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 45, 1 }
+	cliffs_along(&sp, 1, geo.CLIFF_HEIGHT_MAX, 1, 45)
 	mesh := geo.build_tri_mesh(geo.build_ribbon(sp, 14, context.temp_allocator), 0, context.temp_allocator)
 
 	worst, sum, n := f32(0), f32(0), f32(0)
@@ -825,7 +857,7 @@ the_cliff_texture_keeps_its_density :: proc(t: ^testing.T) {
 @(test)
 grow_road_copies_the_parent_height :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	sp.points[tail].xform.translation.y = 45

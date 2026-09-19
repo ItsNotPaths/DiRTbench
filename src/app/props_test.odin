@@ -8,12 +8,13 @@ package main
 import "core:os"
 import "core:strings"
 import "core:testing"
+import "../geo"
 import "../gfx"
 
 @(test)
 props_round_trip_through_road_json :: proc(t: ^testing.T) {
 	doc := doc_defaults()
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	defer props_free(&doc)
 	seed_spline(&doc.spline)
 	prop_place(&doc, {kind = .Objects_Pssg, name = "core_barr_haybale_e"}, .Object, {12, 3, -40})
@@ -28,7 +29,7 @@ props_round_trip_through_road_json :: proc(t: ^testing.T) {
 	}
 
 	back := doc_defaults()
-	defer delete(back.spline.points)
+	defer geo.spline_free(&back.spline)
 	defer props_free(&back)
 	if _, ok := load_road(&back, path); !ok {
 		testing.fail_now(t, "could not read the road back")
@@ -65,7 +66,7 @@ props_round_trip_through_road_json :: proc(t: ^testing.T) {
 @(test)
 a_road_without_props_loads_as_none :: proc(t: ^testing.T) {
 	doc := doc_defaults()
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	defer props_free(&doc)
 	seed_spline(&doc.spline)
 
@@ -76,7 +77,7 @@ a_road_without_props_loads_as_none :: proc(t: ^testing.T) {
 	}
 
 	back := doc_defaults()
-	defer delete(back.spline.points)
+	defer geo.spline_free(&back.spline)
 	defer props_free(&back)
 	prop_place(&back, {kind = .Objects_Pssg, name = "left_over"}, .Object, {1, 1, 1})
 	if _, ok := load_road(&back, path); !ok {

@@ -359,6 +359,7 @@ draw_inspector_body :: proc(ed: ^Editor) {
 	)
 	ui.im_text_colored(DIM_COL, "1 ramps the whole reach, 0 moves it as a block")
 
+	draw_guards_section(ed)
 	draw_terrain_section(ed)
 	draw_veg_section(ed)
 	draw_props_sections(ed)
@@ -374,6 +375,163 @@ draw_inspector_body :: proc(ed: ^Editor) {
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")
 	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")
+}
+
+// --- side guards ---------------------------------------------------------------
+
+GUARD_KIND_LABEL := [geo.Guard_Kind]cstring {
+	.Cliff  = "Cliff",
+	.Bank   = "Bank",
+	.Gutter = "Gutter",
+}
+
+// How many guards run past the selected control point. The per-point block uses
+// it to say where their sliders went.
+guards_here :: proc(ed: ^Editor, sel: int) -> (n: int) {
+	for g in ed.doc.spline.guards {
+		if geo.guard_reaches(ed.doc.spline, g, sel) { n += 1 }
+	}
+	return
+}
+
+// Cliffs, snow banks and gutters: every guard that runs past the selected
+// control point, and one slider set each.
+//
+// The point is that these are **not** per-point sliders. A guard covering five
+// nodes shows the same numbers at all five, and moving one moves the whole run.
+// Its own panel rather than a block under the selection, because a node inside
+// three guards carries far more rows than a selection footer can hold.
+draw_guards_section :: proc(ed: ^Editor) {
+	if !ui.igCollapsingHeader_TreeNodeFlags("Side guards", ui.IM_TREE_NODE_DEFAULT_OPEN) {
+		return
+	}
+	sp := &ed.doc.spline
+	sel := selected_point(ed)
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%d in this venue", len(sp.guards)))
+	if sel < 0 {
+		ui.im_text_colored(DIM_COL, "select a road point to see the guards along it")
+		return
+	}
+
+	// The kind and side the Add button would use. Radio rows rather than a
+	// combo: the bindings have no combo, and six choices fit on two lines.
+	for kind in geo.Guard_Kind {
+		if ui.igRadioButton_Bool(GUARD_KIND_LABEL[kind], ed.guard_kind == kind) {
+			ed.guard_kind = kind
+		}
+		ui.im_same_line()
+	}
+	if ui.im_button(ed.guard_side == 0 ? "on the left" : "on the right") {
+		ed.guard_side = 1 - ed.guard_side
+	}
+	if ui.im_button(fmt.ctprintf("Add %s at point %d", GUARD_KIND_LABEL[ed.guard_kind], sel)) {
+		geo.guard_add(sp, geo.guard_make(ed.guard_kind, ed.guard_side, sel))
+		mark_dirty(ed.doc)
+	}
+
+	shown := 0
+	// By index, because the sliders write through: a guard removed mid-list
+	// would shift everything after it, so the delete is taken on the way out.
+	remove := -1
+	for i in 0 ..< len(sp.guards) {
+		if !geo.guard_reaches(sp^, sp.guards[i], sel) {
+			continue
+		}
+		shown += 1
+		if draw_guard(ed, i, sel) {
+			remove = i
+		}
+	}
+	if remove >= 0 {
+		geo.guard_remove(sp, remove)
+		mark_dirty(ed.doc)
+	}
+	if shown == 0 {
+		ui.im_text_colored(DIM_COL, "no guard reaches this point")
+	}
+}
+
+// One guard's slider set. Returns true when its Delete was pressed — the caller
+// takes the guard out, because removing it here would invalidate the loop.
+//
+// Every label carries `##<id>` so two guards on one point do not share a widget
+// identity. The id is the guard's own, so a slider keeps its drag across a
+// delete somewhere else in the list.
+draw_guard :: proc(ed: ^Editor, idx, sel: int) -> (remove: bool) {
+	sp := &ed.doc.spline
+	g := &sp.guards[idx]
+	tag := g.id
+	ui.igSeparatorText(fmt.ctprintf(
+		"%s, %s side", GUARD_KIND_LABEL[g.kind], g.side == 0 ? "left" : "right",
+	))
+	if g.at == sel {
+		ui.im_text_colored(DIM_COL, "anchored here")
+	} else {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("anchored at point %d", g.at))
+		ui.im_same_line()
+		// Re-centring is how a run is shaped end to end: drag the span out from
+		// whichever node the middle of it should sit on.
+		if ui.im_button(fmt.ctprintf("Move here##%d", tag)) {
+			g.at = sel
+			mark_dirty(ed.doc)
+		}
+	}
+
+	size_max, size_label := f32(geo.CLIFF_HEIGHT_MAX), cstring("height")
+	switch g.kind {
+	case .Cliff:
+		size_max, size_label = geo.CLIFF_HEIGHT_MAX, "height"
+	case .Bank:
+		size_max, size_label = geo.BANK_HEIGHT_MAX, "height"
+	case .Gutter:
+		size_max, size_label = geo.GUTTER_DEPTH_MAX, "depth"
+	}
+	if ui.igSliderFloat(
+		fmt.ctprintf("%s##%d", size_label, tag), &g.size, 0, size_max, "%.2f m", ui.IM_SLIDER_NONE,
+	) {
+		mark_dirty(ed.doc)
+	}
+	// Span is the whole run, tapers included, measured along the road from the
+	// anchor. Every point it reaches shows this same slider.
+	if ui.igSliderFloat(
+		fmt.ctprintf("span##%d", tag), &g.span, 0, 400, "%.0f m", ui.IM_SLIDER_NONE,
+	) {
+		mark_dirty(ed.doc)
+	}
+	if ui.igSliderFloat(
+		fmt.ctprintf("taper##%d", tag), &g.taper, 0, 100, "%.0f m", ui.IM_SLIDER_NONE,
+	) {
+		mark_dirty(ed.doc)
+	}
+	#partial switch g.kind {
+	case .Bank, .Gutter:
+		// How far out it reaches. Floored at its own size where the geometry is
+		// built, so neither can come out a vertical wall at the road edge.
+		w_max := g.kind == .Bank ? f32(geo.BANK_WIDTH_MAX) : f32(geo.GUTTER_WIDTH_MAX)
+		if ui.igSliderFloat(
+			fmt.ctprintf("width##%d", tag), &g.width, 0, w_max, "%.1f m", ui.IM_SLIDER_NONE,
+		) {
+			mark_dirty(ed.doc)
+		}
+	case .Cliff:
+		if ui.igSliderFloat(
+			fmt.ctprintf("angle##%d", tag), &g.angle,
+			geo.CLIFF_ANGLE_MIN, geo.CLIFF_ANGLE_MAX, "%.1f deg", ui.IM_SLIDER_NONE,
+		) {
+			mark_dirty(ed.doc)
+		}
+	}
+	// The face, not the road. Held at zero a cliff is a smooth ramp, which is
+	// what every stage looked like before this existed. A gutter has none: it is
+	// a cut drain, not rock.
+	if g.kind != .Gutter {
+		if ui.igSliderFloat(
+			fmt.ctprintf("roughness##%d", tag), &g.rough, 0, 1, "%.2f", ui.IM_SLIDER_NONE,
+		) {
+			mark_dirty(ed.doc)
+		}
+	}
+	return ui.im_button(fmt.ctprintf("Delete guard##%d", tag))
 }
 
 // Gates are spread along one compiled stage, so this is a stage window's panel.
@@ -487,14 +645,14 @@ draw_floor_section :: proc(ed: ^Editor) {
 @(rodata)
 SEL_ROWS := [Sel_Kind]f32{
 	.None       = 2,
-	.Point      = 15,
+	.Point      = 8,
 	.Node       = 3,
 	.Floor      = 7,
 	.Floor_Vert = 7,
 	.Prop       = 7,
 }
 
-// Never more than half the dock: a fifteen-row point on a short window would
+// Never more than half the dock: an eight-row point on a short window would
 // otherwise leave nothing above it to scroll.
 selection_block_height :: proc(ed: ^Editor) -> f32 {
 	avail := ui.igGetContentRegionAvail()
@@ -579,31 +737,11 @@ draw_point_selection :: proc(ed: ^Editor) {
 		mark_dirty(ed.doc)
 	}
 
-	ui.igSeparatorText("Cliffs")
-	if ui.igSliderFloat("left height", &p.cliff_l, 0, geo.CLIFF_HEIGHT_MAX, "%.2f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	if ui.igSliderFloat("left span", &p.span_l, 0, 400, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	if ui.igSliderFloat("right height", &p.cliff_r, 0, geo.CLIFF_HEIGHT_MAX, "%.2f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	if ui.igSliderFloat("right span", &p.span_r, 0, 400, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	// Taper and angle are shared by both sides, like the shape of the cliff
-	// rather than the size of it.
-	if ui.igSliderFloat("taper", &p.cliff_taper, 0, 100, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	if ui.igSliderFloat("angle", &p.cliff_angle, geo.CLIFF_ANGLE_MIN, geo.CLIFF_ANGLE_MAX, "%.1f deg", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
-	}
-	// The face, not the road: how broken the rock reads. Held at zero a cliff is
-	// a smooth ramp, which is what every stage looked like before this existed.
-	if ui.igSliderFloat("roughness", &p.cliff_rough, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
-		mark_dirty(ed.doc)
+	// Cliffs, banks and gutters are not here. They are their own objects, shared
+	// by every point they run past, and they have their own panel — see
+	// draw_guards_section.
+	if n := guards_here(ed, sel); n > 0 {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%d side guard%s here, in the Side guards panel", n, n == 1 ? "" : "s"))
 	}
 
 	ui.igSpacing()

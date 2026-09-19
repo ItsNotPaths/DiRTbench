@@ -41,13 +41,16 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
+// v9 lifts cliffs off the control points into `road.guards`, which is also
+// where snow banks and gutters live. Every `cliff_*` and `span_*` key on a road
+// point is gone, and a v8 venue that used them is converted by hand.
 // v8 splits identity from name: `id` became a minted 64-bit number and the
 // name it used to hold became `name`, which also absorbed `location` and the
 // two `names` fields, since all four were only ever the same text twice over.
 // v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
 // or older venue: the tool was not released, and the venues that existed were
 // converted by hand.
-VENUE_VERSION :: 8
+VENUE_VERSION :: 9
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens
@@ -878,7 +881,7 @@ venue_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 }
 
 venue_compiled_delete :: proc(stages: []geo.Spline, allocator := context.allocator) {
-	for stage in stages { delete(stage.points) }
+	for &stage in stages { geo.spline_free(&stage) }
 	delete(stages, allocator)
 }
 
@@ -1014,7 +1017,7 @@ venue_tracksplit_collision :: proc(
 	if load_msg, loaded := load_road(&doc, venue_file(p)); !loaded {
 		return nil, nil, load_msg, false
 	}
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a venue that has none.
 	doc.terrain.enabled = doc.terrain.enabled || terrain

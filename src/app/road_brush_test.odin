@@ -50,7 +50,7 @@ road_brush_drag :: proc(ed: ^Editor, anchor: int, by: gfx.Vector3, turn := gfx.Q
 road_brush_free :: proc(ed: ^Editor, doc: ^Venue_Doc) {
 	delete(ed.road_brush_weight)
 	delete(ed.road_brush_snap)
-	delete(doc.spline.points)
+	geo.spline_free(&doc.spline)
 }
 
 // Distance is measured along the road and the weight tapers across it, so the

@@ -25,7 +25,7 @@ terrain_world_control_is_exact_at_its_handle :: proc(t: ^testing.T) {
 @(test)
 branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 200}, 0},
@@ -96,7 +96,7 @@ branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 @(test)
 nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	// Segment lengths and sampling as the editor uses them: the rim must come out
 	// denser than the corridor is wide, or Delaunay bridges the road instead of
 	// running its edges along the rim, and no centroid test can tell the two apart.
@@ -221,7 +221,7 @@ thickest_patch :: proc(trees: []geo.Veg_Instance) -> (worst: int) {
 @(test)
 vegetation_rows_stay_on_the_road :: proc(t: ^testing.T) {
 	sp := branched_road()
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
 	arc := geo.ribbon_arc(ribbon, context.allocator)
@@ -265,8 +265,8 @@ vegetation_does_not_thicken_at_a_branch :: proc(t: ^testing.T) {
 	}
 
 	forked, plain := branched_road(), straight_road()
-	defer delete(forked.points)
-	defer delete(plain.points)
+	defer geo.spline_free(&forked)
+	defer geo.spline_free(&plain)
 
 	branch_worst, straight_worst := patch(forked, veg), patch(plain, veg)
 	testing.expectf(t, branch_worst <= straight_worst + 2,
@@ -280,7 +280,7 @@ vegetation_does_not_thicken_at_a_branch :: proc(t: ^testing.T) {
 @(test)
 road_bias_pulls_the_scatter_in :: proc(t: ^testing.T) {
 	sp := straight_road()
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
 
@@ -318,7 +318,7 @@ road_bias_pulls_the_scatter_in :: proc(t: ^testing.T) {
 @(test)
 vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 	sp := branched_road()
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
@@ -385,7 +385,7 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 @(test)
 a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},  // the junction

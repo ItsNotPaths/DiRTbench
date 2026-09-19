@@ -482,7 +482,6 @@ veg_generate :: proc(
 	spacing := VEG_SPACING_SPARSE + (VEG_SPACING_DENSE - VEG_SPACING_SPARSE) * clamp(veg.density, 0, 1)
 	spacing = max(spacing, 1)
 	bias := clamp(veg.road_bias, 0, 1)
-	vrows := VERGE_ROWS
 	pool := veg_pool(veg.preset)
 	near := VEG_U_NEAR + (VEG_U_NEAR_TIGHT - VEG_U_NEAR) * bias
 	span := reach - near
@@ -523,7 +522,7 @@ veg_generate :: proc(
 		fwd = gfx.Vector3Length(fwd) > 1e-4 ? gfx.Vector3Normalize(fwd) : gfx.Vector3{0, 0, 1}
 
 		for side in 0 ..< 2 {
-			seam := verge_seam(cs, side, vrows, roughness)
+			seam := verge_seam(cs, side, roughness)
 			o := terrain_outward(cs, side)
 
 			for col in columns {

@@ -18,19 +18,26 @@ package geo
 import "core:math"
 import "../gfx"
 
-// Cliff shape. Heights, spans, tapers and the face angle are per-point (see
-// spline.odin); these are the constants that give a cliff its character.
-CLIFF_MIN :: 0.01 // below this a cliff is nothing, and emits no geometry
+// Side-guard shape. A guard's size, span, taper and knobs are the guard's own
+// (see Guard in spline.odin); these are the limits and the constants that give
+// each kind its character.
+GUARD_MIN :: 0.01 // below this a guard is nothing, and emits no geometry
 
-// Face angle limits, degrees off vertical. Negative overhangs the road; the
-// lower bound is small because a steep overhang would let the cliff face poke
-// down through the road surface it grew from.
+// Cliff face angle limits, degrees off vertical. Negative overhangs the road;
+// the lower bound is small because a steep overhang would let the cliff face
+// poke down through the road surface it grew from.
 CLIFF_ANGLE_MIN :: -5.0
 CLIFF_ANGLE_MAX :: 75.0
 
-// Height slider range, metres. A rally stage is walled by rock cuttings and
-// banks a car could plausibly be contained by, not by canyon faces.
+// Slider ranges, metres. A rally stage is walled by rock cuttings and banks a
+// car could plausibly be contained by, not by canyon faces.
 CLIFF_HEIGHT_MAX :: 7.0
+BANK_HEIGHT_MAX :: 3.0
+BANK_WIDTH_MAX :: 12.0
+// A gutter deep enough to swallow a wheel is already a stage-ending ditch, and
+// the width is what keeps its walls off vertical.
+GUTTER_DEPTH_MAX :: 2.0
+GUTTER_WIDTH_MAX :: 10.0
 
 // Rock on a cliff face.
 //
@@ -266,13 +273,24 @@ add_quad :: proc(
 // terrain takes over. It is a polyline in the road frame's (outward, up) plane,
 // starting at the road edge, and it is swept along the road to make a surface.
 //
-// Today the only verge is a cliff: one segment, rising outward. A ditch is the
-// same idea with a segment that falls before it rises, and a ditch with a cliff
-// behind it is three segments. Nothing outside this section knows which, and in
-// particular the terrain (terrain.odin) consumes only `verge_seam` — the
-// profile's last point — so it needs no change when ditches land.
+// One segment per side-guard face, always in the same order and always all of
+// them: gutter down, gutter up, bank up, bank down, cliff. An absent guard is
+// not a shorter polyline — it is one whose two points sit on top of each other,
+// so the row a sweep spends there lands where the last one did and the quad
+// between them is degenerate. add_tri drops those.
 //
-// This is why a ditch is *not* a negative cliff height: the sign of one number
+// **That fixed layout is the whole trick.** Rows are handed out per segment, so
+// how finely the cliff is cut does not depend on whether there is a gutter in
+// front of it, and two neighbouring cross-sections agree on what row 7 means
+// even when one has a bank and the other does not. The alternative — spacing
+// rows by the polyline's total arc — rounds the corners off every shape and
+// re-cuts the cliff whenever the gutter beside it changes width.
+//
+// Nothing outside this section knows which guards are in play. In particular
+// the terrain (terrain.odin) consumes only `verge_seam`, the profile's last
+// point, whatever built it.
+//
+// This is why a gutter is *not* a negative cliff height: the sign of one number
 // cannot add a vertex to the profile.
 
 // Deterministic per-vertex hash. The jitter must not change frame to frame, and
@@ -288,78 +306,154 @@ hash_u32 :: proc(x: u32) -> u32 {
 }
 
 // side 0 = the verge on the ribbon's `left` end (+right), side 1 = the other.
-cliff_height :: proc(cs: Cross_Section, side: int) -> f32 {
-	return side == 0 ? cs.cliff_l : cs.cliff_r
+verge_size :: proc(cs: Cross_Section, side: int, kind: Guard_Kind) -> f32 {
+	return cs.verge[side][kind].size
 }
 
 // A point on the profile: metres outward from the road edge, metres up from it.
 // `up` is the road frame's, so a banked road banks its verges with it.
 Verge_Point :: [2]f32
 
-// Room for the ditch profile (fall, rise, and a cliff behind it) without
-// resizing anything. `pts[0]` is always the road edge, {0,0}.
-VERGE_MAX_PTS :: 4
+// The segments, in the order they are laid outward from the road edge.
+Verge_Seg_Id :: enum u8 {
+	Gutter_In,  // road edge down to the drain bottom
+	Gutter_Out, // and back up to road level
+	Bank_In,    // up to the bank crest
+	Bank_Out,   // and back down to where the bank started
+	Cliff,      // the rock face behind the lot
+}
+VERGE_SEGS :: len(Verge_Seg_Id)
+VERGE_PTS :: VERGE_SEGS + 1
+
+// Rows the sweep spends on each segment. A guard that is not there still costs
+// its rows, which land on one another and emit nothing — the price of a row
+// layout that does not shift under the profile beside it.
+VERGE_GUTTER_ROWS :: 2
+VERGE_BANK_ROWS :: 2
+VERGE_CLIFF_ROWS :: 4
+VERGE_SEG_ROWS := [Verge_Seg_Id]int {
+	.Gutter_In  = VERGE_GUTTER_ROWS,
+	.Gutter_Out = VERGE_GUTTER_ROWS,
+	.Bank_In    = VERGE_BANK_ROWS,
+	.Bank_Out   = VERGE_BANK_ROWS,
+	.Cliff      = VERGE_CLIFF_ROWS,
+}
+
+// How many rows a verge profile is swept into, all segments together.
+VERGE_ROWS :: 2 * VERGE_GUTTER_ROWS + 2 * VERGE_BANK_ROWS + VERGE_CLIFF_ROWS
+
+// What one segment inherits from the guard that drew it, so a vertex on it can
+// be jittered without going back to the cross-section to ask whose it is.
+Verge_Seg :: struct {
+	size:   f32, // the guard's own size, which is what sizes its rock
+	rough:  f32,
+	// Where this segment sits in its guard's *own* face, 0 to 1. The jitter
+	// fades to nothing at 0 and 1, so it dies at each guard's own ends rather
+	// than only at the two ends of the whole profile — otherwise a bank with a
+	// cliff behind it would be shaken loose from the road edge.
+	f0, f1: f32,
+	base_x: f32, // outward distance the guard's face starts at
+	run:    f32, // arc length of the guard's whole face
+}
 
 Verge_Profile :: struct {
-	pts: [VERGE_MAX_PTS]Verge_Point,
-	n:   int, // points in use, >= 1; n < 2 means "no verge this side"
-	len: f32, // total arc length of the polyline
+	pts: [VERGE_PTS]Verge_Point,
+	seg: [Verge_Seg_Id]Verge_Seg,
+	any: bool, // false means "no verge this side": every point is the road edge
 }
 
-// The profile at one cross-section, one side.
+// The profile at one cross-section, one side. Guards stack outward in the order
+// they are cut: the gutter at the road edge, the bank heaped outside it, the
+// cliff rising behind both.
 verge_profile :: proc(cs: Cross_Section, side: int) -> Verge_Profile {
-	p: Verge_Profile
-	p.n = 1 // pts[0] = {0,0}, the road edge
-	if h := cliff_height(cs, side); h > CLIFF_MIN {
-		// The face is a plane tilted `cliff_angle` degrees off vertical, so its
+	v := cs.verge[side]
+	prof: Verge_Profile
+	at := Verge_Point{0, 0} // outer end of what has been laid so far
+
+	// A guard narrower than it is tall is a wall, and a wall at the road edge is
+	// a vertical face the car cannot climb out of. The width floor is what keeps
+	// every gutter and bank a slope.
+	if g := v[.Gutter]; g.size > GUARD_MIN {
+		w := max(g.width, g.size)
+		prof.pts[1] = {at.x + w * 0.5, at.y - g.size}
+		prof.pts[2] = {at.x + w, at.y}
+		// No jitter on a gutter: it is a cut drain, not rock.
+		at = prof.pts[2]
+		prof.any = true
+	} else {
+		prof.pts[1], prof.pts[2] = at, at
+	}
+
+	if b := v[.Bank]; b.size > GUARD_MIN {
+		w := max(b.width, b.size)
+		prof.pts[3] = {at.x + w * 0.5, at.y + b.size}
+		prof.pts[4] = {at.x + w, at.y}
+		run := seg_len(at, prof.pts[3]) + seg_len(prof.pts[3], prof.pts[4])
+		prof.seg[.Bank_In] = {size = b.size, rough = b.rough, f0 = 0, f1 = 0.5, base_x = at.x, run = run}
+		prof.seg[.Bank_Out] = {size = b.size, rough = b.rough, f0 = 0.5, f1 = 1, base_x = at.x, run = run}
+		at = prof.pts[4]
+		prof.any = true
+	} else {
+		prof.pts[3], prof.pts[4] = at, at
+	}
+
+	if c := v[.Cliff]; c.size > GUARD_MIN {
+		// The face is a plane tilted `angle` degrees off vertical, so its
 		// horizontal run is height * tan(angle) — linear in height, not curved.
 		// A negative angle leans the face back over the road.
-		a := clamp(cs.cliff_angle, CLIFF_ANGLE_MIN, CLIFF_ANGLE_MAX)
-		p.pts[1] = {h * math.tan(math.to_radians(a)), h}
-		p.n = 2
+		a := clamp(c.angle, CLIFF_ANGLE_MIN, CLIFF_ANGLE_MAX)
+		prof.pts[5] = {at.x + c.size * math.tan(math.to_radians(a)), at.y + c.size}
+		prof.seg[.Cliff] = {
+			size = c.size, rough = c.rough, f0 = 0, f1 = 1,
+			base_x = at.x, run = seg_len(at, prof.pts[5]),
+		}
+		prof.any = true
+	} else {
+		prof.pts[5] = at
 	}
-	for i in 1 ..< p.n {
-		d := p.pts[i] - p.pts[i - 1]
-		p.len += math.sqrt(d.x * d.x + d.y * d.y)
-	}
-	return p
+	return prof
 }
 
-// Walk the profile to the point `f` of the way along its arc length. f=1 returns
-// the last point exactly, rather than whatever the accumulated float lands on:
-// the terrain welds to it, so it must be reproducible bit for bit.
-verge_sample :: proc(p: Verge_Profile, f: f32) -> Verge_Point {
-	if p.n < 2 || f <= 0 {
-		return p.pts[0]
-	}
-	if f >= 1 {
-		return p.pts[p.n - 1]
-	}
-	target := p.len * f
-	acc: f32
-	for i in 1 ..< p.n {
-		d := p.pts[i] - p.pts[i - 1]
-		seg := math.sqrt(d.x * d.x + d.y * d.y)
-		if seg <= 0 {
-			continue
-		}
-		if acc + seg >= target {
-			return p.pts[i - 1] + d * ((target - acc) / seg)
-		}
-		acc += seg
-	}
-	return p.pts[p.n - 1]
+seg_len :: proc(a, b: Verge_Point) -> f32 {
+	d := b - a
+	return math.sqrt(d.x * d.x + d.y * d.y)
 }
 
-// The face's own outward normal: the profile's direction turned a quarter turn
-// in the (outward, up) plane. A vertical face gives plain `outward`; a face laid
-// back on its angle tips the normal over with it, which is what puts height
-// variation into the crest of a shallow cliff and none into a sheer one.
-verge_normal :: proc(cs: Cross_Section, prof: Verge_Profile, side: int) -> gfx.Vector3 {
+// Which segment a sweep row falls on, and how far along it. A row on a boundary
+// belongs to the earlier segment, at its far end — the two answers name the same
+// point, so nothing downstream can tell them apart.
+verge_row_at :: proc(row: int) -> (seg: Verge_Seg_Id, t: f32) {
+	r := clamp(row, 0, VERGE_ROWS)
+	for id in Verge_Seg_Id {
+		n := VERGE_SEG_ROWS[id]
+		if r <= n {
+			return id, f32(r) / f32(n)
+		}
+		r -= n
+	}
+	return .Cliff, 1
+}
+
+// Where a row sits on the smooth profile, before any rock is put on it.
+verge_sample :: proc(p: Verge_Profile, row: int) -> Verge_Point {
+	seg, t := verge_row_at(row)
+	a, b := p.pts[int(seg)], p.pts[int(seg) + 1]
+	return a + (b - a) * t
+}
+
+// The face's own outward normal on segment `seg`: that segment's direction
+// turned a quarter turn in the (outward, up) plane. A vertical face gives plain
+// `outward`; a face laid back on its angle tips the normal over with it, which
+// is what puts height variation into the crest of a shallow cliff and none into
+// a sheer one.
+//
+// Per segment rather than across the whole profile: a bank's two faces lean
+// opposite ways, and one normal for both would push the rock sideways through
+// the crest.
+verge_normal :: proc(cs: Cross_Section, prof: Verge_Profile, side: int, seg: Verge_Seg_Id) -> gfx.Vector3 {
 	outward := side == 0 ? cs.right : -cs.right
-	if prof.n < 2 { return outward }
-	d := prof.pts[prof.n-1] - prof.pts[0]
-	l := math.sqrt(d.x*d.x + d.y*d.y)
+	d := prof.pts[int(seg) + 1] - prof.pts[int(seg)]
+	l := math.sqrt(d.x * d.x + d.y * d.y)
 	if l <= 0 { return outward }
 	return (outward * d.y - cs.up * d.x) / l
 }
@@ -374,38 +468,44 @@ verge_normal :: proc(cs: Cross_Section, prof: Verge_Profile, side: int) -> gfx.V
 // the cross-section agree on the vertex, to the bit, without having to agree on
 // how they got there.
 //
-// `roughness` is the global slider, and this slice's own `cliff_rough` adds to
-// it — the same arrangement the road surface has with its per-node offset, and
-// deliberately a separate number from it. A cliff is rock; the road is what a
-// car drives on.
+// `roughness` is the global slider, and the guard that drew this segment adds
+// its own on top — the same arrangement the road surface has with its per-node
+// offset, and deliberately a separate number from it. A cliff is rock; the road
+// is what a car drives on. A gutter carries no roughness at all, so its
+// segments come out smooth however far the global slider is pushed.
 verge_vertex :: proc(
 	cs: Cross_Section,
 	prof: Verge_Profile,
-	side, row, rows: int,
+	side, row: int,
 	roughness: f32,
 ) -> gfx.Vector3 {
 	outward := side == 0 ? cs.right : -cs.right
 	edge := cs.pos + outward * (cs.width * 0.5)
-	if prof.n < 2 || prof.len <= 0 || row == 0 {
+	if !prof.any || row <= 0 {
 		return edge
 	}
 
-	f := f32(row) / f32(rows)
-	q := verge_sample(prof, f)
+	seg, t := verge_row_at(row)
+	q := verge_sample(prof, row)
 	p := edge + outward * q.x + cs.up * q.y
 
-	eff := clamp(roughness + cs.cliff_rough, 0, 1)
-	if eff <= 0 {
+	s := prof.seg[seg]
+	eff := clamp(roughness + s.rough, 0, 1)
+	if eff <= 0 || s.size <= 0 || s.run <= 0 {
 		return p
 	}
-	// How big the rock may be is the cliff's *height*, never the length of its
+	// How big the rock may be is the guard's *size*, never the length of its
 	// face. Lay a 7 m cliff back to 75 degrees and its face is 25 m long, so an
 	// amplitude keyed off that length juts 18 m out of the middle of it.
-	top := prof.pts[prof.n - 1]
-	// cos(face angle) is the normal's outward part, so the lean at this row over
-	// it is the room the rock has to come toward the road in.
-	room := q.x * prof.len / max(top.y, 1e-3)
-	return p - verge_normal(cs, prof, side) * (rock_offset(p, top.y, f, room) * eff)
+	//
+	// `f` is the position in the guard's own face, not in the whole profile, so
+	// the fade lands on that guard's two ends.
+	f := s.f0 + (s.f1 - s.f0) * t
+	// cos(face angle) is the normal's outward part, so the lean this row has
+	// over the foot of its own face is the room the rock has to come toward the
+	// road in.
+	room := (q.x - s.base_x) * s.run / max(s.size, 1e-3)
+	return p - verge_normal(cs, prof, side, seg) * (rock_offset(p, s.size, f, room) * eff)
 }
 
 // One cross-section's face, bottom to top: the vertices, and `v` beside them.
@@ -428,11 +528,11 @@ Verge_Column :: struct {
 verge_column :: proc(
 	cs: Cross_Section,
 	prof: Verge_Profile,
-	side, rows: int,
+	side: int,
 	roughness: f32,
 ) -> (col: Verge_Column) {
-	for k in 0 ..= min(rows, VERGE_ROWS) {
-		col.p[k] = verge_vertex(cs, prof, side, k, rows, roughness)
+	for k in 0 ..= VERGE_ROWS {
+		col.p[k] = verge_vertex(cs, prof, side, k, roughness)
 		if k > 0 {
 			col.v[k] = col.v[k - 1] + gfx.Vector3Length(col.p[k] - col.p[k - 1])
 		}
@@ -441,15 +541,16 @@ verge_column :: proc(
 }
 
 // Where the verge hands off to the terrain: the profile's last point, rock and
-// all. A cliff's crest; a ditch's outer lip; the bare road edge where there is
-// no verge at all, which is exactly right and needs no special case.
+// all. A cliff's crest; a bank's outer toe; a gutter's outer lip; the bare road
+// edge where there is no verge at all, which is exactly right and needs no
+// special case.
 //
 // **The terrain's innermost column must be this proc, called with this sample's
 // own cross-section and `roughness`.** The two meshes share no vertex buffer —
 // they are welded only by both emitting bit-identical positions. Recompute the
 // seam any other way and the skirt tears off the verge.
-verge_seam :: proc(cs: Cross_Section, side, rows: int, roughness: f32) -> gfx.Vector3 {
-	return verge_vertex(cs, verge_profile(cs, side), side, rows, rows, roughness)
+verge_seam :: proc(cs: Cross_Section, side: int, roughness: f32) -> gfx.Vector3 {
+	return verge_vertex(cs, verge_profile(cs, side), side, VERGE_ROWS, roughness)
 }
 
 // --- building ---------------------------------------------------------------
@@ -458,6 +559,8 @@ ROAD_COL :: gfx.Color{104, 108, 120, 255}      // Dirt-grip segments (editor tin
 ROAD_COL_SAND :: gfx.Color{150, 138, 120, 255} // Sand-penalty segments (editor tint)
 CLIFF_TOP :: gfx.Color{140, 128, 112, 255}
 CLIFF_BOT :: gfx.Color{86, 80, 74, 255}
+BANK_COL :: gfx.Color{198, 202, 210, 255}  // heaped snow or spoil, pale
+GUTTER_COL :: gfx.Color{88, 82, 70, 255}   // a wet cut, darker than the road
 
 lerp_col :: proc(a, b: gfx.Color, t: f32) -> gfx.Color {
 	m :: proc(x, y: u8, t: f32) -> u8 {return u8(f32(x) + (f32(y) - f32(x)) * t)}
@@ -559,14 +662,31 @@ sample_spacing :: proc(ribbon: []Cross_Section) -> []f32 {
 	return ds
 }
 
+// The tint and the material a verge quad wears, taken from the row at its outer
+// edge so the first quad of a segment already reads as that segment. Only the
+// cliff is rock: a bank and a gutter are ground, and the export has one material
+// for ground (see Mat_Id).
+verge_quad_look :: proc(row: int) -> (col: gfx.Color, mat: Mat_Id) {
+	seg, t := verge_row_at(row)
+	switch seg {
+	case .Gutter_In, .Gutter_Out:
+		return GUTTER_COL, .Terrain
+	case .Bank_In, .Bank_Out:
+		return BANK_COL, .Terrain
+	case .Cliff:
+		return lerp_col(CLIFF_BOT, CLIFF_TOP, t), .Cliff
+	}
+	return CLIFF_BOT, .Cliff
+}
+
 // Verge walls. Emitted only where a verge has a profile at all, so a stage with
-// no cliffs costs no triangles.
+// no guards costs no triangles.
 //
 // UV: `u` along the road's arc, `v` along the *profile's* arc — the same
 // quantity the rows are spaced by, so a taller cliff shows more texture rather
 // than a stretched one. The two neighbouring cross-sections have different
 // profile lengths, so `v` is computed per column, not per quad.
-build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, rows: int, roughness: f32) {
+build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, roughness: f32) {
 	for side in 0 ..< 2 {
 		// Metres along the rock, the same way `v` is metres up it. The road's own
 		// arc is the wrong ruler here: two neighbouring samples can stand a metre
@@ -586,22 +706,33 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, rows: int, roughness
 			if ribbon[i + 1].break_before { continue }
 			p0 := verge_profile(ribbon[i], side)
 			p1 := verge_profile(ribbon[i + 1], side)
-			if p0.n < 2 && p1.n < 2 {
+			if !p0.any && !p1.any {
 				continue
 			}
-			ca := verge_column(ribbon[i], p0, side, rows, roughness)
-			cb := verge_column(ribbon[i + 1], p1, side, rows, roughness)
-			step: f32
-			for k in 0 ..= min(rows, VERGE_ROWS) {
+			ca := verge_column(ribbon[i], p0, side, roughness)
+			cb := verge_column(ribbon[i + 1], p1, side, roughness)
+			// Averaged over the rows a quad actually touches. Rows on a guard
+			// that is not there sit on the road edge and emit nothing, and
+			// counting them drags `u` toward the road's own arc rather than the
+			// rock's — the stretch this `u` exists to avoid, reintroduced by
+			// the rows a fixed layout spends on absent guards.
+			step, live := f32(0), 0
+			for k in 0 ..= VERGE_ROWS {
+				below := k > 0 && (ca.p[k] != ca.p[k - 1] || cb.p[k] != cb.p[k - 1])
+				above := k < VERGE_ROWS && (ca.p[k + 1] != ca.p[k] || cb.p[k + 1] != cb.p[k])
+				if !below && !above {
+					continue
+				}
 				step += gfx.Vector3Length(cb.p[k] - ca.p[k])
+				live += 1
 			}
 			ua := u_run / UV_TILE_M
-			ub := (u_run + step / f32(min(rows, VERGE_ROWS) + 1)) / UV_TILE_M
+			ub := (u_run + step / f32(max(live, 1))) / UV_TILE_M
 			defer u_run = ub * UV_TILE_M
-			for k in 0 ..< rows {
+			for k in 0 ..< VERGE_ROWS {
 				a, b := ca.p[k], ca.p[k + 1]
 				c, d := cb.p[k + 1], cb.p[k]
-				col := lerp_col(CLIFF_BOT, CLIFF_TOP, f32(k) / f32(rows))
+				col, mat := verge_quad_look(k + 1)
 
 				uv_a := [2]f32{ua, ca.v[k] / UV_TILE_M}
 				uv_b := [2]f32{ua, ca.v[k + 1] / UV_TILE_M}
@@ -616,18 +747,14 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, rows: int, roughness
 				// up and back at it too. Do not re-derive this from "point at the
 				// centreline" — that rule flips sign partway along a ditch.
 				if side == 0 {
-					add_quad(m, a, d, c, b, uv_a, uv_d, uv_c, uv_b, col, .Cliff)
+					add_quad(m, a, d, c, b, uv_a, uv_d, uv_c, uv_b, col, mat)
 				} else {
-					add_quad(m, a, b, c, d, uv_a, uv_b, uv_c, uv_d, col, .Cliff)
+					add_quad(m, a, b, c, d, uv_a, uv_b, uv_c, uv_d, col, mat)
 				}
 			}
 		}
 	}
 }
-
-// How many rows a verge profile is swept into. Tied to SAMPLES_PER_SEG so the
-// verge tessellates in step with the ribbon it hangs off.
-VERGE_ROWS :: min(max(SAMPLES_PER_SEG / 3, 2), 12)
 
 build_tri_mesh :: proc(
 	ribbon: []Cross_Section,
@@ -640,7 +767,7 @@ build_tri_mesh :: proc(
 	}
 	arc := ribbon_arc(ribbon) // temp-allocated; the UVs are metres along it
 	build_road_surface(&m, ribbon, arc, roughness)
-	build_verges(&m, ribbon, VERGE_ROWS, roughness)
+	build_verges(&m, ribbon, roughness)
 	return m
 }
 

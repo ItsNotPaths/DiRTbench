@@ -94,7 +94,7 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 	geo.terrain_field_delete(&doc.terrain_field)
 	delete(doc.ribbon)
 	veg_cache_clear(doc)
-	delete(doc.spline.points)
+	geo.spline_free(&doc.spline)
 	delete(doc.open_venue)
 	delete(doc.venue_name)
 	delete(doc.base)

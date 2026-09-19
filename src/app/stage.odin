@@ -37,16 +37,40 @@ Stage_Point :: struct {
 	pos:         [3]f32,
 	rot:         [4]f32, // x, y, z, w
 	width:       f32,
-	cliff_l:     f32,
-	cliff_r:     f32,
-	span_l:      f32,
-	span_r:      f32,
-	cliff_taper: f32,
-	cliff_angle: f32, // degrees off vertical; + leans away from the road
-	// A key added after the format settled, like Stage_Veg.billboards: a venue
-	// written before it reads as 0, which is what an old venue meant.
-	cliff_rough: f32, // how broken the cliff face reads, 0..1
 	roughness:   f32, // per-node offset from the global road roughness
+}
+
+// One side guard. Cliffs, banks and gutters are one thing on disk because they
+// are one thing in the editor — see geo.Guard.
+Stage_Guard :: struct {
+	id:    int,
+	kind:  string, // "cliff", "bank" or "gutter"
+	// 0 is the left edge in travel order, 1 the right.
+	side:  int,
+	// The anchor control point, by **id**, for the same reason parent and weld
+	// are: a position means nothing outside the array it indexes.
+	at:    int,
+	size:  f32,
+	span:  f32,
+	taper: f32,
+	width: f32,
+	angle: f32,
+	rough: f32,
+}
+
+// The file's names for geo.Guard_Kind. A name rather than the enum's number, so
+// inserting a kind later cannot renumber what is already written.
+GUARD_KIND_KEY := [geo.Guard_Kind]string {
+	.Cliff  = "cliff",
+	.Bank   = "bank",
+	.Gutter = "gutter",
+}
+
+guard_kind_of :: proc(key: string) -> (geo.Guard_Kind, bool) {
+	for name, kind in GUARD_KIND_KEY {
+		if name == key { return kind, true }
+	}
+	return .Cliff, false
 }
 
 // No species here: they belong to the venue's base art, and are read off it
@@ -104,6 +128,7 @@ Stage_Prop :: struct {
 
 Venue_Road :: struct {
 	points:  []Stage_Point,
+	guards:  []Stage_Guard,
 	veg:     Stage_Veg,
 	timing:  Stage_Timing,
 	terrain: Stage_Terrain,
@@ -181,17 +206,28 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 			pos         = {p.xform.translation.x, p.xform.translation.y, p.xform.translation.z},
 			rot         = quat_to_array(p.xform.rotation),
 			width       = p.width,
-			cliff_l     = p.cliff_l,
-			cliff_r     = p.cliff_r,
-			span_l      = p.span_l,
-			span_r      = p.span_r,
-			cliff_taper = p.cliff_taper,
-			cliff_angle = p.cliff_angle,
-			cliff_rough = p.cliff_rough,
 			roughness   = p.roughness,
 		}
 	}
 	road.points = pts
+	{
+		guards := make([]Stage_Guard, len(sp.guards), allocator)
+		for g, i in sp.guards {
+			guards[i] = {
+				id    = g.id,
+				kind  = GUARD_KIND_KEY[g.kind],
+				side  = g.side,
+				at    = geo.point_id(sp, g.at),
+				size  = g.size,
+				span  = g.span,
+				taper = g.taper,
+				width = g.width,
+				angle = g.angle,
+				rough = g.rough,
+			}
+		}
+		road.guards = guards
+	}
 	road.veg = {
 		enabled    = veg.enabled,
 		density    = veg.density,
@@ -308,20 +344,12 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 	sp.next_id = 0
 	for p, i in road.points {
 		width := p.width if p.width > 0 else f32(geo.DEFAULT_WIDTH)
-		taper := p.cliff_taper if p.cliff_taper > 0 else f32(geo.DEFAULT_CLIFF_TAPER)
 		append(
 			&sp.points,
 			geo.make_point(
 				{p.pos[0], p.pos[1], p.pos[2]},
 				quat_from_array(p.rot),
 				width,
-				p.cliff_l,
-				p.cliff_r,
-				p.span_l,
-				p.span_r,
-				taper,
-				p.cliff_angle,
-				p.cliff_rough,
 				p.roughness,
 				parents[i],
 			),
@@ -330,6 +358,31 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		np.weld = welds[i]
 		np.id = p.id
 		sp.next_id = max(sp.next_id, np.id + 1)
+	}
+
+	// Guards after the points, because an anchor is an id in the file and a
+	// position in memory. A guard naming a point that is not there is dropped
+	// rather than aimed somewhere else: a guard on the wrong road is worse than
+	// no guard, and it would be silent.
+	clear(&sp.guards)
+	sp.next_guard_id = 0
+	for g in road.guards {
+		kind, known := guard_kind_of(g.kind)
+		at, found := index_of[g.at]
+		if !known || !found {
+			continue
+		}
+		geo.guard_add(sp, geo.Guard {
+			kind  = kind,
+			side  = clamp(g.side, 0, 1),
+			at    = at,
+			size  = max(g.size, 0),
+			span  = max(g.span, 0),
+			taper = max(g.taper, 0),
+			width = max(g.width, 0),
+			angle = g.angle,
+			rough = clamp(g.rough, 0, 1),
+		})
 	}
 
 	{

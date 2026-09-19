@@ -274,7 +274,7 @@ road_brush_select :: proc(ed: ^Editor, anchor: int) {
 	dist := geo.graph_reach(sp^, anchor, r)
 	taper := r * clamp(ed.road_brush_taper, 0, 1)
 	for d, i in dist {
-		ed.road_brush_weight[i] = geo.cliff_envelope(d, r * 2, taper)
+		ed.road_brush_weight[i] = geo.span_envelope(d, r * 2, taper)
 	}
 	ed.road_brush_weight[anchor] = 1 // a zero reach is a single-point brush, not an empty one
 }

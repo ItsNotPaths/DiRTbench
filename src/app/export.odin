@@ -680,7 +680,7 @@ export_headless :: proc(
 	doc.debug_export = debug_out
 	install_scan_init(doc.install)
 	defer install_scan_delete(doc.install)
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	defer geo.terrain_delete(&doc.terrain)
 
 	// `doc.spline` is the venue's whole road graph; `chain` is the one stage
@@ -691,7 +691,7 @@ export_headless :: proc(
 	doc.venue_name = p.name
 	chain, cmsg, cok := venue_compile_route(p, stage, &doc, context.allocator)
 	if !cok { return cmsg, false }
-	defer delete(chain.points)
+	defer geo.spline_free(&chain)
 	// The document owns the sculpt and the sliders. The flag only forces ground
 	// on for a road that has none.
 	doc.terrain.enabled = doc.terrain.enabled || terrain

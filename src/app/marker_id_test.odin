@@ -22,7 +22,7 @@ marker_pos :: proc(sp: geo.Spline, m: geo.Road_Marker) -> (gfx.Vector3, bool) {
 @(test)
 marker_holds_its_road_through_an_insert_upstream :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp) // 0 -> 1 -> 2 -> 3
 	m := geo.marker_of(sp, {from = 2, to = 3, t = 0.5})
 	was, placed := marker_pos(sp, m)
@@ -52,13 +52,13 @@ marker_holds_its_road_through_an_insert_upstream :: proc(t: ^testing.T) {
 @(test)
 an_edit_outside_a_stage_leaves_it_alone :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	start := geo.marker_of(sp, {from = 1, to = 2, t = 0.3})
 	finish := geo.marker_of(sp, {from = 2, to = 3, t = 0.7})
 
 	before, bmsg, bok := geo.compile_stage(sp, start, finish, nil, context.allocator)
-	defer delete(before.points)
+	defer geo.spline_free(&before)
 	testing.expect(t, bok, bmsg)
 	if !bok {
 		return
@@ -70,7 +70,7 @@ an_edit_outside_a_stage_leaves_it_alone :: proc(t: ^testing.T) {
 	testing.expect(t, idx >= 0)
 
 	after, amsg, aok := geo.compile_stage(sp, start, finish, nil, context.allocator)
-	defer delete(after.points)
+	defer geo.spline_free(&after)
 	testing.expect(t, aok, amsg)
 	if !aok {
 		return
@@ -89,7 +89,7 @@ an_edit_outside_a_stage_leaves_it_alone :: proc(t: ^testing.T) {
 @(test)
 pins_hold_their_roads_through_an_insert :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	tail := len(sp.points) - 1
 	testing.expect(t, geo.weld_points(&sp, tail, 0))
@@ -98,7 +98,7 @@ pins_hold_their_roads_through_an_insert :: proc(t: ^testing.T) {
 	finish := geo.marker_of(sp, {from = tail, to = 0, t = 0.9})
 
 	before, bmsg, bok := geo.compile_stage(sp, start, finish, pins, context.allocator)
-	defer delete(before.points)
+	defer geo.spline_free(&before)
 	testing.expect(t, bok, bmsg)
 	if !bok {
 		return
@@ -116,7 +116,7 @@ pins_hold_their_roads_through_an_insert :: proc(t: ^testing.T) {
 	if !aok {
 		return
 	}
-	defer delete(after.points)
+	defer geo.spline_free(&after)
 	// One more control point on the way round, and the same road either side.
 	testing.expect_value(t, len(after.points), len(before.points) + 1)
 }
@@ -126,7 +126,7 @@ pins_hold_their_roads_through_an_insert :: proc(t: ^testing.T) {
 @(test)
 a_removed_point_never_hands_its_id_on :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	m := geo.marker_of(sp, {from = 2, to = 3, t = 0.5})
 	testing.expect(t, geo.marker_valid(sp, m))
@@ -144,7 +144,7 @@ a_removed_point_never_hands_its_id_on :: proc(t: ^testing.T) {
 @(test)
 a_split_edge_carries_its_markers :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	early := geo.marker_of(sp, {from = 1, to = 2, t = 0.2})
 	late := geo.marker_of(sp, {from = 1, to = 2, t = 0.7})
@@ -180,7 +180,7 @@ a_split_barely_moves_a_marker :: proc(t: ^testing.T) {
 	for cut in ([]f32{0.2, 0.4, 0.5, 0.6, 0.8}) {
 		for along in ([]f32{0.1, 0.3, 0.5, 0.7, 0.9}) {
 			sp: geo.Spline
-			defer delete(sp.points)
+			defer geo.spline_free(&sp)
 			seed_spline(&sp)
 			m := geo.marker_of(sp, {from = 1, to = 2, t = along})
 			was, _ := marker_pos(sp, m)
@@ -286,7 +286,7 @@ a_road_with_a_negative_id_is_refused :: proc(t: ^testing.T) {
 @(test)
 reverse_turns_the_markers_with_the_road :: proc(t: ^testing.T) {
 	sp: geo.Spline
-	defer delete(sp.points)
+	defer geo.spline_free(&sp)
 	seed_spline(&sp)
 	testing.expect(t, geo.is_linear(sp), "Reverse is only offered on a linear road")
 	m := geo.marker_of(sp, {from = 2, to = 3, t = 0.25})
@@ -319,7 +319,7 @@ reverse_compiles_the_same_stage :: proc(t: ^testing.T) {
 	append(&r.pins, geo.marker_of(doc.spline, {from = 1, to = 2, t = 0.5}))
 
 	before, bmsg, bok := geo.compile_stage(doc.spline, r.start, r.finish, r.pins[:], context.allocator)
-	defer delete(before.points)
+	defer geo.spline_free(&before)
 	testing.expect(t, bok, bmsg)
 	if !bok {
 		return
@@ -333,7 +333,7 @@ reverse_compiles_the_same_stage :: proc(t: ^testing.T) {
 	if !aok {
 		return
 	}
-	defer delete(after.points)
+	defer geo.spline_free(&after)
 	testing.expect_value(t, len(after.points), len(before.points))
 	for p, i in after.points {
 		testing.expect(

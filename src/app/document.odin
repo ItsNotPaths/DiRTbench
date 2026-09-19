@@ -301,6 +301,7 @@ grow_road :: proc(sp: ^geo.Spline, from: int, g: gfx.Vector3) -> int {
 
 seed_spline :: proc(sp: ^geo.Spline) {
 	clear(&sp.points)
+	clear(&sp.guards)
 	// a short starter road with a rise and a gentle bend to show it off
 	seeds := [?]gfx.Vector3{{0, 0, 0}, {0, 2, 32}, {12, 5, 60}, {26, 6, 88}}
 	for pos, i in seeds {

@@ -56,7 +56,7 @@ a_stage_window_follows_its_stage_by_id :: proc(t: ^testing.T) {
 @(test)
 the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 	doc := Venue_Doc{}
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	defer delete(doc.routes)
 	seed_spline(&doc.spline)
 	append(&doc.routes, Venue_Route{id = "route_0", start = {0, 1, 0.5}, finish = {2, 3, 0.5}})
@@ -112,7 +112,7 @@ the_stage_cache_recompiles_only_when_its_key_moves :: proc(t: ^testing.T) {
 @(test)
 stage_notes_follow_the_ribbon_and_the_pace_knobs :: proc(t: ^testing.T) {
 	doc := Venue_Doc{pace = geo.PACE_DEFAULTS}
-	defer delete(doc.spline.points)
+	defer geo.spline_free(&doc.spline)
 	defer delete(doc.routes)
 	seed_spline(&doc.spline)
 	// A second child of point 1: the venue road forks, which is the case that
