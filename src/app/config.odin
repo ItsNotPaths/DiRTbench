@@ -20,6 +20,7 @@ package main
 // paths, and a parser you can hold in your head is worth more here than a format
 // with an escaping story.
 
+import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -70,4 +71,61 @@ conf_get :: proc(key: string, allocator := context.temp_allocator) -> (val: stri
 		}
 	}
 	return
+}
+
+// Where a write goes: the file `conf_get` reads when there is one, and beside
+// the executable when there is not. Never the bare fallback name, which would
+// drop a second config into whatever directory the tool was started from.
+@(private = "file")
+conf_write_path :: proc(allocator := context.temp_allocator) -> string {
+	existing := conf_path(context.temp_allocator)
+	if os.exists(existing) {
+		return strings.clone(existing, allocator)
+	}
+	joined, _ := filepath.join({data_dir(context.temp_allocator), CONF_NAME}, allocator)
+	return joined
+}
+
+// Write one key, leaving every other line exactly as it was.
+//
+// Read, replace, write: a config is hand-edited and full of comments, and a
+// rewrite from parsed keys alone would throw all of that away the first time
+// the tool remembered a username. A key that is not there yet is appended.
+conf_set :: proc(key, val: string) -> (msg: string, ok: bool) {
+	path := conf_write_path()
+	data, _ := os.read_entire_file(path, context.temp_allocator)
+	out := conf_apply(string(data), key, val, context.temp_allocator)
+	if err := os.write_entire_file(path, transmute([]u8)out); err != nil {
+		return fmt.tprintf("could not write %s: %v", path, err), false
+	}
+	return "", true
+}
+
+// `text` with `key` set to `val`: the line replaced where it stands, appended
+// when there is none, and every other line — comments, blanks, order — left
+// exactly as it was found. A file that holds the same key twice comes back
+// holding it once.
+conf_apply :: proc(text, key, val: string, allocator := context.temp_allocator) -> string {
+	b := strings.builder_make(allocator)
+	written := false
+	rest := text
+	for line in strings.split_lines_iterator(&rest) {
+		trimmed := strings.trim_space(line)
+		eq := strings.index_byte(trimmed, '=')
+		is_key := eq > 0 && !strings.has_prefix(trimmed, "#") &&
+			strings.trim_space(trimmed[:eq]) == key
+		if is_key {
+			if !written {
+				fmt.sbprintf(&b, "%s = %s\n", key, val)
+				written = true
+			}
+			continue
+		}
+		strings.write_string(&b, line)
+		strings.write_byte(&b, '\n')
+	}
+	if !written {
+		fmt.sbprintf(&b, "%s = %s\n", key, val)
+	}
+	return strings.to_string(b)
 }
