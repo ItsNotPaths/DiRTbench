@@ -128,11 +128,10 @@ draw_venue_art_gate :: proc(ed: ^Editor) -> bool {
 // One browser. Objects and ornaments differ only in which meshes the list holds
 // and what the placement is for, so one proc draws both.
 draw_prop_role_section :: proc(ed: ^Editor, role: Prop_Role) {
-	if !ui.igCollapsingHeader_TreeNodeFlags(
-		fmt.ctprint(PROP_ROLE_NAMES[role]), ui.IM_TREE_NODE_DEFAULT_OPEN,
-	) {
+	if !ui.im_section_begin(fmt.ctprint(PROP_ROLE_NAMES[role]), PROP_ROLE_COLS[role]) {
 		return
 	}
+	defer ui.im_section_end()
 	cat := &ed.doc.venue_art
 	browser := &ed.prop_browse[role]
 

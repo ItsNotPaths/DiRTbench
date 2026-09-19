@@ -30,6 +30,7 @@ import "core:strings"
 import d3 "../d3"
 import "../geo"
 import "../gfx"
+import "../ui"
 
 // Which of the base venue's two libraries a prop comes from. The name alone is
 // not a key: the two files are separate namespaces. Spelled after the files so
@@ -65,6 +66,11 @@ Prop_Role :: enum u8 {
 PROP_ROLE_NAMES := [Prop_Role]string {
 	.Ornament = "Ornaments",
 	.Object   = "Objects",
+}
+
+PROP_ROLE_COLS := [Prop_Role]ui.Im_Vec4 {
+	.Ornament = ORNAMENT_COL,
+	.Object   = OBJECT_COL,
 }
 
 // One placed prop. The transform is the instance's alone — every prop mesh is

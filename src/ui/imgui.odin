@@ -85,9 +85,22 @@ Im_Dir :: enum c.int {
 	Down  = 3,
 }
 
-// Style slots, from the head of ImGuiCol_ in cimgui.h. Only what we restyle.
+// Style slots, from ImGuiCol_ in cimgui.h. Only what we restyle.
 Im_Col :: enum c.int {
-	Text = 0,
+	Text               = 0,
+	FrameBg            = 7,
+	FrameBgHovered     = 8,
+	FrameBgActive      = 9,
+	CheckMark          = 18,
+	CheckboxSelectedBg = 19,
+	SliderGrab         = 20,
+	SliderGrabActive   = 21,
+	Button             = 22,
+	ButtonHovered      = 23,
+	ButtonActive       = 24,
+	Header             = 25,
+	HeaderHovered      = 26,
+	HeaderActive       = 27,
 }
 
 // --- SDL3/SDL_GPU backend lifecycle -----------------------------------------
@@ -267,6 +280,51 @@ im_same_line :: proc() {
 }
 im_button :: proc(label: cstring) -> bool {
 	return igButton(label, {0, 0}) // {0,0} = size to fit the label
+}
+
+// Every blue slot of the dark theme, as a shade of the section hue and the
+// alpha ImGui itself gives that slot. Shades below 1 are the slots the theme
+// darkens rather than fades.
+@(private = "file")
+SECTION_TINTS := [?]struct {
+	slot:  Im_Col,
+	shade: f32,
+	alpha: f32,
+} {
+	{.FrameBg, 0.50, 0.54},
+	{.FrameBgHovered, 1.00, 0.40},
+	{.FrameBgActive, 1.00, 0.67},
+	{.CheckMark, 1.00, 1.00},
+	{.CheckboxSelectedBg, 0.82, 0.45},
+	{.SliderGrab, 0.90, 1.00},
+	{.SliderGrabActive, 1.00, 1.00},
+	{.Button, 1.00, 0.40},
+	{.ButtonHovered, 0.90, 1.00},
+	{.ButtonActive, 0.80, 1.00},
+	{.Header, 1.00, 0.31},
+	{.HeaderHovered, 1.00, 0.80},
+	{.HeaderActive, 1.00, 1.00},
+}
+
+// An inspector section: a collapsing header, and every widget under it, in one
+// hue. Call `im_section_end` only when this returns true — a closed section has
+// already dropped its colours.
+im_section_begin :: proc(label: cstring, rgb: Im_Vec4) -> bool {
+	for t in SECTION_TINTS {
+		igPushStyleColor_Vec4(
+			t.slot,
+			{rgb.x * t.shade, rgb.y * t.shade, rgb.z * t.shade, t.alpha},
+		)
+	}
+	if igCollapsingHeader_TreeNodeFlags(label, IM_TREE_NODE_DEFAULT_OPEN) {
+		return true
+	}
+	im_section_end()
+	return false
+}
+
+im_section_end :: proc() {
+	igPopStyleColor(c.int(len(SECTION_TINTS)))
 }
 
 // Coloured text. Deliberately not cimgui's igTextColored, which is variadic and

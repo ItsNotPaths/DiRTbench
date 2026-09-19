@@ -22,6 +22,14 @@ import "../gfx"
 import "../geo"
 import "../ui"
 
+// One hue per inspector section, so a panel is known by its colour before its
+// label is read. Terrain keeps ImGui's own blue.
+VEG_COL :: ui.Im_Vec4{0.30, 0.72, 0.36, 1.0}
+GUARD_COL :: ui.Im_Vec4{0.62, 0.42, 0.24, 1.0}
+OBJECT_COL :: ui.Im_Vec4{0.86, 0.29, 0.29, 1.0}
+ORNAMENT_COL :: ui.Im_Vec4{0.82, 0.66, 0.16, 1.0}
+TERRAIN_COL :: ui.Im_Vec4{0.26, 0.59, 0.98, 1.0}
+
 // --- actions ----------------------------------------------------------------
 
 // The document goes home to its venue file. The road and the markers that make
@@ -402,9 +410,10 @@ guards_here :: proc(ed: ^Editor, sel: int) -> (n: int) {
 // Its own panel rather than a block under the selection, because a node inside
 // three guards carries far more rows than a selection footer can hold.
 draw_guards_section :: proc(ed: ^Editor) {
-	if !ui.igCollapsingHeader_TreeNodeFlags("Side guards", ui.IM_TREE_NODE_DEFAULT_OPEN) {
+	if !ui.im_section_begin("Side guards", GUARD_COL) {
 		return
 	}
+	defer ui.im_section_end()
 	sp := &ed.doc.spline
 	sel := selected_point(ed)
 	ui.im_text_colored(DIM_COL, fmt.ctprintf("%d in this venue", len(sp.guards)))
@@ -547,9 +556,10 @@ draw_timing_section :: proc(ed:^Editor) {
 // Global mesh settings. Every control here changes geometry, so each marks the
 // caches dirty; the rebuild happens once, at the top of the next frame.
 draw_terrain_section :: proc(ed: ^Editor) {
-	if !ui.igCollapsingHeader_TreeNodeFlags("Terrain", ui.IM_TREE_NODE_DEFAULT_OPEN) {
+	if !ui.im_section_begin("Terrain", TERRAIN_COL) {
 		return
 	}
+	defer ui.im_section_end()
 	if ui.im_button(ed.wireframe ? "Wireframe: on" : "Wireframe: off") {
 		ed.wireframe = !ed.wireframe
 	}
@@ -816,9 +826,10 @@ draw_pace_section :: proc(ed: ^Editor) {
 // scatter is saved with the stage and handed to the export target, so nothing
 // here touches geometry.
 draw_veg_section :: proc(ed: ^Editor) {
-	if !ui.igCollapsingHeader_TreeNodeFlags("Vegetation", ui.IM_TREE_NODE_DEFAULT_OPEN) {
+	if !ui.im_section_begin("Vegetation", VEG_COL) {
 		return
 	}
+	defer ui.im_section_end()
 	v := &ed.doc.veg
 	if ui.igCheckbox("vegetation", &v.enabled) {
 		mark_veg_dirty(ed.doc)
