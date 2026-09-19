@@ -47,6 +47,31 @@ Venue_Names :: struct {
 	venue:    string,
 }
 
+// Where the venue's thumbnail is taken from: the viewport camera at the moment
+// "Use this view" was pressed. Position and angle and nothing else — the lens
+// is fixed, so the rest of the shot is not the document's business. The image
+// itself is never stored; it is rendered from here when the venue is uploaded.
+//
+// `set` rather than reading a zero camera as "none": the origin looking down
+// the +Z axis is a real framing, and a venue saved there must not silently
+// become an unframed one.
+Venue_Shot :: struct {
+	set:   bool,
+	pos:   [3]f32,
+	yaw:   f32,
+	pitch: f32,
+}
+
+// Where this file came from, when it did not come from here. A download fills
+// this in; nothing in the tool ever does. It travels with the document on
+// purpose — a copy of a copy is still not ours — and the upload panel refuses
+// while it is set, so nobody re-publishes someone else's venue under their own
+// name by accident.
+Venue_Source :: struct {
+	site: string,
+	slug: string,
+}
+
 // One stage: the road between two markers on the venue graph, plus the name the
 // game will show. It compiles to a chain when the venue is exported; nothing
 // here is a road document of its own.
@@ -97,6 +122,10 @@ Venue :: struct {
 	base:       string, // "<location>/<venue>" of the vanilla venue it derives from
 	base_route: string, // which of the base's routes the registration clones
 	names:      Venue_Names,
+	// Empty unless this venue was downloaded from a site rather than made here.
+	source:     Venue_Source,
+	// How the thumbnail is framed. Unset until a window says so.
+	shot:       Venue_Shot,
 	routes:     []Venue_Route,
 	// Names the next stage. Only ever counts up, so an id is never reused.
 	next_route: int,
@@ -292,6 +321,8 @@ venue_free :: proc(p: Venue, allocator := context.allocator) {
 	delete(p.base_route, allocator)
 	delete(p.names.location, allocator)
 	delete(p.names.venue, allocator)
+	delete(p.source.site, allocator)
+	delete(p.source.slug, allocator)
 	for route in p.routes {
 		delete(route.id, allocator)
 		delete(route.name, allocator)
@@ -317,6 +348,9 @@ venue_doc_write :: proc(p: Venue, doc: ^Venue_Doc, path: string) -> (msg: string
 	out.road = road_block(doc, context.temp_allocator)
 	out.routes = doc.routes[:]
 	out.next_route = doc.next_route
+	// The window owns the framing while it is open, the same way it owns the
+	// stage list. `p` carries whatever was last read off disk.
+	out.shot = doc.shot
 	venue_route_counter_floor(&out)
 	return venue_write(out, path)
 }

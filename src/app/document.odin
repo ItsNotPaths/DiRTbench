@@ -36,6 +36,9 @@ Venue_Doc :: struct {
 	routes:        [dynamic]Venue_Route,
 	// Travels with `routes`: the list alone cannot say which ids are retired.
 	next_route:    int,
+	// How this venue's thumbnail is framed (Venue_Shot). Edited here while a
+	// window is open and written back with the road, exactly like `routes`.
+	shot:          Venue_Shot,
 	spline:        geo.Spline,
 	// The one scan of the game install, borrowed. The app owns it and every
 	// document reads the same one, so a rescan in any window is seen by all of
