@@ -3,7 +3,14 @@ package main
 // Our own venue documents: one file per venue, holding its identity, its stage
 // list and its road.
 //
-//     build/maps/<id>.json
+//     build/maps/<name>.json
+//
+// Identity and name are two different things, and only one of them is fixed.
+// `id` is a 64-bit number minted when the venue is created and never touched
+// again; it is what the site knows the venue by, so publishing a new version
+// of a renamed venue still lands on the same listing. `name` is soft: it is
+// the file name here, the directory the game installs under, and the text the
+// game shows. Rename it as often as you like.
 //
 // Nothing here is a game file. A `.pssg` is an export product, not a document
 // anyone edits: the road is the document, and every PSSG, XML and collision
@@ -23,6 +30,7 @@ package main
 // Nothing in this file touches the game. Deploying one into the install, and
 // taking it out again, is deploy.odin.
 
+import "core:crypto"
 import "core:encoding/json"
 import "core:fmt"
 import "core:os"
@@ -33,19 +41,13 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
-// v7 is the whole venue in one file: identity, stage list and road together,
-// under maps/<id>.json. Before it, a venue was a directory holding venue.json
-// and road.json, and the road carried a version ladder of its own. Nothing
-// reads a v6 or older venue: the tool was not released, and the venues that
-// existed were converted by hand.
-VENUE_VERSION :: 7
-
-// Display names, one per menu level. The `db_` prefix the game adds to a
-// localization key is implied and must not appear here.
-Venue_Names :: struct {
-	location: string,
-	venue:    string,
-}
+// v8 splits identity from name: `id` became a minted 64-bit number and the
+// name it used to hold became `name`, which also absorbed `location` and the
+// two `names` fields, since all four were only ever the same text twice over.
+// v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
+// or older venue: the tool was not released, and the venues that existed were
+// converted by hand.
+VENUE_VERSION :: 8
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens
@@ -117,11 +119,12 @@ route_has_markers :: proc(r: Venue_Route) -> bool {
 Venue :: struct {
 	format:     string,
 	version:    int,
-	id:         string, // file name in maps/, and `file_string`
-	location:   string, // location directory name, and `folder_string`
+	id:         string, // 16 lowercase hex digits, minted once, never changed
+	// The soft name: file name in maps/, both game directories, and the menu
+	// text. `venue_dir` is the form all three directory uses take.
+	name:       string,
 	base:       string, // "<location>/<venue>" of the vanilla venue it derives from
 	base_route: string, // which of the base's routes the registration clones
-	names:      Venue_Names,
 	// Empty unless this venue was downloaded from a site rather than made here.
 	source:     Venue_Source,
 	// How the thumbnail is framed. Unset until a window says so.
@@ -136,18 +139,52 @@ Venue :: struct {
 
 // --- paths -------------------------------------------------------------------
 
-venue_path :: proc(id: string, allocator := context.temp_allocator) -> string {
-	file := strings.concatenate({id, STAGE_EXT}, context.temp_allocator)
+// Where a venue is filed. Takes the directory form of the name, which is what
+// `venue_dir` returns and never the id.
+venue_path :: proc(name: string, allocator := context.temp_allocator) -> string {
+	file := strings.concatenate({name, STAGE_EXT}, context.temp_allocator)
 	joined, _ := filepath.join({maps_dir(context.temp_allocator), file}, allocator)
 	return joined
 }
 
+// --- identity ----------------------------------------------------------------
+
+// A fresh venue id: 64 bits of system entropy as 16 lowercase hex digits. That
+// spelling is deliberate — it is a legal venue directory name and exactly
+// VENUE_ID_MAX long, so every check an id passes through, here and on the
+// site, accepts it without a special case.
+venue_uuid :: proc(allocator := context.allocator) -> string {
+	bytes: [8]u8
+	crypto.rand_bytes(bytes[:])
+	return fmt.aprintf("%016x", transmute(u64)bytes, allocator = allocator)
+}
+
+venue_uuid_valid :: proc(id: string) -> bool {
+	if len(id) != 16 {
+		return false
+	}
+	for r in id {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 // --- naming ------------------------------------------------------------------
 
-// A venue id becomes a directory name, a `file_string` of at most 18 bytes, and
-// part of a localization key. Keep it to what all three accept: lower-case
+// The directory form of a venue's name: the file in maps/, the two directories
+// the game installs it under, and its `file_string`. Derived on demand rather
+// than stored, so a rename cannot leave a second copy of the name behind
+// disagreeing with the first.
+venue_dir :: proc(p: Venue, allocator := context.temp_allocator) -> string {
+	return sanitise_venue_name(p.name, allocator)
+}
+
+// A venue name becomes a directory name, a `file_string` of at most 18 bytes,
+// and part of a localization key. Keep it to what all three accept: lower-case
 // letters, digits and underscores.
-sanitise_venue_id :: proc(raw: string, allocator := context.temp_allocator) -> string {
+sanitise_venue_name :: proc(raw: string, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
 	for r in strings.trim_space(raw) {
 		switch {
@@ -167,27 +204,36 @@ sanitise_venue_id :: proc(raw: string, allocator := context.temp_allocator) -> s
 	return out
 }
 
-// `track_model.file_string` holds 18 bytes and `folder_string` 16, so the id has
-// to fit the shorter of the two. Checked here rather than at deploy, where the
-// only honest response would be to make the user rename everything.
+// `track_model.file_string` holds 18 bytes and `folder_string` 16, so a name
+// has to fit the shorter of the two. Checked here rather than at deploy, where
+// the only honest response would be to make the user rename everything.
 VENUE_ID_MAX :: 16
 
-// Whether a new venue may take this id. `vs` is the install scan, so a
-// clash with a vanilla venue is caught before anything is created.
-venue_id_free :: proc(vs: ^Install_Scan, id: string) -> (msg: string, ok: bool) {
-	if id == "" {
+// Whether a venue may take this name. `vs` is the install scan, so a clash
+// with a vanilla venue is caught before anything is created. `keep` is the id
+// of the venue being renamed, so a rename that changes only the spelling of a
+// name is not refused for clashing with itself.
+venue_name_free :: proc(
+	vs: ^Install_Scan, name: string, keep := "",
+) -> (msg: string, ok: bool) {
+	dir := sanitise_venue_name(name)
+	if strings.trim_space(name) == "" {
 		return "a venue needs a name", false
 	}
-	if len(id) > VENUE_ID_MAX {
-		return fmt.tprintf("%q is %d characters; the game holds %d", id, len(id), VENUE_ID_MAX), false
+	if len(dir) > VENUE_ID_MAX {
+		return fmt.tprintf(
+			"%q is %d characters as a directory; the game holds %d", dir, len(dir), VENUE_ID_MAX,
+		), false
 	}
-	if os.exists(venue_path(id)) {
-		return fmt.tprintf("a venue named %q already exists here already", id), false
+	if p, _, loaded := venue_load_name(dir, context.temp_allocator); loaded && p.id != keep {
+		return fmt.tprintf("a venue named %q already exists here", dir), false
+	} else if !loaded && os.exists(venue_path(dir)) {
+		return fmt.tprintf("%s is already a file here", venue_path(dir)), false
 	}
 	if vs.found {
 		for venue in vs.install.venues {
-			if venue.id == id || venue.location == id {
-				return fmt.tprintf("the game already has a venue named %q", id), false
+			if venue.id == dir || venue.location == dir {
+				return fmt.tprintf("the game already has a venue named %q", dir), false
 			}
 		}
 	}
@@ -207,13 +253,11 @@ venue_is_base :: proc(venue: d3.Venue) -> bool {
 
 // --- reading -----------------------------------------------------------------
 
-// Every venue under `venues/`, sorted by id. A directory that does not parse
-// is skipped rather than failing the listing: one bad file must not hide the
-// rest.
-venues_list :: proc(allocator := context.allocator) -> []Venue {
-	out := make([dynamic]Venue, allocator)
-	dir := maps_dir()
-	handle, err := os.open(dir)
+// Every venue document in maps/, by file name. The names are what the files
+// are called; whether any of them parses is not this procedure's business.
+venue_names :: proc(allocator := context.allocator) -> []string {
+	out := make([dynamic]string, allocator)
+	handle, err := os.open(maps_dir())
 	if err != nil {
 		return out[:]
 	}
@@ -227,17 +271,32 @@ venues_list :: proc(allocator := context.allocator) -> []Venue {
 			continue
 		}
 		// info.name is only valid until the iterator advances.
-		id := strings.trim_suffix(info.name, STAGE_EXT)
-		if p, _, ok := venue_load(id, allocator); ok {
+		append(&out, strings.clone(strings.trim_suffix(info.name, STAGE_EXT), allocator))
+	}
+	slice.sort(out[:])
+	return out[:]
+}
+
+// Every venue in maps/, sorted by name. A file that does not parse is skipped
+// rather than failing the listing: one bad file must not hide the rest.
+venues_list :: proc(allocator := context.allocator) -> []Venue {
+	out := make([dynamic]Venue, allocator)
+	names := venue_names(context.temp_allocator)
+	for name in names {
+		if p, _, ok := venue_load_name(name, allocator); ok {
 			append(&out, p)
 		}
 	}
 	slice.sort_by(out[:], proc(a, b: Venue) -> bool {
-		return a.id < b.id
+		return a.name < b.name
 	})
 	return out[:]
 }
 
+// One venue by its id. Files are named for the venue's name and not its id, so
+// the only way from one to the other is to read them until it turns up. Every
+// caller of this is something a person asked for — a deploy, an export, a
+// save — and never a frame.
 venue_load :: proc(
 	id: string,
 	allocator := context.allocator,
@@ -246,21 +305,75 @@ venue_load :: proc(
 	msg: string,
 	ok: bool,
 ) {
-	path := venue_path(id, context.temp_allocator)
+	if !venue_uuid_valid(id) {
+		return Venue{}, fmt.tprintf("%q is not a venue id", id), false
+	}
+	for name in venue_names(context.temp_allocator) {
+		found, _, loaded := venue_load_name(name, context.temp_allocator)
+		if loaded && found.id == id {
+			return venue_load_name(name, allocator)
+		}
+	}
+	return Venue{}, fmt.tprintf("no venue here has the id %s", id), false
+}
+
+// The venue a document belongs to. The document remembers the name it was
+// opened under, so this is one read rather than a search by id.
+venue_of_doc :: proc(
+	doc: ^Venue_Doc,
+	allocator := context.allocator,
+) -> (
+	p: Venue,
+	msg: string,
+	ok: bool,
+) {
+	return venue_load_name(sanitise_venue_name(doc.venue_name), allocator)
+}
+
+// A venue named by a person: on a command line, or anywhere a human types
+// rather than picks. A name is the normal case; an id is accepted too, for a
+// caller that copied one out of a document. A venue actually named for sixteen
+// hex digits would be shadowed by the id reading, which is a fair trade.
+venue_find :: proc(
+	key: string,
+	allocator := context.allocator,
+) -> (
+	p: Venue,
+	msg: string,
+	ok: bool,
+) {
+	if venue_uuid_valid(key) {
+		if p, msg, ok = venue_load(key, allocator); ok {
+			return
+		}
+	}
+	return venue_load_name(sanitise_venue_name(key), allocator)
+}
+
+// One venue by the name it is filed under.
+venue_load_name :: proc(
+	name: string,
+	allocator := context.allocator,
+) -> (
+	p: Venue,
+	msg: string,
+	ok: bool,
+) {
+	path := venue_path(name, context.temp_allocator)
 	if p, msg, ok = venue_load_path(path, allocator); !ok {
 		return p, msg, false
 	}
-	// The file's embedded identity must never be allowed to redirect reads or
-	// deletion at a name other than the one it is filed under.
-	if p.id != id {
-		bad_id := strings.clone(p.id, context.temp_allocator)
+	// The name inside the file must never be allowed to redirect a read, a
+	// write or a deletion at a file other than the one it came out of.
+	if venue_dir(p) != name {
+		bad := strings.clone(p.name, context.temp_allocator)
 		venue_free(p, allocator)
-		return Venue{}, fmt.tprintf("venue id %q does not match file %q", bad_id, id), false
+		return Venue{}, fmt.tprintf("venue named %q does not match file %q", bad, name), false
 	}
 	return p, "", true
 }
 
-// One venue document, from a path the caller chose. The id is not checked
+// One venue document, from a path the caller chose. The name is not checked
 // against the filename here: save_road writes through this on any path, and the
 // crash snapshot reads one back out of its own directory.
 venue_load_path :: proc(
@@ -310,10 +423,19 @@ venue_parse :: proc(
 			VENUE_VERSION,
 		), false
 	}
-	if p.id != "" && sanitise_venue_id(p.id) != p.id {
+	if !venue_uuid_valid(p.id) {
 		bad_id := strings.clone(p.id, context.temp_allocator)
 		venue_free(p, allocator)
-		return Venue{}, fmt.tprintf("venue id %q is not a usable name", bad_id), false
+		return Venue{}, fmt.tprintf("venue id %q is not a venue id", bad_id), false
+	}
+	// Only that the name has a directory form at all. Its length is not
+	// checked here: the cap belongs where the name is chosen and where the
+	// game is written to, not on the way in, or a venue that somehow acquired
+	// a long name could not even be opened to be renamed.
+	if p.name == "" || venue_dir(p) == "" {
+		bad := strings.clone(p.name, context.temp_allocator)
+		venue_free(p, allocator)
+		return Venue{}, fmt.tprintf("venue name %q is not a usable name", bad), false
 	}
 	venue_route_counter_floor(&p)
 	return p, "", true
@@ -338,11 +460,9 @@ venues_free :: proc(list: []Venue, allocator := context.allocator) {
 venue_free :: proc(p: Venue, allocator := context.allocator) {
 	delete(p.format, allocator)
 	delete(p.id, allocator)
-	delete(p.location, allocator)
+	delete(p.name, allocator)
 	delete(p.base, allocator)
 	delete(p.base_route, allocator)
-	delete(p.names.location, allocator)
-	delete(p.names.venue, allocator)
 	delete(p.source.site, allocator)
 	delete(p.source.slug, allocator)
 	for route in p.routes {
@@ -404,42 +524,36 @@ venue_write :: proc(p: Venue, path: string) -> (msg: string, ok: bool) {
 // database rows at deploy time and both were proven on 2026-09-13.
 venue_create :: proc(
 	vs: ^Install_Scan,
-	id, display, base, base_route: string,
+	name, base, base_route: string,
 	allocator := context.allocator,
 ) -> (
 	p: Venue,
 	msg: string,
 	ok: bool,
 ) {
-	if msg, ok = venue_id_free(vs, id); !ok {
+	if msg, ok = venue_name_free(vs, name); !ok {
 		return
 	}
 	if base == "" || base_route == "" {
 		return p, "a new venue needs a base venue to take its art from", false
 	}
 
-	shown := strings.trim_space(display)
-	if shown == "" {
-		shown = id
-	}
+	shown := strings.trim_space(name)
 	p = Venue {
+		// The one and only place an id is minted.
+		id         = venue_uuid(allocator),
 		format     = strings.clone(VENUE_FORMAT, allocator),
 		version    = VENUE_VERSION,
-		id         = strings.clone(id, allocator),
-		location   = strings.clone(id, allocator),
+		name       = strings.clone(shown, allocator),
 		base       = strings.clone(base, allocator),
 		base_route = strings.clone(base_route, allocator),
-		names      = {
-			location = strings.to_upper(shown, allocator),
-			venue    = strings.to_upper(shown, allocator),
-		},
 		routes     = make([]Venue_Route, 1, allocator),
 	}
 	// One stage to begin with. It has no markers yet, so the venue says what it
 	// still needs rather than looking ready to export.
 	p.routes[0] = {
 		id     = strings.clone("route_0", allocator),
-		name   = strings.to_upper(shown, allocator),
+		name   = strings.clone(shown, allocator),
 		start  = {from = -1, to = -1},
 		finish = {from = -1, to = -1},
 	}
@@ -456,9 +570,9 @@ venue_create :: proc(
 		venue_free(p, allocator)
 		return Venue{}, fmt.tprintf("could not create %s", maps_dir()), false
 	}
-	if msg, ok = venue_doc_write(p, &doc, venue_path(id)); !ok {
+	if msg, ok = venue_doc_write(p, &doc, venue_path(venue_dir(p))); !ok {
 		venue_free(p, allocator)
-		_ = os.remove(venue_path(id))
+		_ = os.remove(venue_path(venue_dir(p)))
 		return Venue{}, msg, false
 	}
 	// The pack is built now, while the base is known good, rather than at
@@ -466,7 +580,7 @@ venue_create :: proc(
 	// first venue on a base pays for it and the rest read it.
 	if _, msg, ok = content_pack_profile(vs, p.base); !ok {
 		venue_free(p, allocator)
-		_ = os.remove(venue_path(id))
+		_ = os.remove(venue_path(venue_dir(p)))
 		return Venue{}, msg, false
 	}
 	return p, "", true
@@ -497,17 +611,13 @@ base_venue_dir :: proc(vs: ^Install_Scan, base: string) -> string {
 // format moved.
 export_profile :: proc(
 	vs: ^Install_Scan,
-	venue: string,
+	p: Venue,
 	allocator := context.temp_allocator,
 ) -> (
 	out: ^d3.Venue_Profile,
 	msg: string,
 	ok: bool,
 ) {
-	p, load_msg, loaded := venue_load(venue, context.temp_allocator)
-	if !loaded {
-		return nil, load_msg, false
-	}
 	profile, pack_msg, pack_ok := content_pack_profile(vs, p.base, allocator)
 	if !pack_ok {
 		return nil, pack_msg, false
@@ -730,8 +840,9 @@ venue_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 	doc := doc_defaults()
 	defer doc_delete(&doc)
 	doc.install = vs
-	// The document owns this string; doc_delete frees it.
+	// The document owns these strings; doc_delete frees them.
 	doc.open_venue = strings.clone(p.id)
+	doc.venue_name = strings.clone(p.name)
 	if load_msg, loaded := doc_load_road(&doc, p.road); !loaded {
 		return load_msg, false
 	}
@@ -767,25 +878,26 @@ venue_compiled_delete :: proc(stages: []geo.Spline, allocator := context.allocat
 // Delete dirtbench's project directory, reverting a deployed copy first. The
 // regular revert path retains its backup and newest-first safety checks.
 venue_delete :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
-	if p.id == "" || sanitise_venue_id(p.id) != p.id {
-		return fmt.tprintf("refusing unsafe venue id %q", p.id), false
+	dir := venue_dir(p)
+	if dir == "" || len(dir) > VENUE_ID_MAX {
+		return fmt.tprintf("refusing unsafe venue name %q", p.name), false
 	}
 	revert_msg := ""
 	if venue_already_deployed(vs, p) {
 		if reverted_msg, reverted := venue_revert(vs, p); !reverted {
-			return fmt.tprintf("could not unstage %s before deleting it: %s", p.id, reverted_msg), false
+			return fmt.tprintf("could not unstage %s before deleting it: %s", p.name, reverted_msg), false
 		} else {
 			revert_msg = reverted_msg
 		}
 	}
-	path := venue_path(p.id)
+	path := venue_path(dir)
 	if err := os.remove(path); err != nil {
 		return fmt.tprintf("could not delete %s: %v", path, err), false
 	}
 	if revert_msg != "" {
-		return fmt.tprintf("%s\ndeleted venue %s", revert_msg, p.id), true
+		return fmt.tprintf("%s\ndeleted venue %s", revert_msg, p.name), true
 	}
-	return fmt.tprintf("deleted venue %s", p.id), true
+	return fmt.tprintf("deleted venue %s", p.name), true
 }
 
 // --- headless ----------------------------------------------------------------
@@ -845,10 +957,10 @@ venues_headless :: proc() -> bool {
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
 	for p in list {
-		fmt.printfln("%s  (location %s, %s)", p.id, p.location, pack_text(p.base, p.base_route))
+		fmt.printfln("%s  (%s, %s)", p.name, p.id, pack_text(p.base, p.base_route))
 		// Resolving the profile rebuilds a missing `base/`, so this also
 		// repairs a venue made before the pack existed.
-		if profile, profile_msg, profile_ok := export_profile(&vs, p.id, context.temp_allocator);
+		if profile, profile_msg, profile_ok := export_profile(&vs, p, context.temp_allocator);
 		   profile_ok {
 			fmt.printfln(
 				"    shaders        road %s, terrain %s, lod %s",
@@ -858,7 +970,7 @@ venues_headless :: proc() -> bool {
 			fmt.printfln("    shaders        none: %s", profile_msg)
 		}
 		if p.version >= 2 {
-			fmt.printfln("    document       %s", venue_path(p.id))
+			fmt.printfln("    document       %s", venue_path(venue_dir(p)))
 		}
 		for route in p.routes {
 			marks := route_has_markers(route) ? "" : "   [no start/finish yet]"
@@ -876,7 +988,7 @@ venues_headless :: proc() -> bool {
 // scope, no route markers involved.
 venue_tracksplit_collision :: proc(
 	vs: ^Install_Scan,
-	id: string,
+	p: Venue,
 	terrain: bool,
 	allocator := context.temp_allocator,
 ) -> (
@@ -891,7 +1003,7 @@ venue_tracksplit_collision :: proc(
 	}
 	defer geo.terrain_delete(&doc.terrain)
 
-	if load_msg, loaded := load_road(&doc, venue_path(id)); !loaded {
+	if load_msg, loaded := load_road(&doc, venue_path(venue_dir(p))); !loaded {
 		return nil, nil, load_msg, false
 	}
 	defer delete(doc.spline.points)
@@ -905,7 +1017,7 @@ venue_tracksplit_collision :: proc(
 		return nil, nil, build_msg, false
 	}
 
-	profile, msg, ok = export_profile(vs, id, allocator)
+	profile, msg, ok = export_profile(vs, p, allocator)
 	if !ok {
 		return nil, nil, msg, false
 	}
@@ -915,20 +1027,24 @@ venue_tracksplit_collision :: proc(
 // `--venue-tracksplit <id> [--terrain]`: build `tracksplit.pssg` from a
 // venue's whole road network and write it to `out/<id>/`, for inspection
 // before `track.vis` is correct at venue scope. Never touches the game.
-venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok: bool) {
+venue_tracksplit_headless :: proc(key: string, terrain: bool) -> (msg: string, ok: bool) {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
 	if !vs.found {
 		return install_scan_status_text(&vs), false
 	}
+	p, find_msg, found := venue_find(key, context.temp_allocator)
+	if !found {
+		return find_msg, false
+	}
 
-	collision, profile, build_msg, built := venue_tracksplit_collision(&vs, id, terrain, context.temp_allocator)
+	collision, profile, build_msg, built := venue_tracksplit_collision(&vs, p, terrain, context.temp_allocator)
 	if !built {
 		return build_msg, false
 	}
 
-	dir, _ := filepath.join({out_dir(), id}, context.temp_allocator)
+	dir, _ := filepath.join({out_dir(), venue_dir(p)}, context.temp_allocator)
 	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
 		return fmt.tprintf("could not create %s: %v", dir, err), false
 	}
@@ -939,7 +1055,7 @@ venue_tracksplit_headless :: proc(id: string, terrain: bool) -> (msg: string, ok
 // `--project-new <id> --base <venue> [--name <shown>]`: the New venue button,
 // for a machine with no display. Creates the project and seeds its road graph.
 // Writes nothing into the game.
-venue_new_headless :: proc(raw_id, base_id, display: string) -> bool {
+venue_new_headless :: proc(name, base_id: string) -> bool {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
@@ -957,16 +1073,15 @@ venue_new_headless :: proc(raw_id, base_id, display: string) -> bool {
 		return false
 	}
 
-	id := sanitise_venue_id(raw_id)
 	spec := fmt.tprintf("%s/%s", base.location, base.id)
-	p, msg, ok := venue_create(&vs, id, display, spec, base_route)
+	p, msg, ok := venue_create(&vs, name, spec, base_route)
 	if !ok {
 		fmt.println(msg)
 		return false
 	}
 	defer venue_free(p)
 
-	fmt.printfln("created %s from %s, at %s", id, spec, venue_path(id))
+	fmt.printfln("created %s (%s) from %s, at %s", p.name, p.id, spec, venue_path(venue_dir(p)))
 	return true
 }
 

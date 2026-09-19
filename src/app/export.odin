@@ -462,7 +462,11 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 	job.timing = doc.timing
 	// glTF needs no shaders, so a missing profile is only fatal for the target
 	// that names them.
-	job.profile, job.profile_msg, _ = export_profile(doc.install, doc.open_venue, context.temp_allocator)
+	if p, _, loaded := venue_of_doc(doc, context.temp_allocator); loaded {
+		job.profile, job.profile_msg, _ = export_profile(doc.install, p, context.temp_allocator)
+	} else {
+		job.profile_msg = "this road belongs to no venue, so it has no shaders"
+	}
 	ground := export_drawn(&job)
 	job.props = geo.veg_generate(
 		ground.ribbon,
@@ -514,18 +518,20 @@ export_dest :: proc(
 		// That directory only exists once the venue has been deployed, which is
 		// a separate step — so say so, rather than creating a directory the
 		// game never reads.
-		route, deployed := venue_deploy_dir(doc, doc.open_venue, stage_id)
+		route, deployed := venue_deploy_dir(doc, stage_id)
 		if !deployed {
 			return "", false, fmt.tprintf(
 				"%s is not in the game yet; tick Write to out/ until deploying exists",
-				doc.open_venue,
+				doc.venue_name,
 			), false
 		}
 		return route, true, "", true
 	}
 	// Two venues can both hold a `route_0`, so the debug detour keeps them
-	// apart by venue.
-	dir, _ = filepath.join({out_dir(), doc.open_venue, stage_id}, context.temp_allocator)
+	// apart by venue. By name and not by id: out/ is somewhere a person looks.
+	dir, _ = filepath.join(
+		{out_dir(), sanitise_venue_name(doc.venue_name), stage_id}, context.temp_allocator,
+	)
 	return dir, false, "", true
 }
 
@@ -542,11 +548,11 @@ export_dest :: proc(
 // rigid bodies from. It is the base route in the install either way, never the
 // output directory: an export must read stock art rather than its own last
 // output, and the debug detour keeps no backup there to fall back to.
-export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (venue_dir, template_dir, donor_route_dir: string) {
-	venue_dir = filepath.dir(out)
-	template_dir = venue_dir
+export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (venue_root, template_dir, donor_route_dir: string) {
+	venue_root = filepath.dir(out)
+	template_dir = venue_root
 	donor_route_dir = out
-	if p, _, loaded := venue_load(doc.open_venue, context.temp_allocator); loaded {
+	if p, _, loaded := venue_of_doc(doc, context.temp_allocator); loaded {
 		if venue, route, found := venue_source(doc.install, p); found {
 			donor_route_dir = route.dir
 			if !installing {
@@ -672,7 +678,6 @@ export_headless :: proc(
 		veg       = geo.VEG_DEFAULTS,
 	}
 	doc.debug_export = debug_out
-	doc.open_venue = venue
 	install_scan_init(doc.install)
 	defer install_scan_delete(doc.install)
 	defer delete(doc.spline.points)
@@ -680,8 +685,10 @@ export_headless :: proc(
 
 	// `doc.spline` is the venue's whole road graph; `chain` is the one stage
 	// being exported, compiled out of it.
-	p, pmsg, pok := venue_load(venue, context.temp_allocator)
+	p, pmsg, pok := venue_find(venue, context.temp_allocator)
 	if !pok { return pmsg, false }
+	doc.open_venue = p.id
+	doc.venue_name = p.name
 	chain, cmsg, cok := venue_compile_route(p, stage, &doc, context.allocator)
 	if !cok { return cmsg, false }
 	defer delete(chain.points)

@@ -26,6 +26,10 @@ Venue_Doc :: struct {
 	// whole road graph, and the window (or the headless command) says which
 	// stage of it is being looked at or exported.
 	open_venue:    string,
+	// The venue's name at the moment it was opened. The file it saves back to
+	// is named for it, and so is everything shown about it, neither of which
+	// the id can answer. A rename updates it here as well as on disk.
+	venue_name:    string,
 	// The stock venue this one derives its art from, "<location>/<venue>", or ""
 	// for a loose stage. The prop libraries are read out of it, and the tree
 	// species come off it too (geo.veg_preset_for_base).

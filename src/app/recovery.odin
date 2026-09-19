@@ -98,7 +98,7 @@ recovery_doc_dir :: proc(
 // Which document this is and where it belongs.
 recovery_doc_of :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> Recovery_Doc {
 	paths := make([]string, 1, allocator)
-	paths[0] = venue_path(doc.open_venue, allocator)
+	paths[0] = venue_path(sanitise_venue_name(doc.venue_name), allocator)
 	return {id = doc.open_venue, paths = paths}
 }
 
@@ -127,12 +127,20 @@ recovery_write_doc :: proc(root: string, doc: ^Venue_Doc) -> (msg: string, ok: b
 	paths := recovery_snapshot_paths(recovery_live_dir(root), rd)
 	// Identity comes from the venue's own file, not from the snapshot path:
 	// nothing is there yet, and a snapshot with no base venue restores a venue
-	// that cannot export.
-	p, load_msg, loaded := venue_load(rd.id, context.temp_allocator)
+	// that cannot export. By name, because this runs on the autosave timer and
+	// a search by id would read every venue in maps/ every time it fires.
+	p, load_msg, loaded := venue_of_doc(doc, context.temp_allocator)
 	if !loaded {
 		return load_msg, false
 	}
 	return venue_doc_write(p, doc, paths[0])
+}
+
+// Drop the snapshot folder an id left behind, for when a venue's id changes
+// under it. The folder is named for the id, so without this it would outlive
+// the venue and offer a restore of old work over the file that replaced it.
+recovery_forget_venue :: proc(root, venue_id: string) {
+	_ = os.remove_all(recovery_doc_dir(recovery_live_dir(root), Recovery_Doc{id = venue_id}))
 }
 
 // A document written home. Its snapshot goes with it: one older than the file it
@@ -415,11 +423,11 @@ swap_files :: proc(live, held: string) -> (msg: string, ok: bool) {
 // A document the recovery would swap under an open window. Restoring then would
 // leave the window holding one version and the disk another, and the window's
 // next save would quietly undo the restore.
-recovery_blocked_by :: proc(open: []^Venue_Doc, set: Recovery_Set) -> (id: string, blocked: bool) {
+recovery_blocked_by :: proc(open: []^Venue_Doc, set: Recovery_Set) -> (name: string, blocked: bool) {
 	for doc in set.docs {
 		for held in open {
 			if held.open_venue == doc.id {
-				return doc.id, true
+				return held.venue_name, true
 			}
 		}
 	}

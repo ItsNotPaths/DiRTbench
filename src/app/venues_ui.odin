@@ -27,10 +27,11 @@ DIM_COL :: ui.Im_Vec4{0.62, 0.62, 0.66, 1.0}
 WARN_COL :: ui.Im_Vec4{0.90, 0.72, 0.38, 1.0}
 MINE_COL :: ui.Im_Vec4{0.58, 0.82, 0.62, 1.0}
 
-// One stage's editable name. ImGui edits a fixed buffer in place, so the screen
-// keeps one per stage rather than re-reading the name out of the document every
-// frame, which would wipe whatever is half typed.
-Stage_Row :: struct {
+// One editable name. ImGui edits a fixed buffer in place, so the screen keeps
+// one per name rather than re-reading it out of the document every frame,
+// which would wipe whatever is half typed. An empty `route` is the venue's own
+// name rather than one of its stages.
+Name_Row :: struct {
 	venue: string, // both owned; together they are the row's identity
 	route: string,
 	name:  [64]u8,
@@ -41,8 +42,7 @@ Stage_Row :: struct {
 Venues_Screen :: struct {
 	venues:       []Venue,
 	adding:       bool,
-	name_buf:     [64]u8, // ImGui edits these in place, so they are fixed buffers
-	display_buf:  [64]u8,
+	name_buf:     [64]u8, // ImGui edits this in place, so it is a fixed buffer
 	// The vanilla venue the new one clones its art from, by **id**, not by index
 	// into `install.venues`: any deploy, revert or Rescan install rebuilds that
 	// array, and an index would then name a different venue. "" for none picked.
@@ -51,13 +51,19 @@ Venues_Screen :: struct {
 	error:        string, // why the last create was refused
 	deploy_ready: string, // venue whose read-only preflight was just shown
 	delete_ready: string, // second click confirms project deletion
+	// The venue whose id is being replaced, and how far through the three
+	// confirmations it is. Three because it cannot be undone and nothing about
+	// the venue looks different afterwards: the same road, under the same
+	// name, that the site has never heard of.
+	fresh_ready:  string,
+	fresh_step:   int,
 	stage_ready:  string, // "<venue>/<route>" whose removal a second click confirms
 	stages_open:  string, // the one venue showing its stage list, "" for none
 	upload_open:  string, // the one venue showing its upload panel, "" for none
 	upload:       Upload_Form,
 	browse_open:  bool,   // whether the browse window is up
 	browse:       Browse_Form,
-	rows:         [dynamic]Stage_Row,
+	rows:         [dynamic]Name_Row,
 	// Re-read `venues` between frames. Reloading mid-frame frees the array the
 	// row loop is walking.
 	reload_pending: bool,
@@ -74,6 +80,7 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	delete(ps.error)
 	delete(ps.deploy_ready)
 	delete(ps.delete_ready)
+	delete(ps.fresh_ready)
 	delete(ps.stage_ready)
 	delete(ps.stages_open)
 	delete(ps.upload_open)
@@ -237,7 +244,14 @@ draw_recovery_row :: proc(app: ^App, set: Recovery_Set, i: int) -> Recovery_Answ
 	}
 	ui.im_text_colored(recovered ? WARN_COL : MINE_COL, headline)
 	for doc in set.docs {
-		ui.im_text_colored(DIM_COL, fmt.ctprintf("    venue %s", doc.id))
+		// A snapshot records the id, which is all that still identifies the
+		// venue if it was renamed since. Show the name when the venue is still
+		// here to have one.
+		shown := doc.id
+		if p, here := venue_for(&app.screen, doc.id); here {
+			shown = p.name
+		}
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("    venue %s", shown))
 	}
 
 	if held, blocked := recovery_blocked_by(app.docs[:], set); blocked {
@@ -328,15 +342,16 @@ draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
 @(private = "file")
 draw_venue_row :: proc(app: ^App, p: ^Venue) {
 	ps := &app.screen
-	label := fmt.ctprintf("%s###venue_%s", p.id, p.id)
+	label := fmt.ctprintf("%s###venue_%s", p.name, p.id)
 	if !ui.igCollapsingHeader_TreeNodeFlags(label, ui.IM_TREE_NODE_DEFAULT_OPEN) {
 		return
 	}
 	ui.im_text_colored(MINE_COL, fmt.ctprint(pack_text(p.base, p.base_route)))
 	deployed := false
-	if venue, found := d3.install_venue(&app.install.install, p.location, p.id); found {
+	if venue, found := d3.install_venue(&app.install.install, venue_dir(p^), venue_dir(p^)); found {
 		deployed = d3.venue_playable(venue^)
 	}
+	draw_venue_name(app, p, deployed)
 	ui.im_text_colored(
 		deployed ? MINE_COL : DIM_COL,
 		deployed ? "deployed" : "not deployed",
@@ -391,29 +406,179 @@ venue_stages :: proc(app: ^App, venue_id: string) -> []Venue_Route {
 	return nil
 }
 
-// The name buffer for this stage, seeded from the list the first time it is
-// asked for. Seeded once and not again: after that the buffer is what the user
-// is typing, and the list is what they last committed.
+// The venue's name, editable in place. It commits when the field loses focus
+// or Enter is pressed, the same way a stage name does.
+//
+// Renaming a deployed venue is refused rather than handled: the name is both
+// game directories and the `file_string` in the registration, so moving it
+// would mean reverting and deploying again, and doing that silently under a
+// text box is not something a rename should do.
 @(private = "file")
-stage_row :: proc(ps: ^Venues_Screen, venue_id: string, route: Venue_Route) -> ^Stage_Row {
+draw_venue_name :: proc(app: ^App, p: ^Venue, deployed: bool) {
+	ps := &app.screen
+	row := name_row(ps, p.id, "", p.name)
+	ui.igSetNextItemWidth(170)
+	ui.igBeginDisabled(deployed)
+	ui.igInputText(
+		fmt.ctprintf("###venue_name_%s", p.id),
+		raw_data(row.name[:]), len(row.name), ui.IM_INPUT_TEXT_NONE, nil, nil,
+	)
+	if ui.igIsItemDeactivatedAfterEdit() {
+		venue_rename(app, p, buf_text(row.name[:]))
+	}
+	ui.igEndDisabled()
+	ui.im_same_line()
+	hint := deployed ? "   revert it to rename" : ""
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s%s", p.id, hint))
+	ui.im_same_line()
+	draw_fresh_id(app, p)
+}
+
+// What each press of the fresh-id button says, in order. The last one does it.
+FRESH_ID_STEPS :: [4]cstring {
+	"Fresh id...",
+	"Unlink from the site?",
+	"An upload then makes a second listing. Sure?",
+	"There is no undo. Mint it?",
+}
+
+// Give the venue an id it has never had, cutting it loose from whatever the
+// site knows it as.
+//
+// Three confirmations, because nothing visible changes when it lands: same
+// road, same name, same stages, and no way back to the listing it used to
+// update. A venue downloaded from the site keeps its `source` through this —
+// a new id does not make somebody else's work ours to publish.
+@(private = "file")
+draw_fresh_id :: proc(app: ^App, p: ^Venue) {
+	ps := &app.screen
+	steps := FRESH_ID_STEPS
+	step := ps.fresh_ready == p.id ? ps.fresh_step : 0
+	if step > 0 {
+		ui.im_text_colored(WARN_COL, fmt.ctprintf("%d of %d", step, len(steps) - 1))
+		ui.im_same_line()
+	}
+	if !ui.im_button(fmt.ctprintf("%s###fresh_id_%s", steps[step], p.id)) {
+		return
+	}
+	if step < len(steps) - 1 {
+		delete(ps.fresh_ready)
+		ps.fresh_ready = strings.clone(p.id)
+		ps.fresh_step = step + 1
+		return
+	}
+	delete(ps.fresh_ready)
+	ps.fresh_ready = ""
+	ps.fresh_step = 0
+	venue_fresh_id(app, p)
+}
+
+@(private = "file")
+venue_fresh_id :: proc(app: ^App, p: ^Venue) {
+	was := strings.clone(p.id, context.temp_allocator)
+	fresh, load_msg, loaded := venue_load(was, context.temp_allocator)
+	if !loaded {
+		set_status(&app.status, load_msg, false)
+		return
+	}
+	fresh.id = venue_uuid(context.temp_allocator)
+	if msg, ok := venue_write(fresh, venue_path(venue_dir(fresh))); !ok {
+		set_status(&app.status, msg, false)
+		return
+	}
+	// The listing the old id was tied to is not this venue's any more, and no
+	// id will ever look that line up again.
+	upload_slug_forget(was)
+	// Windows and their crash snapshots key on the id.
+	recovery_forget_venue(recovery_root(), was)
+	for doc in app.docs {
+		if doc.open_venue == was {
+			delete(doc.open_venue)
+			doc.open_venue = strings.clone(fresh.id)
+		}
+	}
+	ps := &app.screen
+	ps.reload_pending = true
+	set_status(&app.status, fmt.tprintf("%s is now %s, and new to the site", p.name, fresh.id), true)
+}
+
+// Give the venue a new name: the file moves, and so does every open window's
+// idea of where it saves. The id does not move, which is the point of it —
+// the site still knows this venue, and an upload still finds its listing.
+@(private = "file")
+venue_rename :: proc(app: ^App, p: ^Venue, typed: string) {
+	ps := &app.screen
+	name := strings.trim_space(typed)
+	if name == p.name {
+		return
+	}
+	if msg, ok := venue_name_free(&app.install, name, p.id); !ok {
+		set_status(&app.status, msg, false)
+		// Put the committed name back, so the box stops showing one that was
+		// refused.
+		set_buf(name_row(ps, p.id, "", p.name).name[:], p.name)
+		return
+	}
+	was := venue_path(venue_dir(p^), context.temp_allocator)
+	fresh, load_msg, loaded := venue_load(p.id, context.temp_allocator)
+	if !loaded {
+		set_status(&app.status, load_msg, false)
+		return
+	}
+	fresh.name = name
+	if msg, ok := venue_write(fresh, venue_path(venue_dir(fresh))); !ok {
+		set_status(&app.status, msg, false)
+		return
+	}
+	if was != venue_path(venue_dir(fresh), context.temp_allocator) {
+		_ = os.remove(was)
+	}
+	// Every window on this venue saves by name, so they are told before the
+	// next save goes somewhere the file no longer is.
+	for doc in app.docs {
+		if doc.open_venue == p.id {
+			delete(doc.venue_name)
+			doc.venue_name = strings.clone(name)
+		}
+	}
+	// The box shows what was committed, not what was typed into it: the two
+	// differ by whatever whitespace was trimmed off.
+	set_buf(name_row(ps, p.id, "", name).name[:], name)
+	ps.reload_pending = true
+	set_status(&app.status, fmt.tprintf("renamed to %s", name), true)
+}
+
+// The name buffer for this stage, or for the venue itself when `route_id` is
+// empty, seeded the first time it is asked for. Seeded once and not again:
+// after that the buffer is what the user is typing, and the document is what
+// they last committed.
+@(private = "file")
+name_row :: proc(
+	ps: ^Venues_Screen, venue_id, route_id, seed: string,
+) -> ^Name_Row {
 	for &row in ps.rows {
-		if row.venue == venue_id && row.route == route.id {
+		if row.venue == venue_id && row.route == route_id {
 			return &row
 		}
 	}
-	append(&ps.rows, Stage_Row{venue = strings.clone(venue_id), route = strings.clone(route.id)})
+	append(&ps.rows, Name_Row{venue = strings.clone(venue_id), route = strings.clone(route_id)})
 	row := &ps.rows[len(ps.rows) - 1]
-	set_buf(row.name[:], route.name)
+	set_buf(row.name[:], seed)
 	return row
 }
 
-// Drop the buffers of stages that are gone, so a re-used id gets a fresh one.
+// Drop the buffers of venues and stages that are gone, so a fresh one is
+// seeded if the same name comes back.
 @(private = "file")
 stage_rows_sweep :: proc(app: ^App) {
 	ps := &app.screen
 	for i := len(ps.rows) - 1; i >= 0; i -= 1 {
 		row := ps.rows[i]
-		if route_index(venue_stages(app, row.venue), row.route) >= 0 {
+		_, venue_here := venue_for(ps, row.venue)
+		keep := row.route == "" \
+			? venue_here \
+			: route_index(venue_stages(app, row.venue), row.route) >= 0
+		if keep {
 			continue
 		}
 		delete(row.venue)
@@ -521,7 +686,7 @@ draw_stage_row :: proc(app: ^App, p: ^Venue, route: Venue_Route) {
 	}
 	ui.im_same_line()
 
-	row := stage_row(ps, p.id, route)
+	row := name_row(ps, p.id, route.id, route.name)
 	ui.igSetNextItemWidth(170)
 	ui.igInputText(
 		fmt.ctprintf("###name_%s_%s", p.id, route.id),
@@ -588,11 +753,10 @@ draw_new_venue :: proc(app: ^App) {
 	vs := &app.install
 
 	ui.igSeparatorText("New venue")
-	ui.igInputText("id", &ps.name_buf[0], len(ps.name_buf), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
-	ui.igInputText("shown as", &ps.display_buf[0], len(ps.display_buf), ui.IM_INPUT_TEXT_NONE, nil, nil)
+	ui.igInputText("name", &ps.name_buf[0], len(ps.name_buf), ui.IM_INPUT_TEXT_NONE, nil, nil)
 
-	id := sanitise_venue_id(buf_text(ps.name_buf[:]))
-	ui.im_text_colored(DIM_COL, fmt.ctprintf("directory and file_string: %s", id))
+	name := buf_text(ps.name_buf[:])
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("directory and file_string: %s", sanitise_venue_name(name)))
 
 	ui.im_text("Art comes from:")
 	for venue in vs.install.venues {
@@ -620,23 +784,17 @@ draw_new_venue :: proc(app: ^App) {
 	ui.igBeginDisabled(!have_base || ps.base_route == "")
 	if ui.im_button("Create") {
 		spec := fmt.tprintf("%s/%s", base.location, base.id)
-		p, msg, ok := venue_create(
-			vs,
-			id,
-			buf_text(ps.display_buf[:]),
-			spec,
-			ps.base_route,
-		)
+		p, msg, ok := venue_create(vs, name, spec, ps.base_route)
 		delete(ps.error)
 		ps.error = ""
 		if !ok {
 			ps.error = strings.clone(msg)
 		} else {
-			venue_free(p)
 			ps.adding = false
-			ps.name_buf, ps.display_buf = {}, {}
+			ps.name_buf = {}
 			ps.reload_pending = true
-			set_status(&app.status, fmt.tprintf("created %s from %s", id, spec), true)
+			set_status(&app.status, fmt.tprintf("created %s from %s", p.name, spec), true)
+			venue_free(p)
 		}
 	}
 	ui.igEndDisabled()
@@ -679,10 +837,12 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	doc.next_route = p.next_route
 	doc.shot = p.shot
 	delete(doc.open_venue)
+	delete(doc.venue_name)
 	doc.open_venue = strings.clone(p.id)
+	doc.venue_name = strings.clone(p.name)
 	// The trees come with the art: the base venue picks the species, not the user.
 	doc_set_base(doc, p.base)
-	set_stage_name(doc, p.id)
+	set_stage_name(doc, p.name)
 	mark_dirty(doc)
 	doc_loaded(doc)
 	return "", true

@@ -61,3 +61,30 @@ conf_apply_does_not_uncomment :: proc(t: ^testing.T) {
 	testing.expect(t, strings.contains(after, "# k = one"), "the comment was eaten")
 	testing.expect(t, strings.contains(after, "k = two"))
 }
+
+// A fresh id leaves the listing its old id was tied to behind, and nothing
+// will ever look that line up again, so the line goes rather than emptying.
+@(test)
+conf_apply_removes_a_key :: proc(t: ^testing.T) {
+	before := `# keep me
+upload_slug.b6f588abc7b58ab4 = dirtbench-b5d179
+dirtbench_user = paths
+`
+	after := conf_apply(before, "upload_slug.b6f588abc7b58ab4", "", context.allocator, remove = true)
+	defer delete(after)
+
+	testing.expect(t, !strings.contains(after, "upload_slug"), "the key is still there")
+	testing.expect(t, !strings.contains(after, "dirtbench-b5d179"), "the value is still there")
+	testing.expect(t, strings.contains(after, "# keep me"), "the comment was lost")
+	testing.expect(t, strings.contains(after, "dirtbench_user = paths"), "another key was lost")
+}
+
+// Removing a key that was never there leaves the file as it was, rather than
+// appending an empty line for it.
+@(test)
+conf_apply_removing_an_absent_key_changes_nothing :: proc(t: ^testing.T) {
+	before := "dirtbench_user = paths\n"
+	after := conf_apply(before, "upload_slug.b6f588abc7b58ab4", "", context.allocator, remove = true)
+	defer delete(after)
+	testing.expect_value(t, after, before)
+}

@@ -96,6 +96,7 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 	veg_cache_clear(doc)
 	delete(doc.spline.points)
 	delete(doc.open_venue)
+	delete(doc.venue_name)
 	delete(doc.base)
 	props_free(doc)
 	venue_art_free(doc)

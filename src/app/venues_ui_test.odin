@@ -188,7 +188,7 @@ a_written_document_keeps_its_road_and_its_stages :: proc(t: ^testing.T) {
 		finish = {from = -1, to = -1},
 	})
 
-	p := Venue{format = VENUE_FORMAT, version = VENUE_VERSION, id = "moose", base = "finland/finland_rally"}
+	p := Venue{format = VENUE_FORMAT, version = VENUE_VERSION, id = "00112233445566aa", name = "moose", base = "finland/finland_rally"}
 	msg, ok := venue_doc_write(p, &doc, path)
 	testing.expect(t, ok, msg); if !ok { return }
 

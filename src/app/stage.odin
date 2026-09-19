@@ -147,7 +147,17 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 	}
 	p, _, loaded := venue_load_path(path, context.temp_allocator)
 	if !loaded {
-		p = Venue{format = VENUE_FORMAT, version = VENUE_VERSION}
+		// No venue at this path yet. It still has to be a venue document, so
+		// it is given an identity here rather than reaching disk without one.
+		p = Venue {
+			format  = VENUE_FORMAT,
+			version = VENUE_VERSION,
+			id      = venue_uuid(context.temp_allocator),
+			name    = sanitise_venue_name(
+				strings.trim_suffix(filepath.base(path), STAGE_EXT),
+				context.temp_allocator,
+			),
+		}
 	}
 	return venue_doc_write(p, doc, path)
 }

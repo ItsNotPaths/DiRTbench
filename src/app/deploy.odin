@@ -26,7 +26,7 @@ import d3 "../d3"
 // that exists, nothing here writes into the install.
 venue_deploy_dir :: proc(
 	doc: ^Venue_Doc,
-	id, route: string,
+	route: string,
 	allocator := context.temp_allocator,
 ) -> (
 	dir: string,
@@ -36,11 +36,12 @@ venue_deploy_dir :: proc(
 	if !vs.found {
 		return "", false
 	}
-	p, _, ok := venue_load(id, context.temp_allocator)
+	p, _, ok := venue_of_doc(doc, context.temp_allocator)
 	if !ok {
 		return "", false
 	}
-	venue, found := d3.install_venue(&vs.install, p.location, p.id)
+	vdir := venue_dir(p)
+	venue, found := d3.install_venue(&vs.install, vdir, vdir)
 	if !found {
 		return "", false
 	}
@@ -333,7 +334,8 @@ Venue_Deployment :: struct {
 }
 
 venue_already_deployed :: proc(vs: ^Install_Scan, p: Venue) -> bool {
-	installed, found := d3.install_venue(&vs.install, p.location, p.id)
+	dir := venue_dir(p)
+	installed, found := d3.install_venue(&vs.install, dir, dir)
 	return found && d3.venue_playable(installed^)
 }
 
@@ -366,15 +368,24 @@ prepare_venue_deployment :: proc(
 	if !found {
 		return deployment, fmt.tprintf("base %s/%s is not playable", p.base, p.base_route), false
 	}
-	if installed, exists := d3.install_venue(&vs.install, p.location, p.id); exists {
+	dir := venue_dir(p)
+	// The last gate before a name becomes two game directories and a
+	// `file_string`, which hold 16 bytes.
+	if len(dir) > VENUE_ID_MAX {
+		return deployment, fmt.tprintf(
+			"%q is %d characters as a directory; the game holds %d — rename it first",
+			dir, len(dir), VENUE_ID_MAX,
+		), false
+	}
+	if installed, exists := d3.install_venue(&vs.install, dir, dir); exists {
 		if d3.venue_playable(installed^) {
-			return deployment, fmt.tprintf("already deployed: %s/%s", p.location, p.id), false
+			return deployment, fmt.tprintf("already deployed: %s", p.name), false
 		}
 		return deployment, "partial or conflicting installation found; refusing to reconcile it", false
 	}
 
 	deployment.target, _ = filepath.join(
-		{vs.install.root, d3.LOCATIONS_SUBDIR, p.location, p.id},
+		{vs.install.root, d3.LOCATIONS_SUBDIR, dir, dir},
 		context.temp_allocator,
 	)
 	if os.exists(deployment.target) {
@@ -388,10 +399,10 @@ prepare_venue_deployment :: proc(
 	deployment.registration, msg, ok = d3.prepare_registration(
 		vs.install.root,
 		source_route.model_id,
-		p.location,
-		p.id,
-		p.names.location,
-		p.names.venue,
+		dir,
+		dir,
+		p.name,
+		p.name,
 		ids,
 		names,
 	)
@@ -416,7 +427,7 @@ venue_deployment_text :: proc(deployment: Venue_Deployment) -> string {
 
 venue_deploy_preflight :: proc(vs: ^Install_Scan, p: Venue) -> (string, bool) {
 	if venue_already_deployed(vs, p) {
-		return fmt.tprintf("already deployed: %s/%s", p.location, p.id), true
+		return fmt.tprintf("already deployed: %s", p.name), true
 	}
 	deployment, msg, ok := prepare_venue_deployment(vs, p)
 	if !ok {
@@ -457,7 +468,7 @@ publish_venue_deployment :: proc(
 
 venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	if venue_already_deployed(vs, p) {
-		return fmt.tprintf("already deployed: %s/%s", p.location, p.id), true
+		return fmt.tprintf("already deployed: %s", p.name), true
 	}
 	deployment, prepare_msg, prepared := prepare_venue_deployment(vs, p)
 	if !prepared {
@@ -471,7 +482,7 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		deployment.registration.use,
 	}
 	backups: [3]string
-	backup_suffix := fmt.tprintf(".dirtbench-%s", p.id)
+	backup_suffix := fmt.tprintf(".dirtbench-%s", venue_dir(p))
 	for path, i in paths {
 		backups[i], msg, ok = ensure_backup(path, backup_suffix)
 		if !ok {
@@ -515,15 +526,16 @@ revert_order_ok :: proc(vs: ^Install_Scan, p: Venue, database_backup: []u8) -> (
 		if other.id == p.id {
 			continue
 		}
-		installed, found := d3.install_venue(&vs.install, other.location, other.id)
+		other_dir := venue_dir(other)
+		installed, found := d3.install_venue(&vs.install, other_dir, other_dir)
 		if !found || !d3.venue_playable(installed^) {
 			continue
 		}
-		if !d3.database_bytes_have_venue(database_backup, other.location, other.id) {
+		if !d3.database_bytes_have_venue(database_backup, other_dir, other_dir) {
 			return fmt.tprintf(
 				"revert %s before %s; deployments must be reverted newest first",
-				other.id,
-				p.id,
+				other.name,
+				p.name,
 			), false
 		}
 	}
@@ -534,18 +546,19 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	if !vs.found {
 		return install_scan_status_text(vs), false
 	}
+	dir := venue_dir(p)
 	target, _ := filepath.join(
-		{vs.install.root, d3.LOCATIONS_SUBDIR, p.location, p.id},
+		{vs.install.root, d3.LOCATIONS_SUBDIR, dir, dir},
 		context.temp_allocator,
 	)
 	if !os.is_dir(target) {
-		return fmt.tprintf("%s is not deployed", p.id), false
+		return fmt.tprintf("%s is not deployed", p.name), false
 	}
 
 	paths := registration_paths(vs.install.root)
 	backups: [3]string
 	for path, i in paths {
-		backups[i] = fmt.tprintf("%s.dirtbench-%s", path, p.id)
+		backups[i] = fmt.tprintf("%s.dirtbench-%s", path, dir)
 		if !os.is_file(backups[i]) {
 			return fmt.tprintf("missing verified backup: %s", backups[i]), false
 		}
@@ -567,14 +580,14 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 			remove_err,
 		), false
 	}
-	return fmt.tprintf("reverted %s; document remains at %s", p.id, venue_path(p.id)), true
+	return fmt.tprintf("reverted %s; document remains at %s", p.name, venue_path(dir)), true
 }
 
-venue_deploy_preflight_headless :: proc(id: string) -> bool {
+venue_deploy_preflight_headless :: proc(key: string) -> bool {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
-	p, msg, ok := venue_load(id)
+	p, msg, ok := venue_find(key)
 	if !ok {
 		fmt.println(msg)
 		return false
@@ -585,11 +598,11 @@ venue_deploy_preflight_headless :: proc(id: string) -> bool {
 	return ok
 }
 
-venue_deploy_headless :: proc(id: string) -> bool {
+venue_deploy_headless :: proc(key: string) -> bool {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
-	p, msg, ok := venue_load(id)
+	p, msg, ok := venue_find(key)
 	if !ok {
 		fmt.println(msg)
 		return false
@@ -600,11 +613,11 @@ venue_deploy_headless :: proc(id: string) -> bool {
 	return ok
 }
 
-venue_revert_headless :: proc(id: string) -> bool {
+venue_revert_headless :: proc(key: string) -> bool {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
-	p, msg, ok := venue_load(id)
+	p, msg, ok := venue_find(key)
 	if !ok {
 		fmt.println(msg)
 		return false

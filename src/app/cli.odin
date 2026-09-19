@@ -44,12 +44,12 @@ run_cli :: proc() -> (handled: bool) {
 	if len(args) >= 1 && args[0] == "--venues" {
 		os.exit(venues_headless() ? 0 : 1)
 	}
-	// `--venue-new <id> --base <venue> [--name <shown>]`: the New venue button
-	// without a window. Writes nothing into the game.
+	// `--venue-new <name> --base <venue>`: the New venue button without a
+	// window. Writes nothing into the game.
 	if len(args) >= 1 && args[0] == "--venue-new" {
-		id, base, display := "", "", ""
+		name, base := "", ""
 		if len(args) >= 2 {
-			id = args[1]
+			name = args[1]
 		}
 		for i := 2; i < len(args); i += 1 {
 			switch args[i] {
@@ -60,23 +60,16 @@ run_cli :: proc() -> (handled: bool) {
 				}
 				i += 1
 				base = args[i]
-			case "--name":
-				if i + 1 >= len(args) {
-					fmt.println("--name needs a display name")
-					os.exit(1)
-				}
-				i += 1
-				display = args[i]
 			case:
 				fmt.printfln("unknown flag %q", args[i])
 				os.exit(1)
 			}
 		}
-		if id == "" || base == "" {
-			fmt.println("usage: dirtbench --venue-new <id> --base <venue> [--name <shown>]")
+		if name == "" || base == "" {
+			fmt.println("usage: dirtbench --venue-new <name> --base <venue>")
 			os.exit(1)
 		}
-		os.exit(venue_new_headless(id, base, display) ? 0 : 1)
+		os.exit(venue_new_headless(name, base) ? 0 : 1)
 	}
 	if len(args) >= 2 && args[0] == "--venue-deploy" {
 		apply := len(args) == 3 && args[2] == "--apply"

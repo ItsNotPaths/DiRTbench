@@ -27,9 +27,9 @@ import "../ui"
 // The document goes home to its venue file. The road and the markers that make
 // the stages go down together, so neither can land without the other.
 do_save :: proc(ed: ^Editor) {
-	msg, ok := save_road(ed.doc, venue_path(ed.doc.open_venue))
+	msg, ok := save_road(ed.doc, venue_path(sanitise_venue_name(ed.doc.venue_name)))
 	if ok {
-		msg = fmt.tprintf("saved %s", ed.doc.open_venue)
+		msg = fmt.tprintf("saved %s", ed.doc.venue_name)
 		recovery_doc_saved(recovery_root(), ed.doc)
 		// The project manager holds its own copy of the document, and both
 		// deploy and every reopen read that copy rather than the file. It has
@@ -234,14 +234,14 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 	if route == nil {
 		ui.im_text_colored(
 			WARN_COL,
-			fmt.ctprintf("%s is no longer a stage of %s", ed.stage_id, ed.doc.open_venue),
+			fmt.ctprintf("%s is no longer a stage of %s", ed.stage_id, ed.doc.venue_name),
 		)
 		ui.im_text("close this window")
 		return
 	}
 
 	ui.igSeparatorText(fmt.ctprint(route.name))
-	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s / %s", ed.doc.open_venue, route.id))
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s / %s", ed.doc.venue_name, route.id))
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)
@@ -319,7 +319,7 @@ draw_inspector :: proc(ed: ^Editor) {
 
 draw_inspector_body :: proc(ed: ^Editor) {
 	ui.igSeparatorText("Venue road network")
-	ui.im_text(fmt.ctprint(ed.doc.open_venue))
+	ui.im_text(fmt.ctprint(ed.doc.venue_name))
 	ui.igBeginDisabled(len(ed.doc.spline.points) < 2)
 	if ui.im_button("Save") {
 		do_save(ed)

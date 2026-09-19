@@ -24,7 +24,6 @@ Upload_Form :: struct {
 	seeded:      string, // the venue these buffers were filled for
 	user:        [32]u8,
 	password:    [80]u8,
-	title:       [128]u8,
 	description: [4096]u8,
 	changelog:   [320]u8,
 	// An image to send instead of the rendered one. A path, not a picker: SDL
@@ -47,7 +46,6 @@ upload_form_seed :: proc(f: ^Upload_Form, p: ^Venue) {
 	delete(f.seeded)
 	f^ = {seeded = strings.clone(p.id)}
 	set_buf(f.user[:], upload_user())
-	set_buf(f.title[:], p.names.venue != "" ? p.names.venue : p.id)
 }
 
 // Why the Upload button is dead, or "" when it is not. One message rather than
@@ -63,14 +61,11 @@ upload_blocked :: proc(app: ^App, f: ^Upload_Form, p: ^Venue) -> string {
 	if doc := venue_doc_for(app, p.id); doc != nil && doc_unsaved(doc) {
 		return "save the venue first — the site is sent the file on disk"
 	}
-	if !os.exists(venue_path(p.id)) {
-		return fmt.tprintf("%s is not on disk", venue_path(p.id))
+	if !os.exists(venue_path(venue_dir(p^))) {
+		return fmt.tprintf("%s is not on disk", venue_path(venue_dir(p^)))
 	}
 	if strings.trim_space(buf_text(f.user[:])) == "" || buf_text(f.password[:]) == "" {
 		return "a username and password are needed"
-	}
-	if strings.trim_space(buf_text(f.title[:])) == "" {
-		return "the listing needs a name"
 	}
 	if img := strings.trim_space(buf_text(f.image[:])); img != "" && !os.exists(img) {
 		return fmt.tprintf("no file at %s", img)
@@ -99,7 +94,7 @@ draw_upload_window :: proc(app: ^App) {
 	// The venue is in the title and the id is not, so moving to another venue
 	// keeps the window where the user put it.
 	open := true
-	if ui.igBegin(fmt.ctprintf("Upload %s###upload_window", p.id), &open, ui.IM_WINDOW_NONE) {
+	if ui.igBegin(fmt.ctprintf("Upload %s###upload_window", p.name), &open, ui.IM_WINDOW_NONE) {
 		draw_upload_form(app, p)
 	}
 	ui.igEnd()
@@ -124,7 +119,7 @@ draw_upload_form :: proc(app: ^App, p: ^Venue) {
 	if p.source.slug != "" {
 		ui.im_text_colored(
 			WARN_COL,
-			fmt.ctprintf("%s was downloaded from %s and belongs to its author.", p.id, p.source.site),
+			fmt.ctprintf("%s was downloaded from %s and belongs to its author.", p.name, p.source.site),
 		)
 		ui.im_text_colored(DIM_COL, fmt.ctprintf("Its listing is %s.", p.source.slug))
 		return
@@ -134,8 +129,11 @@ draw_upload_form :: proc(app: ^App, p: ^Venue) {
 	ui.igInputText("user", raw_data(f.user[:]), len(f.user), ui.IM_INPUT_TEXT_CHARS_NO_BLANK, nil, nil)
 	ui.igSetNextItemWidth(260)
 	ui.igInputText("password", raw_data(f.password[:]), len(f.password), ui.IM_INPUT_TEXT_PASSWORD, nil, nil)
-	ui.igSetNextItemWidth(260)
-	ui.igInputText("name", raw_data(f.title[:]), len(f.title), ui.IM_INPUT_TEXT_NONE, nil, nil)
+	// No name field: the listing is called whatever the venue is called, and
+	// that is a text box on the venue's own row. A rename reaches the site on
+	// the next upload, which still lands on the same listing because the id
+	// travelling with it did not change.
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("Listed as %s", p.name))
 	ui.im_text_colored(DIM_COL, "Description")
 	ui.igInputTextMultiline(
 		"###upload_desc", raw_data(f.description[:]), len(f.description),
@@ -260,18 +258,18 @@ app_service_upload_request :: proc(app: ^App) {
 	upload_start(&app.uploader, p.id, Upload_Job{
 		username    = strings.clone(strings.trim_space(buf_text(f.user[:]))),
 		password    = strings.clone(buf_text(f.password[:])),
-		title       = strings.clone(strings.trim_space(buf_text(f.title[:]))),
+		title       = strings.clone(p.name),
 		description = strings.clone(buf_text(f.description[:])),
 		changelog   = strings.clone(buf_text(f.changelog[:])),
 		slug        = strings.clone(upload_slug(p.id)),
-		level_path  = strings.clone(venue_path(p.id)),
+		level_path  = strings.clone(venue_path(venue_dir(p^))),
 		image_path  = strings.clone(image),
 		image_ours  = ours,
 	})
 	// The job's clone is now the only copy: typed every time, kept no longer
 	// than the request that uses it.
 	f.password = {}
-	set_status(&app.status, fmt.tprintf("uploading %s...", p.id), true)
+	set_status(&app.status, fmt.tprintf("uploading %s...", p.name), true)
 }
 
 // Render the thumbnail to a scratch file. The caller owns the path and deletes

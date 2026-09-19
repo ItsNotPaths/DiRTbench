@@ -139,17 +139,19 @@ recovery_promote_claims_only_dead_sessions :: proc(t: ^testing.T) {
 // the restore back the way it was.
 @(test)
 recovery_refuses_to_swap_a_document_a_window_holds :: proc(t: ^testing.T) {
-	forest := Venue_Doc{open_venue = "forest"}
+	// A snapshot records the venue by id; what the refusal names is the window
+	// holding it, which is the name the user is looking at.
+	forest := Venue_Doc{open_venue = "00112233445566aa", venue_name = "FOREST"}
 	open := []^Venue_Doc{&forest}
 
 	docs := make([]Recovery_Doc, 1, context.temp_allocator)
 
-	docs[0] = {id = "moose_loop"}
+	docs[0] = {id = "aabbccddeeff0011"}
 	_, blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
 	testing.expect(t, !blocked, "a venue nobody has open was refused")
 
-	docs[0] = {id = "forest"}
+	docs[0] = {id = "00112233445566aa"}
 	held, venue_blocked := recovery_blocked_by(open, Recovery_Set{docs = docs})
 	testing.expect(t, venue_blocked, "a venue with a window open was allowed")
-	testing.expect_value(t, held, "forest")
+	testing.expect_value(t, held, "FOREST")
 }

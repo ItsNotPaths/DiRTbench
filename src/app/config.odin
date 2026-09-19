@@ -101,11 +101,25 @@ conf_set :: proc(key, val: string) -> (msg: string, ok: bool) {
 	return "", true
 }
 
-// `text` with `key` set to `val`: the line replaced where it stands, appended
-// when there is none, and every other line — comments, blanks, order — left
-// exactly as it was found. A file that holds the same key twice comes back
-// holding it once.
-conf_apply :: proc(text, key, val: string, allocator := context.temp_allocator) -> string {
+// Forget one key. The line goes and nothing else moves; a key that was not
+// there is not an error.
+conf_unset :: proc(key: string) -> (msg: string, ok: bool) {
+	path := conf_write_path()
+	data, _ := os.read_entire_file(path, context.temp_allocator)
+	out := conf_apply(string(data), key, "", context.temp_allocator, remove = true)
+	if err := os.write_entire_file(path, transmute([]u8)out); err != nil {
+		return fmt.tprintf("could not write %s: %v", path, err), false
+	}
+	return "", true
+}
+
+// `text` with `key` set to `val`, or with `key` gone when `remove` is set: the
+// line replaced where it stands, appended when there is none, and every other
+// line — comments, blanks, order — left exactly as it was found. A file that
+// holds the same key twice comes back holding it once.
+conf_apply :: proc(
+	text, key, val: string, allocator := context.temp_allocator, remove := false,
+) -> string {
 	b := strings.builder_make(allocator)
 	written := false
 	rest := text
@@ -115,7 +129,7 @@ conf_apply :: proc(text, key, val: string, allocator := context.temp_allocator) 
 		is_key := eq > 0 && !strings.has_prefix(trimmed, "#") &&
 			strings.trim_space(trimmed[:eq]) == key
 		if is_key {
-			if !written {
+			if !written && !remove {
 				fmt.sbprintf(&b, "%s = %s\n", key, val)
 				written = true
 			}
@@ -124,7 +138,7 @@ conf_apply :: proc(text, key, val: string, allocator := context.temp_allocator) 
 		strings.write_string(&b, line)
 		strings.write_byte(&b, '\n')
 	}
-	if !written {
+	if !written && !remove {
 		fmt.sbprintf(&b, "%s = %s\n", key, val)
 	}
 	return strings.to_string(b)

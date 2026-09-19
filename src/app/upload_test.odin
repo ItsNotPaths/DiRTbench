@@ -90,8 +90,8 @@ a_venue_round_trips_its_shot_and_its_source :: proc(t: ^testing.T) {
 	p := Venue {
 		format  = VENUE_FORMAT,
 		version = VENUE_VERSION,
-		id      = "pine",
-		names   = {venue = "PINE RIDGE"},
+		id      = "00112233445566aa",
+		name    = "PINE RIDGE",
 		shot    = {set = true, pos = {12, 34, 56}, yaw = 0.75, pitch = -0.25},
 		source  = {site = "dirtbench.paths.place", slug = "pine-ridge-ab12cd"},
 		road    = {},
@@ -119,7 +119,7 @@ an_unframed_venue_stays_unframed_across_a_write :: proc(t: ^testing.T) {
 	defer delete(path)
 	defer os.remove(path)
 
-	p := Venue{format = VENUE_FORMAT, version = VENUE_VERSION, id = "pine"}
+	p := Venue{format = VENUE_FORMAT, version = VENUE_VERSION, id = "00112233445566aa", name = "pine"}
 	msg, ok := venue_write(p, path)
 	testing.expectf(t, ok, "could not write the venue: %s", msg)
 

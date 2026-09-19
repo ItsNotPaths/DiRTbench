@@ -386,16 +386,17 @@ sha256_hex :: proc(data: []u8, allocator := context.temp_allocator) -> string {
 
 // The downloaded bytes, as a venue of ours in maps/.
 //
-// The document decides its own id, and that id has to be free here: it is a
-// file name, a directory in the game and a localization key, and two venues
-// cannot share one. The exception is this venue's own listing — that is an
-// update, and overwriting is the point of it.
+// The venue arrives with the id it was published under, which is what says
+// whether this is a venue we already have. Its name only has to be free: a
+// name is a file here, a directory in the game and a localization key, and two
+// venues cannot share one. Our own copy of this listing is the exception, and
+// overwriting it is the point.
 browse_install :: proc(
 	vs: ^Install_Scan,
 	slug: string,
 	data: []u8,
 ) -> (
-	id: string,
+	name: string,
 	msg: string,
 	ok: bool,
 ) {
@@ -404,17 +405,22 @@ browse_install :: proc(
 		return "", parse_msg, false
 	}
 	defer venue_free(p)
-	id = strings.clone(p.id, context.temp_allocator)
+	name = strings.clone(p.name, context.temp_allocator)
+	dir := venue_dir(p)
 
-	if os.exists(venue_path(id)) {
-		if why, replaceable := browse_replaceable(id, slug); !replaceable {
-			return id, why, false
+	// The copy we already hold of this same venue, whatever it is called now.
+	held, _, have_held := venue_load(p.id, context.temp_allocator)
+	if have_held {
+		if !venue_is_copy_of(held, slug) {
+			return name, fmt.tprintf(
+				"you already have %s, and it did not come from this listing", held.name,
+			), false
 		}
-	} else if msg, ok = venue_id_free(vs, id); !ok {
-		return id, msg, false
+	} else if msg, ok = venue_name_free(vs, p.name); !ok {
+		return name, msg, false
 	}
 	if _, dir_ok := ensure_maps_dir(); !dir_ok {
-		return id, fmt.tprintf("could not create %s", maps_dir()), false
+		return name, fmt.tprintf("could not create %s", maps_dir()), false
 	}
 
 	// Where it came from, written into the document rather than remembered
@@ -422,17 +428,22 @@ browse_install :: proc(
 	delete(p.source.site)
 	delete(p.source.slug)
 	p.source = {site = strings.clone(UPLOAD_SITE), slug = strings.clone(slug)}
-	if msg, ok = venue_write(p, venue_path(id)); !ok {
-		return id, msg, false
+	if msg, ok = venue_write(p, venue_path(dir)); !ok {
+		return name, msg, false
+	}
+	// Renamed upstream since we last took it: the venue is the same one, so
+	// the copy filed under the old name goes.
+	if have_held && venue_dir(held) != dir {
+		_ = os.remove(venue_path(venue_dir(held)))
 	}
 	// The art is not in the file and never travels: the pack is rebuilt out of
 	// whatever install this machine has. Built now, while a failure still means
 	// "you do not have that game venue" rather than a broken export later.
 	if _, pack_msg, pack_ok := content_pack_profile(vs, p.base); !pack_ok {
-		_ = os.remove(venue_path(id))
-		return id, pack_msg, false
+		_ = os.remove(venue_path(dir))
+		return name, pack_msg, false
 	}
-	return id, "", true
+	return name, "", true
 }
 
 // Whether this venue is our copy of that listing, and so an update rather than
@@ -442,15 +453,4 @@ venue_is_copy_of :: proc(p: Venue, slug: string) -> bool {
 	return p.source.site == UPLOAD_SITE && p.source.slug == slug
 }
 
-@(private = "file")
-browse_replaceable :: proc(id, slug: string) -> (msg: string, ok: bool) {
-	old, _, loaded := venue_load(id)
-	if !loaded {
-		return fmt.tprintf("%s is already a file here, and not one this build reads", venue_path(id)), false
-	}
-	defer venue_free(old)
-	if !venue_is_copy_of(old, slug) {
-		return fmt.tprintf("you already have a venue named %s", id), false
-	}
-	return "", true
-}
+

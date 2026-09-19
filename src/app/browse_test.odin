@@ -145,14 +145,14 @@ a_download_that_is_not_a_venue_never_becomes_one :: proc(t: ^testing.T) {
 // game installs under, so the two cannot both be there.
 @(test)
 only_a_venue_s_own_listing_may_overwrite_it :: proc(t: ^testing.T) {
-	mine := Venue{id = "pine", source = {site = UPLOAD_SITE, slug = "pine-ridge-ab12cd"}}
+	mine := Venue{id = "00112233445566aa", name = "pine", source = {site = UPLOAD_SITE, slug = "pine-ridge-ab12cd"}}
 	testing.expect(t, venue_is_copy_of(mine, "pine-ridge-ab12cd"), "an update was read as a collision")
 	testing.expect(t, !venue_is_copy_of(mine, "pine-ridge-ff99"), "another listing could overwrite it")
 
 	// Made here, never published. Nothing downloaded may land on it.
-	testing.expect(t, !venue_is_copy_of(Venue{id = "pine"}, "pine-ridge-ab12cd"))
+	testing.expect(t, !venue_is_copy_of(Venue{id = "00112233445566aa", name = "pine"}, "pine-ridge-ab12cd"))
 	// Published from here, which is not the same as downloaded from there: the
 	// slug an upload remembers lives in the config, not in the document.
-	own_upload := Venue{id = "pine", source = {slug = "pine-ridge-ab12cd"}}
+	own_upload := Venue{id = "00112233445566aa", name = "pine", source = {slug = "pine-ridge-ab12cd"}}
 	testing.expect(t, !venue_is_copy_of(own_upload, "pine-ridge-ab12cd"))
 }

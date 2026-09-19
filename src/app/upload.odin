@@ -71,6 +71,12 @@ upload_slug_remember :: proc(venue_id, slug: string) {
 	conf_set(slug_key(venue_id), slug)
 }
 
+// Forget which listing a venue belongs to, so the next upload makes a new one
+// rather than posting a version of a listing this venue is no longer tied to.
+upload_slug_forget :: proc(venue_id: string) {
+	conf_unset(slug_key(venue_id))
+}
+
 // --- the job -------------------------------------------------------------------
 
 // Everything the request needs, cloned off the panel's buffers so they can go
