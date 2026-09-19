@@ -155,6 +155,15 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 			return fmt.tprintf("tracksplit.pssg: %s", tracksplit_msg), false
 		}
 	}
+	// Ground cover next, also venue scope, also before any route file:
+	// `track.vis` censuses `grass.grs` for its tag-1 boxes, so that file has to
+	// be on disk and current first. Export only — nothing draws it in the
+	// editor (export_dirt3_ground_cover.odin).
+	cover_cells, cover_msg, cover_ok := d3_write_ground_cover(job)
+	if !cover_ok {
+		return fmt.tprintf("grass.grs: %s", cover_msg), false
+	}
+
 	// The clouds next, for the same reason: `trees.bin` names them and
 	// `track.vis` censuses that file. A venue whose art has no card cloud to
 	// clone writes none and says so, rather than failing the export.
@@ -198,7 +207,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		Name = job.name, Out = job.out, Backup = job.installing,
 		Route = route, Markers = markers, Collision = collision,
 		Profile = job.profile, Venue_Dir = job.venue_dir,
-		Route_Index = job.route_index,
+		Route_Index = job.route_index, Ground_Cover = cover_cells > 0,
 	}
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
@@ -213,8 +222,8 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		return route_msg, false
 	}
 	return fmt.tprintf(
-		"tracksplit.pssg: %s; %s; placements: %s; billboards: %s",
-		tracksplit_msg, route_msg, placement_msg, billboard_msg,
+		"tracksplit.pssg: %s; grass.grs: %s; %s; placements: %s; billboards: %s",
+		tracksplit_msg, cover_msg, route_msg, placement_msg, billboard_msg,
 	), true
 }
 
