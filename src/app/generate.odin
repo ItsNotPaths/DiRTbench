@@ -68,6 +68,11 @@ Gen_Params :: struct {
 	hairpins:  f32, // 0..1, extra weight on hairpin segments
 	width_min: f32,
 	width_max: f32,
+	// Share of each road edge that gets a side guard of this kind. See
+	// gen_guard_shares: they are shares, not probabilities.
+	guard_cliff:  f32,
+	guard_bank:   f32,
+	guard_gutter: f32,
 }
 
 GEN_DEFAULTS :: Gen_Params {
@@ -80,6 +85,9 @@ GEN_DEFAULTS :: Gen_Params {
 	hairpins  = 0.3,
 	width_min = 7.5,
 	width_max = 11.0,
+	guard_cliff  = 0.15,
+	guard_bank   = 0.30,
+	guard_gutter = 0.35,
 }
 
 // --- route segments ---------------------------------------------------------
@@ -362,6 +370,83 @@ gen_centreline :: proc(
 	return out
 }
 
+// --- side guards -------------------------------------------------------------
+
+GEN_GUARD_RUN_M :: 72.0  // the plateau one generated guard holds
+GEN_GUARD_TAPER :: 16.0  // metres in and out of that plateau
+
+// The three weights, read as the share of one road edge each kind covers.
+// Shares, not probabilities: at 1/1/1 they take a third each and the edge is
+// covered end to end. Under a total of 1 whatever is left over is bare verge.
+gen_guard_shares :: proc(p: Gen_Params) -> (out: [geo.Guard_Kind]f32) {
+	out = {
+		.Cliff  = clamp(p.guard_cliff, 0, 1),
+		.Bank   = clamp(p.guard_bank, 0, 1),
+		.Gutter = clamp(p.guard_gutter, 0, 1),
+	}
+	total: f32
+	for w in out {
+		total += w
+	}
+	if total > 1 {
+		for &w in out {
+			w /= total
+		}
+	}
+	return
+}
+
+// Tile each edge with runs of GEN_GUARD_RUN_M and deal the kinds out at their
+// shares. Spans overlap by a taper at each end, so two runs of the same kind
+// union into one long guard instead of pinching to nothing between them (see
+// geo.resolve_guards, which takes the largest contribution).
+//
+// Every guard carries guard_make's defaults for its own shape. The generator
+// decides *where* the guards go and nothing else: their height, width and
+// roughness are the inspector's job, one guard at a time.
+gen_guards :: proc(sp: ^geo.Spline, p: Gen_Params, r: ^geo.Rng) {
+	clear(&sp.guards)
+	run := max(2, int(math.round(GEN_GUARD_RUN_M / max(p.spacing_m, 1))))
+	blocks := (len(sp.points) - 1) / run
+	if blocks <= 0 {
+		return
+	}
+	shares := gen_guard_shares(p)
+	span := f32(run) * p.spacing_m + 2 * GEN_GUARD_TAPER
+
+	// One slot per run. `nil` is bare verge, which is what the shares do not
+	// account for.
+	slots := make([]Maybe(geo.Guard_Kind), blocks, context.temp_allocator)
+	for side in 0 ..< 2 {
+		i := 0
+		for kind in geo.Guard_Kind {
+			n := min(int(math.round(shares[kind] * f32(blocks))), blocks - i)
+			for _ in 0 ..< n {
+				slots[i] = kind
+				i += 1
+			}
+		}
+		for ; i < blocks; i += 1 {
+			slots[i] = nil
+		}
+		// Fisher-Yates. The counts are what the shares promise; the shuffle is
+		// what stops all the gutters landing at the start line.
+		for j := blocks - 1; j > 0; j -= 1 {
+			k := int(geo.rng_unit(r) * f32(j + 1))
+			slots[j], slots[k] = slots[k], slots[j]
+		}
+		for b in 0 ..< blocks {
+			kind, ok := slots[b].?
+			if !ok {
+				continue
+			}
+			g := geo.guard_make(kind, side, b * run + run / 2)
+			g.span, g.taper = span, GEN_GUARD_TAPER
+			geo.guard_add(sp, g)
+		}
+	}
+}
+
 // --- the generator -----------------------------------------------------------
 
 // One sample as a control point, frame and all.
@@ -403,8 +488,13 @@ generate_stage :: proc(sp: ^geo.Spline, p: Gen_Params) -> (msg: string, ok: bool
 		gen_push_sample(sp, line[len(line) - 1], lift)
 	}
 
+	gen_guards(sp, p, &r)
+
 	length := f32(len(line)) * GEN_DS
-	return fmt.tprintf("generated %d points, %.0f m", len(sp.points), length), true
+	return fmt.tprintf(
+		"generated %d points, %.0f m, %d guards",
+		len(sp.points), length, len(sp.guards),
+	), true
 }
 
 // Frame the camera on a freshly generated stage, so it is never off-screen.

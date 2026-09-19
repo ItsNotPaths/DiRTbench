@@ -66,3 +66,72 @@ generated_road_wiggles_on_the_straights :: proc(t: ^testing.T) {
 		testing.expect(t, s.yaw == 0 && s.grade == 0)
 	}
 }
+
+// The three weights are shares of one road edge. What the slider says is what
+// the generated guards cover, measured back off the ribbon rather than off the
+// counts the placer used.
+//
+// Counted on the plateau, not on "any size at all": neighbouring runs overlap
+// by a taper so they blend instead of butting, and a slice inside that overlap
+// is under two kinds at once.
+@(test)
+generated_guard_shares_land_as_coverage :: proc(t: ^testing.T) {
+	measure :: proc(p: Gen_Params) -> (share: [geo.Guard_Kind]f32, bare: f32) {
+		sp: geo.Spline
+		defer geo.spline_free(&sp)
+		if _, ok := generate_stage(&sp, p); !ok {
+			return
+		}
+		ribbon := geo.build_ribbon(sp)
+		full: [geo.Guard_Kind]int
+		none := 0
+		for cs in ribbon {
+			guarded := false
+			for kind in geo.Guard_Kind {
+				size := cs.verge[0][kind].size
+				guarded ||= size > 0
+				if size >= geo.guard_make(kind, 0, 0).size {
+					full[kind] += 1
+				}
+			}
+			if !guarded {
+				none += 1
+			}
+		}
+		n := f32(max(len(ribbon), 1))
+		for kind in geo.Guard_Kind {
+			share[kind] = f32(full[kind]) / n
+		}
+		return share, f32(none) / n
+	}
+
+	p := GEN_DEFAULTS
+	p.guard_cliff, p.guard_bank, p.guard_gutter = 0, 0, 0.3
+	one, bare := measure(p)
+	testing.expectf(t, abs(one[.Gutter] - 0.3) < 0.08,
+		"asked for 30%% gutter, got %.0f%%", one[.Gutter] * 100)
+	testing.expect_value(t, one[.Cliff], f32(0))
+	testing.expect_value(t, one[.Bank], f32(0))
+	testing.expectf(t, bare > 0.5, "30%% gutter left only %.0f%% bare verge", bare * 100)
+
+	// All three at 1 is a third each, and nowhere on the edge is left bare.
+	p.guard_cliff, p.guard_bank, p.guard_gutter = 1, 1, 1
+	full: f32
+	share: [geo.Guard_Kind]f32
+	share, bare = measure(p)
+	for kind in geo.Guard_Kind {
+		testing.expectf(t, abs(share[kind] - 1.0 / 3) < 0.08,
+			"%v took %.0f%% of the edge, not a third", kind, share[kind] * 100)
+		full += share[kind]
+	}
+	testing.expectf(t, full > 0.95, "the three only fill %.0f%% of the edge", full * 100)
+	testing.expect_value(t, bare, f32(0))
+
+	// No weights, no guards — and none left over from the last road either.
+	p.guard_cliff, p.guard_bank, p.guard_gutter = 0, 0, 0
+	sp: geo.Spline
+	defer geo.spline_free(&sp)
+	generate_stage(&sp, GEN_DEFAULTS)
+	generate_stage(&sp, p)
+	testing.expect_value(t, len(sp.guards), 0)
+}
