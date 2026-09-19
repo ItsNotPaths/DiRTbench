@@ -57,6 +57,11 @@ Export_Job :: struct {
 	// cutscene idents are built from it, and the global cutscene files
 	// substitute it into names like `start_camera_r[route]`.
 	Route_Index: int,
+	// True when this export wrote the venue's own `grass.grs`. `track.vis`
+	// censuses that file for its tag-1 boxes only then: a deployed venue that
+	// still carries the donor's hardlinked copy would otherwise put the base
+	// venue's grass, on the base venue's ground, into ours.
+	Ground_Cover: bool,
 }
 
 // The names the editor calls this package by.
@@ -83,6 +88,17 @@ Placement_Read :: d3_placement_read
 Placement_Layout :: d3_placement_layout
 Placement_Relocate :: d3_placement_relocate
 Placement_Xml_Build :: d3_placement_xml_build
+Ground_Cover_Template :: d3_ground_cover_template
+Ground_Cover_Build :: d3_ground_cover_build
+Ground_Cover_Xml :: d3_ground_cover_xml
+GC_XML_MAX_ITEMS :: D3_GC_XML_MAX_ITEMS
+GC_XML_ZONES :: D3_GC_XML_ZONES
+Ground_Cover_Slots :: d3_ground_cover_slots
+Ground_Cover_Card_Size :: d3_ground_cover_card_size
+Ground_Cell :: D3_Ground_Cell
+Ground_Tri :: D3_Ground_Tri
+GRS_TYPES :: D3_GRS_TYPES
+GRS_CELL_VERTS_MAX :: D3_GRS_CELL_VERTS_MAX
 Write_Out :: d3_write_out
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once

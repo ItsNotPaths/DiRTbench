@@ -154,7 +154,7 @@ vis_census_numbers_venue_tiles_before_route_tiles :: proc(t: ^testing.T) {
 	route_tiles, _, route_ok := d3_tile_boxes(route_tris, d3_test_profile(), context.temp_allocator)
 	testing.expect(t, venue_ok && route_ok); if !(venue_ok && route_ok) { return }
 
-	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, allocator = context.temp_allocator)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, len(objects), len(venue_tiles)+len(route_tiles))
 
@@ -176,8 +176,45 @@ vis_census_fails_closed_without_a_tracksplit :: proc(t: ^testing.T) {
 	defer os.remove_all(venue_dir)
 	tracksplit, _ := filepath.join({venue_dir, "tracksplit.pssg"}, context.temp_allocator)
 	testing.expect(t, os.remove(tracksplit) == nil)
-	_, _, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	_, _, ok := d3_vis_census_objects(route_dir, venue_dir, allocator = context.temp_allocator)
 	testing.expect(t, !ok, "a census with no venue tracksplit must refuse, not emit route-only indices")
+}
+
+// track.vis's tag-1 boxes are grass.grs's cell boxes: same bytes, same order.
+@(test)
+vis_census_repeats_grass_cells_as_its_tag_1_boxes :: proc(t: ^testing.T) {
+	route_dir, venue_dir, made := d3_test_vis_tree(
+		t, d3_test_mesh(context.temp_allocator), d3_test_far_mesh(context.temp_allocator),
+	)
+	if !made { return }
+	defer os.remove_all(venue_dir)
+
+	// The flag says this export wrote grass.grs, so a missing file is a refusal.
+	_, _, missing_ok := d3_vis_census_objects(route_dir, venue_dir, true, context.temp_allocator)
+	testing.expect(t, !missing_ok, "a census told grass.grs exists must refuse when it does not")
+
+	step: [D3_GRS_TYPES]f32
+	for i in 0 ..< D3_GRS_TYPES { step[i] = 1 }
+	cells := []D3_Ground_Cell{gc_test_cell(2000, 2000, 20, 0), gc_test_cell(2040, 2000, 20, 1)}
+	grs, grs_msg, built := d3_ground_cover_build(
+		gc_test_template({4, 4, 4, 4, 4, 4, 4, 4}), cells, step, context.temp_allocator,
+	)
+	testing.expect(t, built, grs_msg); if !built { return }
+	grs_path, _ := filepath.join({venue_dir, "grass.grs"}, context.temp_allocator)
+	testing.expect(t, os.write_entire_file(grs_path, grs) == nil)
+
+	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, true, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	boxes, _, boxes_ok := d3_ground_cover_boxes(grs, context.temp_allocator)
+	testing.expect(t, boxes_ok)
+	got := make([dynamic]D3_Vis_Object, context.temp_allocator)
+	for obj in objects { if obj.tag == 1 { append(&got, obj) } }
+	testing.expect_value(t, len(got), len(boxes))
+	for box, i in boxes {
+		testing.expect_value(t, got[i].index, u32(i))
+		testing.expect_value(t, got[i].lo, box.lo)
+		testing.expect_value(t, got[i].hi, box.hi)
+	}
 }
 
 // Our derived count for a tag we leave out is zero, and the game sizes an
@@ -194,7 +231,7 @@ vis_census_floors_header_counts_against_the_file_it_replaces :: proc(t: ^testing
 	live, _ := filepath.join({route_dir, "track.vis"}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(live, donor) == nil)
 
-	raw, msg, built := d3_vis_census_build(route_dir, venue_dir, context.allocator)
+	raw, msg, built := d3_vis_census_build(route_dir, venue_dir, allocator = context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
 	testing.expect_value(t, d3_vis_u32(raw, 0x40+2*4), u32(291))
@@ -218,7 +255,7 @@ vis_census_indexes_trees_by_instance_id :: proc(t: ^testing.T) {
 	trees_path, _ := filepath.join({route_dir, "trees.bin"}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(trees_path, trees) == nil)
 
-	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	objects, msg, ok := d3_vis_census_objects(route_dir, venue_dir, allocator = context.temp_allocator)
 	testing.expect(t, ok, msg); if !ok { return }
 	got := make([dynamic]u32, context.temp_allocator)
 	for obj in objects { if obj.tag == 3 { append(&got, obj.index) } }

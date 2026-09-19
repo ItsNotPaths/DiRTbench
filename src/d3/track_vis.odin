@@ -198,8 +198,15 @@ d3_vis_append_placements :: proc(out: ^[dynamic]D3_Vis_Object, path: string, tag
 // Every drawable this route registers, in the engine's own registration order.
 // `venue_dir` holds `tracksplit.pssg`; `route_dir` holds `routesplit.pssg` and
 // the two placement files.
+//
+// `ground_cover` adds tag 1 off `venue_dir/grass.grs`. Its cell boxes are the
+// tag-1 boxes, the same bytes in the same order, on all 164905 stock cells of
+// the install — so the two are one list and neither is derived from the other.
+// Off unless this export wrote that file: the donor's hardlinked copy
+// describes the base venue's ground, not ours.
 d3_vis_census_objects :: proc(
 	route_dir, venue_dir: string,
+	ground_cover := false,
 	allocator := context.allocator,
 ) -> (
 	objects: []D3_Vis_Object,
@@ -226,6 +233,19 @@ d3_vis_census_objects :: proc(
 		}
 	}
 
+	cover := 0
+	if ground_cover {
+		path, _ := filepath.join({venue_dir, "grass.grs"}, context.temp_allocator)
+		data, read_err := os.read_entire_file(path, context.temp_allocator)
+		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", path, read_err), false }
+		boxes, boxes_msg, boxes_ok := d3_ground_cover_boxes(data, context.temp_allocator)
+		if !boxes_ok { return nil, fmt.tprintf("%s: %s", path, boxes_msg), false }
+		for box, i in boxes {
+			append(&out, D3_Vis_Object{tag = 1, index = u32(i), lo = box.lo, hi = box.hi})
+		}
+		cover = len(boxes)
+	}
+
 	// A route without either file is not an error — 14 stock routes ship no
 	// trees — so a missing one contributes nothing.
 	counted: [2]int
@@ -239,20 +259,23 @@ d3_vis_census_objects :: proc(
 
 	if len(out) == 0 { return nil, "found no drawables to make visible", false }
 	return out[:], fmt.tprintf(
-		"tag 0: %d venue tiles + %d route tiles; tag 2: %d ornaments; tag 3: %d trees",
-		venue_tiles, route_tiles, counted[0], counted[1],
+		"tag 0: %d venue tiles + %d route tiles; tag 1: %d cover cells; tag 2: %d ornaments; tag 3: %d trees",
+		venue_tiles, route_tiles, cover, counted[0], counted[1],
 	), true
 }
 
 d3_vis_census_build :: proc(
 	route_dir, venue_dir: string,
+	ground_cover := false,
 	allocator := context.allocator,
 ) -> (
 	out: []u8,
 	msg: string,
 	ok: bool,
 ) {
-	objects, objects_msg, objects_ok := d3_vis_census_objects(route_dir, venue_dir, context.temp_allocator)
+	objects, objects_msg, objects_ok := d3_vis_census_objects(
+		route_dir, venue_dir, ground_cover, context.temp_allocator,
+	)
 	if !objects_ok { return nil, objects_msg, false }
 
 	floor: [16]u32
@@ -266,11 +289,15 @@ d3_vis_census_build :: proc(
 		// counted from what we wrote. The donor's count is still the floor on
 		// tag 2: dynamic ENS drawables consume registration slots that receive
 		// no box, and the game sizes its allocations off the header count.
+		//
+		// Tag 1 joins them once we write `grass.grs`: flooring it to the
+		// donor's cell count would declare cells our own file does not have.
 		for tag in 0..<16 {
 			if tag == 0 || tag == 3 { continue }
+			if tag == 1 && ground_cover { continue }
 			floor[tag] = counts[tag]
 		}
-		donor_msg = fmt.tprintf("tags 1..2, 4..15 floored against %s", filepath.base(donor))
+		donor_msg = fmt.tprintf("tags 2, 4..15 floored against %s", filepath.base(donor))
 	}
 	// Our own dynamic entities on top of that. They receive no tag-2 box, so
 	// the census above cannot see them, but their `instanceID` still has to
@@ -297,7 +324,7 @@ d3_write_track_vis :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	dir, dir_msg, dir_ok := d3_out_dir(job)
 	if !dir_ok { return dir_msg, false }
 	if job.Venue_Dir == "" { return "track.vis needs the venue directory tracksplit.pssg lives in", false }
-	data, detail, built := d3_vis_census_build(dir, job.Venue_Dir)
+	data, detail, built := d3_vis_census_build(dir, job.Venue_Dir, job.Ground_Cover)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "track.vis", data); !written { return write_msg, false }
