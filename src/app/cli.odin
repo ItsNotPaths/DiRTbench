@@ -230,13 +230,24 @@ dirt3_placement_raise_headless :: proc(path: string, dy: f32, out_path: string) 
 	return fmt.tprintf("%s -> %s: raised %d instances by %.3f m Y (%s; %s)", path, out_path, len(instances), dy, read_msg, write_msg), true
 }
 
+// Where a venue named on a command line is filed, by name or by id. The name
+// is handed back untouched when there is no venue by it, so the reader reports
+// the missing file rather than this reporting a missing venue.
+@(private = "file")
+venue_arg_path :: proc(key: string) -> string {
+	if p, _, found := venue_find(key, context.temp_allocator); found {
+		return venue_file(p)
+	}
+	return venue_path(key)
+}
+
 // `--pacenotes <venue>`: load a venue's road, generate the notes and print them. No
 // window, no GL — the generator is pure, so this is the way to eyeball the
 // placement numbers while tuning.
 hectic_headless :: proc(stage: string, s0, s1: f32) {
 	doc := doc_defaults()
 	defer doc_delete(&doc)
-	if msg, ok := load_road(&doc, venue_path(stage)); !ok {
+	if msg, ok := load_road(&doc, venue_arg_path(stage)); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}
@@ -250,7 +261,7 @@ hectic_headless :: proc(stage: string, s0, s1: f32) {
 pacenotes_headless :: proc(stage: string, reverse: bool) {
 	doc := doc_defaults()
 	defer doc_delete(&doc)
-	if msg, ok := load_road(&doc, venue_path(stage)); !ok {
+	if msg, ok := load_road(&doc, venue_arg_path(stage)); !ok {
 		fmt.println(msg)
 		os.exit(1)
 	}
