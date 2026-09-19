@@ -78,17 +78,45 @@ upload_blocked :: proc(app: ^App, f: ^Upload_Form, p: ^Venue) -> string {
 	return ""
 }
 
-// The panel itself. Drawn under the venue's row, and only for the one venue
-// whose panel is open.
-draw_venue_upload :: proc(app: ^App, p: ^Venue) {
+// The floating window, drawn once a frame after the project manager's own. Its
+// own window rather than a block under the venue's row, because the row moves
+// as the list is rescanned and a form being typed into must not move with it.
+//
+// One at a time: `upload_open` names the venue, and there is one form behind it.
+draw_upload_window :: proc(app: ^App) {
 	ps := &app.screen
-	if ps.upload_open != p.id {
+	if ps.upload_open == "" {
 		return
 	}
-	f := &ps.upload
-	upload_form_seed(f, p)
+	p, found := venue_for(ps, ps.upload_open)
+	if !found {
+		upload_close(ps) // deleted out from under the window
+		return
+	}
 
-	ui.igSeparatorText(fmt.ctprintf("Upload %s to dirtbench.paths.place", p.id))
+	ui.igSetNextWindowSize({460, 470}, .FirstUseEver)
+	ui.igSetNextWindowPos({80, 80}, .FirstUseEver, {0, 0})
+	// The venue is in the title and the id is not, so moving to another venue
+	// keeps the window where the user put it.
+	open := true
+	if ui.igBegin(fmt.ctprintf("Upload %s###upload_window", p.id), &open, ui.IM_WINDOW_NONE) {
+		draw_upload_form(app, p)
+	}
+	ui.igEnd()
+	if !open {
+		upload_close(ps)
+	}
+}
+
+upload_close :: proc(ps: ^Venues_Screen) {
+	delete(ps.upload_open)
+	ps.upload_open = ""
+}
+
+@(private = "file")
+draw_upload_form :: proc(app: ^App, p: ^Venue) {
+	f := &app.screen.upload
+	upload_form_seed(f, p)
 
 	// A venue that came from the site is not ours to publish. The server would
 	// refuse a version of somebody else's listing anyway; what it could not
@@ -123,7 +151,7 @@ draw_venue_upload :: proc(app: ^App, p: ^Venue) {
 	draw_upload_thumbnail(app, f, p)
 
 	if slug == "" {
-		ui.im_text_colored(DIM_COL, "Goes up as a new listing.")
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("Goes up as a new listing on %s", UPLOAD_SITE))
 	} else {
 		ui.im_text_colored(DIM_COL, fmt.ctprintf("Goes up as a new version of %s/venue/%s", UPLOAD_SITE, slug))
 	}
@@ -202,7 +230,7 @@ app_service_upload_request :: proc(app: ^App) {
 	}
 	defer app.upload_request = {}
 	ps := &app.screen
-	p, found := venue_for_id(app, id)
+	p, found := venue_for(&app.screen, id)
 	if !found {
 		set_status(&app.status, fmt.tprintf("%s is no longer there", id), false)
 		return

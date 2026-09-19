@@ -89,11 +89,13 @@ venues_screen_reload :: proc(ps: ^Venues_Screen) {
 	ps.venues = venues_list()
 }
 
-// Our venue with this id, if any. This is how a venue in the list is
-// told from a vanilla one: dirtbench knows what it made, and does not have to
-// guess from a baked manifest or a file timestamp (which lies — every stock
-// route directory carries the install date, not the build date).
-@(private = "file")
+// Our venue with this id, if any. By id and never held: the list is reloaded
+// between a click and the frame that services it.
+//
+// This is also how a venue in the list is told from a vanilla one: dirtbench
+// knows what it made, and does not have to guess from a baked manifest or a
+// file timestamp (which lies — every stock route directory carries the install
+// date, not the build date).
 venue_for :: proc(ps: ^Venues_Screen, id: string) -> (^Venue, bool) {
 	for &p in ps.venues {
 		if p.id == id {
@@ -101,13 +103,6 @@ venue_for :: proc(ps: ^Venues_Screen, id: string) -> (^Venue, bool) {
 		}
 	}
 	return nil, false
-}
-
-// The same lookup from outside this file. The upload panel resolves its venue
-// between frames, by id, for the reason the open request does: the list is
-// reloaded between the click and the service call.
-venue_for_id :: proc(app: ^App, id: string) -> (^Venue, bool) {
-	return venue_for(&app.screen, id)
 }
 
 // --- the screen --------------------------------------------------------------
@@ -361,11 +356,12 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 	ui.im_same_line()
 	uploading := ps.upload_open == p.id
 	if ui.im_button(fmt.ctprintf("%s###upload_%s", uploading ? "Hide upload" : "Upload...", p.id)) {
-		delete(ps.upload_open)
-		ps.upload_open = uploading ? "" : strings.clone(p.id)
+		upload_close(ps)
+		if !uploading {
+			ps.upload_open = strings.clone(p.id)
+		}
 	}
 	draw_venue_stages(app, p)
-	draw_venue_upload(app, p)
 	ui.igSpacing()
 }
 
@@ -880,6 +876,9 @@ draw_venues_frame :: proc(app: ^App) {
 	ui.imgui_backend_begin()
 	draw_venues_menubar(app)
 	draw_venues_screen(app)
+	// After the manager's own window has been ended, so the upload window is a
+	// window beside it rather than a block inside it.
+	draw_upload_window(app)
 	if app.show_demo {
 		ui.igShowDemoWindow(&app.show_demo)
 	}
