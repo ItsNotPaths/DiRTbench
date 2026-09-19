@@ -158,17 +158,53 @@ d3_weld_add :: proc(w: ^D3_Weld, tri: Collision_Triangle) {
 // it. `terrain_infield.fx` samples a unique AO and colour map at ST directly,
 // so ST normalized per tile lays that art down once per tile instead of once
 // over the venue, and a non-square tile stretches every texture with it.
+//
+// A fixed metres-per-unit was tried and reverted. It looks reasonable — stock's
+// own scale runs 222 to 909 m per unit — but the shader multiplies ST by 4 to
+// 120 for the detail maps, so pushing ST past 1 multiplies the half float's
+// quantization by the same amount and the ground swims. See docs/dirt3-pssg.md.
+//
+// `base` is the mesh's floor, so the height folded in on steep faces (see d3_st)
+// is measured from the venue rather than from sea level.
 D3_St_Map :: struct {
 	origin: [2]f32,
+	base:   f32,
 	side:   f32,
 }
 
+// How much of a steep face's height is folded back into its ST. 1 restores the
+// density exactly; 0 is the plain top-down map, and reverts this whole idea.
+D3_ST_HEIGHT_FOLD :: 1.0
+
 d3_st_map :: proc(lo, hi: [3]f32) -> D3_St_Map {
-	return {origin = {lo[0], lo[2]}, side = max(hi[0]-lo[0], hi[2]-lo[2], D3_MIN_EXTENT)}
+	return {origin = {lo[0], lo[2]}, base = lo[1], side = max(hi[0]-lo[0], hi[2]-lo[2], D3_MIN_EXTENT)}
 }
 
-d3_st :: proc(m: D3_St_Map, p: [3]f32) -> [2]f32 {
-	return {(p[0]-m.origin[0])/m.side, (p[2]-m.origin[1])/m.side}
+// A top-down map is exact for ground and useless for a wall: a vertical face
+// projects onto it as a line, so its texture is stretched up the face without
+// limit. That is what a cliff looks like in game — worst where the face is
+// sheerest, which is why only some faces of a rough cliff show it.
+//
+// So the height is folded back into whichever axis the face collapses along.
+// `(1 - |n.y|) / h` is the factor that makes a step along the steepest line of
+// a surface move ST by its own length, for any tilt from flat to sheer, and it
+// is zero on flat ground — which keeps the road and the terrain exactly as they
+// were.
+//
+// The cost is that `terrain_infield.fx` samples a venue-wide AO and colour map
+// at ST, and folding moves that lookup on steep faces by their height over the
+// map's side. Detail tiling is ST scaled up, so it gets its full range back;
+// the colour a cliff face is tinted with comes from a little further away.
+d3_st :: proc(m: D3_St_Map, p: [3]f32, n: [3]f32) -> [2]f32 {
+	u := (p[0]-m.origin[0])/m.side
+	v := (p[2]-m.origin[1])/m.side
+	flat := n[0]*n[0] + n[2]*n[2] // how much of the normal lies flat, squared
+	if flat > 1e-8 {
+		k := (p[1]-m.base) * (1 - abs(n[1])) / flat / m.side * D3_ST_HEIGHT_FOLD
+		u += k * n[0]
+		v += k * n[2]
+	}
+	return {u, v}
 }
 
 d3_pack_vertices :: proc(
@@ -184,15 +220,17 @@ d3_pack_vertices :: proc(
 		base := i*layout.stride
 		for k in 0..<3 { binary_store_f32(data, base+k*4, p[k], .Big) }
 		if layout.colour >= 0 { copy(data[base+layout.colour:][:4], rgba[:]) }
+		// The welded normal, which ST needs as much as the normal attribute does:
+		// it is what says how steep this vertex's surface stands.
+		n := w.normal[i]
+		length := math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2])
+		n = length > 0 ? n/length : [3]f32{0, 1, 0}
 		if layout.uv >= 0 {
-			t := d3_st(st, p)
+			t := d3_st(st, p, n)
 			binary_store_u16(data, base+layout.uv, d3_half(t[0]), .Big)
 			binary_store_u16(data, base+layout.uv+2, d3_half(t[1]), .Big)
 		}
 		if layout.normal >= 0 {
-			n := w.normal[i]
-			length := math.sqrt(n[0]*n[0]+n[1]*n[1]+n[2]*n[2])
-			n = length > 0 ? n/length : [3]f32{0, 1, 0}
 			for k in 0..<3 { binary_store_u16(data, base+layout.normal+k*2, d3_half(n[k]), .Big) }
 			binary_store_u16(data, base+layout.normal+6, d3_half(1), .Big)
 		}
@@ -597,6 +635,13 @@ d3_routesplit_build_with_template :: proc(
 
 	file, read_msg, read_ok := pssg_read(template, scratch)
 	if !read_ok { return nil, read_msg, false }
+	// At venue scope the template is the base venue's own tracksplit, which
+	// knows nothing of our cliff material. The routes name it, so it is made
+	// here too — see d3_cliff_material.
+	if scope == .Venue && profile.visual[.Cliff] == D3_CLIFF_MATERIAL {
+		made := d3_cliff_material(&file, d3_library(&file, "SHADERINSTANCE"), profile.visual[.Road], scratch)
+		if made == "" { return nil, "the base venue no longer holds the rock the cliff material draws with", false }
+	}
 	types := pssg_types(&file, scratch)
 	ids := pssg_ids(&file, scratch)
 

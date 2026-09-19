@@ -1,6 +1,7 @@
 package d3
 
 import "core:fmt"
+import "core:math"
 import "core:testing"
 
 // A flat grid of quads over 800 x 400 m, materials alternating by quad parity.
@@ -309,7 +310,9 @@ routesplit_st_is_one_square_map_over_the_mesh :: proc(t: ^testing.T) {
 				f32(transmute(f16)binary_load_u16(payload.data, base+layout.uv, .Big)),
 				f32(transmute(f16)binary_load_u16(payload.data, base+layout.uv+2, .Big)),
 			}
-			expected := d3_st(want, p)
+			// The fixture is flat, so its normals are all up and the height fold
+			// contributes exactly nothing — which is half of what this asserts.
+			expected := d3_st(want, p, {0, 1, 0})
 			for k in 0..<2 {
 				testing.expectf(t, abs(got[k]-expected[k]) < TOLERANCE,
 					"vertex at %v got ST %v, the mesh-wide map gives %v", p, got, expected)
@@ -320,4 +323,35 @@ routesplit_st_is_one_square_map_over_the_mesh :: proc(t: ^testing.T) {
 	}
 	testing.expect(t, checked > 500, fmt.tprintf("only %d textured vertices were read", checked))
 	testing.expect(t, abs(v_high-0.5) < TOLERANCE, fmt.tprintf("v reached %v, the 400 m axis of an 800 m map is 0.5", v_high))
+}
+
+// A top-down ST map projects a wall onto a line, and the texture stretches up
+// the face without limit — worst where the face is sheerest, which is what a
+// rough cliff shows in game. The height fold puts the density back.
+@(test)
+st_holds_its_density_on_a_wall :: proc(t: ^testing.T) {
+	m := d3_st_map({0, 0, 0}, {800, 50, 400})
+	step :: 4.0
+
+	// Flat ground: unchanged, and indifferent to height.
+	ground := d3_st(m, {100, 0, 100}, {0, 1, 0})
+	along := d3_st(m, {100 + step, 0, 100}, {0, 1, 0})
+	testing.expect_value(t, d3_st(m, {100, 30, 100}, {0, 1, 0}), ground)
+	flat_density := abs(along[0] - ground[0]) * m.side / step
+	testing.expect(t, abs(flat_density - 1) < 0.001, "flat ground must map a metre to a metre")
+
+	// A wall facing +X, climbed. Its ST must move as far as the ground's does.
+	for normal in ([][3]f32{{1, 0, 0}, {0, 0, 1}, {0.707, 0.707, 0}}) {
+		lo := d3_st(m, {100, 0, 100}, normal)
+		hi := d3_st(m, {100, step, 100}, normal)
+		moved := abs(hi[0] - lo[0]) + abs(hi[1] - lo[1])
+		// Climbing `step` in y on a face tilted off vertical travels
+		// `step/sin(tilt)` along it, of which the top-down map already has the
+		// horizontal part. The fold owes the rest.
+		slope := math.sqrt(normal[0]*normal[0] + normal[2]*normal[2])
+		want := step * (1 - abs(normal[1])) / slope
+		testing.expectf(t, abs(moved*m.side - want) < 0.01,
+			"normal %v climbed %.1f m: ST moved %.2f m, the face travelled %.2f m further than flat",
+			normal, f32(step), moved*m.side, want)
+	}
 }
