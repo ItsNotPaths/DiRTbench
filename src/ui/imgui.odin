@@ -55,6 +55,7 @@ IM_SLIDER_NONE :: Im_Slider_Flags(0)
 Im_Input_Text_Flags :: distinct c.int
 IM_INPUT_TEXT_NONE :: Im_Input_Text_Flags(0)
 IM_INPUT_TEXT_CHARS_NO_BLANK :: Im_Input_Text_Flags(1 << 4)
+IM_INPUT_TEXT_PASSWORD :: Im_Input_Text_Flags(1 << 10)
 
 Im_Tree_Node_Flags :: distinct c.int
 IM_TREE_NODE_NONE :: Im_Tree_Node_Flags(0)
@@ -219,6 +220,8 @@ foreign imgui {
 	// `buf` is an in/out NUL-terminated C string of capacity `buf_size`; ImGui
 	// edits it in place. Pass nil for the callback we do not use.
 	igInputText :: proc(label: cstring, buf: [^]u8, buf_size: uint, flags: Im_Input_Text_Flags, callback: rawptr, user_data: rawptr) -> bool ---
+	// The same field over several lines. A zero `size` lets ImGui pick one.
+	igInputTextMultiline :: proc(label: cstring, buf: [^]u8, buf_size: uint, size: Im_Vec2, flags: Im_Input_Text_Flags, callback: rawptr, user_data: rawptr) -> bool ---
 
 	// A row that spans the width and reports its own click. `selected` only
 	// colours it; holding the selection is the caller's job.
