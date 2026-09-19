@@ -100,8 +100,8 @@ d3_test_vis_tree :: proc(t: ^testing.T, venue_tris, route_tris: []Collision_Tria
 @(private = "file")
 d3_test_far_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
 	out := make([]Collision_Triangle, 2, allocator)
-	out[0] = {Points = {{1000, 0, 1000}, {1000, 0, 1010}, {1010, 0, 1000}}, Material = .Terrain}
-	out[1] = {Points = {{1010, 0, 1010}, {1010, 0, 1000}, {1000, 0, 1010}}, Material = .Terrain}
+	out[0] = {Points = {{1000, 0, 1000}, {1000, 0, 1010}, {1010, 0, 1000}}, Draw = .Terrain, Surface = .Terrain}
+	out[1] = {Points = {{1010, 0, 1010}, {1010, 0, 1000}, {1000, 0, 1010}}, Draw = .Terrain, Surface = .Terrain}
 	return out
 }
 

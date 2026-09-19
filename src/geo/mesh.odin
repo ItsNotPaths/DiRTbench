@@ -179,7 +179,8 @@ UV_TILE_M :: 8.0
 
 // What a triangle is made of, said in terms no one game owns. The viewport
 // ignores it — it shades from the baked vertex colours — and each export target
-// maps it onto that game's own material (see D3_MATERIAL_KEY in d3/venue_profile.odin).
+// maps it onto that game's own material and surface code (see MAT_EXPORT in
+// app/export.odin, and D3_DRAW_KEY in d3/venue_profile.odin).
 // The soup is sorted by this before export, because every target we have binds
 // one material per *contiguous group* of triangles. Adding a value here means
 // adding a row to every target's material table.

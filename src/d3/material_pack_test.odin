@@ -18,11 +18,13 @@ profile_survives_a_round_trip_through_its_own_text :: proc(t: ^testing.T) {
 	testing.expect_value(t, got.batch, want.batch)
 	testing.expect_value(t, got.tiles_x, want.tiles_x)
 	testing.expect_value(t, got.tiles_z, want.tiles_z)
-	for material in Collision_Material {
+	for material in Draw_Material {
 		testing.expect_value(t, got.visual[material], want.visual[material])
-		testing.expect_value(t, got.collision[material], want.collision[material])
 		testing.expect_value(t, got.colour[material], want.colour[material])
 		testing.expect_value(t, got.colour_b[material], want.colour_b[material])
+	}
+	for surface in Collision_Surface {
+		testing.expect_value(t, got.collision[surface], want.collision[surface])
 	}
 }
 
@@ -82,7 +84,7 @@ pack_extract_yields_a_template_the_exporter_can_build_from :: proc(t: ^testing.T
 		if node.name == "SHADERINSTANCE" { shaders[pssg_attr_string(&file, node, "id")] = true }
 	}
 	testing.expect(t, shaders[profile.lod]); testing.expect(t, shaders[profile.batch])
-	for material in Collision_Material { testing.expect(t, shaders[profile.visual[material]]) }
+	for material in Draw_Material { testing.expect(t, shaders[profile.visual[material]]) }
 }
 
 @(test)

@@ -18,14 +18,15 @@ d3_test_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
 		for qx in 0..<QX {
 			x0 := f32(qx)*50; x1 := x0+50
 			z0 := f32(qz)*50; z1 := z0+50
-			material: Collision_Material = (qx+qz)%2 == 0 ? .Road : .Terrain
+			material: Draw_Material = (qx+qz)%2 == 0 ? .Road : .Terrain
+			surface: Collision_Surface = (qx+qz)%2 == 0 ? .Road : .Terrain
 			at := (qz*QX+qx)*2
 			out[at] = {
-				Points={{x0,0,z0},{x0,0,z1},{x1,0,z0}}, Material=material,
+				Points={{x0,0,z0},{x0,0,z1},{x1,0,z0}}, Draw=material, Surface=surface,
 				Blend={mix(x0),mix(x0),mix(x1)},
 			}
 			out[at+1] = {
-				Points={{x1,0,z0},{x0,0,z1},{x1,0,z1}}, Material=material,
+				Points={{x1,0,z0},{x0,0,z1},{x1,0,z1}}, Draw=material, Surface=surface,
 				Blend={mix(x1),mix(x0),mix(x1)},
 			}
 		}
@@ -270,7 +271,7 @@ routesplit_splits_a_group_it_cannot_index :: proc(t: ^testing.T) {
 	crowded := make([]Collision_Triangle, D3_WELD_MAX/3+1, context.temp_allocator)
 	for &tri, i in crowded {
 		y := f32(i)*3
-		tri = {Points={{0,y,0},{1,y+1,0},{0,y+2,1}}, Material=.Road}
+		tri = {Points={{0,y,0},{1,y+1,0},{0,y+2,1}}, Draw = .Road, Surface = .Road}
 	}
 	raw, msg, built := d3_routesplit_build(crowded, d3_test_profile(), context.allocator)
 	testing.expect(t, built, msg); if !built { return }
@@ -506,7 +507,7 @@ a_venue_scene_makes_every_material_it_names :: proc(t: ^testing.T) {
 	for node in nodes {
 		if node.name == "SHADERINSTANCE" { named[pssg_attr_string(&file, node, "id")] = true }
 	}
-	for material in Collision_Material {
+	for material in Draw_Material {
 		testing.expectf(t, named[profile.visual[material]],
 			"no instance named %q, so %v draws nothing", profile.visual[material], material)
 	}

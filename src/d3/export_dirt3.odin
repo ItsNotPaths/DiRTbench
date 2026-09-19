@@ -76,7 +76,7 @@ d3_collision_build :: proc(
 	for triangle, i in collision {
 		input[i] = {
 			p = triangle.Points,
-			mat = profile.collision[triangle.Material],
+			mat = profile.collision[triangle.Surface],
 		}
 	}
 	return d3_track_write(input, allocator)

@@ -290,7 +290,7 @@ d3_ref :: proc(id: string) -> string { return fmt.tprintf("#%s", id) }
 
 D3_Cell :: struct {
 	ix, iz: int,
-	picks:  [Collision_Material][dynamic]int,
+	picks:  [Draw_Material][dynamic]int,
 	all:    [dynamic]int,
 }
 
@@ -316,7 +316,7 @@ d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_G
 	groups := make([dynamic]D3_Group, b.allocator)
 	switch layer.role {
 	case .Surface:
-		for material in Collision_Material {
+		for material in Draw_Material {
 			if len(cell.picks[material]) == 0 { continue }
 			append(&groups, D3_Group{
 				cell.picks[material][:],
@@ -573,14 +573,14 @@ d3_scene_cells :: proc(
 	cells := make([]D3_Cell, profile.tiles_x*profile.tiles_z, allocator)
 	for &cell in cells {
 		cell.all = make([dynamic]int, allocator)
-		for material in Collision_Material { cell.picks[material] = make([dynamic]int, allocator) }
+		for material in Draw_Material { cell.picks[material] = make([dynamic]int, allocator) }
 	}
 	for tri, i in collision {
 		centre := (tri.Points[0]+tri.Points[1]+tri.Points[2])/3
 		ix := clamp(int((centre[0]-lo[0])/pitch_x), 0, profile.tiles_x-1)
 		iz := clamp(int((hi[2]-centre[2])/pitch_z), 0, profile.tiles_z-1)
 		cell := &cells[iz*profile.tiles_x+ix]
-		append(&cell.picks[tri.Material], i)
+		append(&cell.picks[tri.Draw], i)
 		append(&cell.all, i)
 	}
 	return cells

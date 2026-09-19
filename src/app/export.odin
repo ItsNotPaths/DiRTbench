@@ -68,8 +68,8 @@ venue_skirt :: proc(lo, hi: [2]f32, y: f32, allocator := context.temp_allocator)
 			b := [3]f32{x1, height(ix+1, iz, y), z0}
 			c := [3]f32{x1, height(ix+1, iz+1, y), z1}
 			d := [3]f32{x0, height(ix, iz+1, y), z1}
-			append(&out, d3.Collision_Triangle{Points = {a, c, b}, Material = .Terrain})
-			append(&out, d3.Collision_Triangle{Points = {a, d, c}, Material = .Terrain})
+			append(&out, d3.Collision_Triangle{Points = {a, c, b}, Draw = .Terrain, Surface = .Terrain})
+			append(&out, d3.Collision_Triangle{Points = {a, d, c}, Draw = .Terrain, Surface = .Terrain})
 		}
 	}
 	return out[:]
@@ -293,25 +293,39 @@ d3_route_sample :: proc(section: Maybe(geo.Cross_Section)) -> Maybe(d3.Route_Sam
 	}
 }
 
+// What each of our materials draws with and drives as, in one place.
+//
+// `geo.Mat_Id` stays a **single** key per triangle: in the editor a triangle is
+// one thing, and splitting it there would mean carrying two arrays that agree in
+// every case that exists. The two axes are separated here instead, at the one
+// boundary where a target needs them apart, because a target does not have to
+// keep them together — a blended run of road is one drawn material over two
+// codes, and a venue with no paving texture is two codes over one material.
+//
+// A `Mat_Id` therefore names the finest distinction that exists: add one for
+// every (drawn, drives-as) pair the editor can make, and let this table say
+// which pair it is.
+MAT_EXPORT := [geo.Mat_Id]struct{draw: d3.Draw_Material, surface: d3.Collision_Surface} {
+	.Road       = {.Road,       .Road},
+	.Cliff      = {.Cliff,      .Cliff},
+	.Terrain    = {.Terrain,    .Terrain},
+	.Road_Paved = {.Road_Paved, .Road_Paved},
+}
+
 // The triangle soup, in material order, as a target-agnostic collision list.
 // Every Dirt 3 file that names geometry reads from this, at route or venue
 // scope alike.
 collision_from_mesh :: proc(mesh: geo.Tri_Mesh, order: []int, allocator := context.temp_allocator) -> []d3.Collision_Triangle {
 	collision := make([]d3.Collision_Triangle, len(order), allocator)
 	for triangle, i in order {
-		material: d3.Collision_Material
-		switch mesh.mat[triangle] {
-		case .Road:     material = .Road
-		case .Cliff:    material = .Cliff
-		case .Terrain:  material = .Terrain
-		case .Road_Paved: material = .Road_Paved
-		}
+		export := MAT_EXPORT[mesh.mat[triangle]]
 		for corner in 0..<3 {
 			p := mesh.pos[triangle*3+corner]
 			collision[i].Points[corner] = {p.x,p.y,p.z}
 			collision[i].Blend[corner] = mesh.blend[triangle*3+corner]
 		}
-		collision[i].Material = material
+		collision[i].Draw = export.draw
+		collision[i].Surface = export.surface
 	}
 	return collision
 }

@@ -30,10 +30,20 @@ D3_MATERIALS_FILE :: "materials.pssg"
 // on disk is rebuilt instead of silently reused.
 D3_PACK_STAMP :: 4
 
-D3_MATERIAL_KEY := [Collision_Material]string {
-	.Road      = "road",
-	.Cliff     = "cliff",
-	.Terrain   = "terrain",
+// The profile's row names. Two tables because the two enums are two keyspaces,
+// spelling the same four names today: every surface that exists also has a look
+// of its own. A drawn-only material joins the first table and not the second.
+D3_DRAW_KEY := [Draw_Material]string {
+	.Road       = "road",
+	.Cliff      = "cliff",
+	.Terrain    = "terrain",
+	.Road_Paved = "road_paved",
+}
+
+D3_SURFACE_KEY := [Collision_Surface]string {
+	.Road       = "road",
+	.Cliff      = "cliff",
+	.Terrain    = "terrain",
 	.Road_Paved = "road_paved",
 }
 
@@ -41,13 +51,13 @@ D3_Venue_Profile :: struct {
 	id:        string,
 	pack:      int,
 	template:  []u8,
-	visual:    [Collision_Material]string,
-	colour:    [Collision_Material][4]u8,
+	visual:    [Draw_Material]string,
+	colour:    [Draw_Material][4]u8,
 	// The far end of the material's texture mix. A drawn vertex gets
 	// `lerp(colour, colour_b, blend)`, so `colour_b == colour` switches the mix
 	// off and reproduces a single-texture surface byte for byte. See
 	// geo.Tri_Mesh.blend.
-	colour_b:  [Collision_Material][4]u8,
+	colour_b:  [Draw_Material][4]u8,
 	lod:       string,
 	batch:     string,
 	tiles_x:   int,
@@ -57,7 +67,7 @@ D3_Venue_Profile :: struct {
 	// texture means rebuilding the pack, not rewriting a row. Empty means the
 	// venue offered none and the paved road draws with the loose road's art.
 	paved_texture: string,
-	collision: [Collision_Material]string,
+	collision: [Collision_Surface]string,
 }
 
 D3_Profile_Field :: enum {
@@ -80,16 +90,30 @@ d3_colour_parse :: proc(text: string) -> (out: [4]u8, ok: bool) {
 	return out, true
 }
 
-// `road`, `road_colour` and `road_collision` all address the Road material.
-d3_profile_field :: proc(key: string) -> (material: Collision_Material, field: D3_Profile_Field, ok: bool) {
-	name := key
+// `road`, `road_colour` and `road_collision` all address the Road rows. Which
+// keyspace the name lands in is decided by the suffix: `_collision` names a
+// surface, everything else names a drawn material. The two tables spell the same
+// names today and are free to stop.
+d3_profile_field :: proc(key: string) -> (name: string, field: D3_Profile_Field) {
+	name = key
 	if strings.has_suffix(key, "_colour_b")  { name = strings.trim_suffix(key, "_colour_b");  field = .Colour_B }
 	if strings.has_suffix(key, "_colour")    { name = strings.trim_suffix(key, "_colour");    field = .Colour }
 	if strings.has_suffix(key, "_collision") { name = strings.trim_suffix(key, "_collision"); field = .Collision }
-	for candidate in Collision_Material {
-		if D3_MATERIAL_KEY[candidate] == name { return candidate, field, true }
+	return
+}
+
+d3_draw_material :: proc(name: string) -> (Draw_Material, bool) {
+	for candidate in Draw_Material {
+		if D3_DRAW_KEY[candidate] == name { return candidate, true }
 	}
-	return .Road, field, false
+	return .Road, false
+}
+
+d3_collision_surface :: proc(name: string) -> (Collision_Surface, bool) {
+	for candidate in Collision_Surface {
+		if D3_SURFACE_KEY[candidate] == name { return candidate, true }
+	}
+	return .Road, false
 }
 
 d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (msg: string, ok: bool) {
@@ -110,12 +134,17 @@ d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (
 		if field == "tiles_x" { profile.tiles_x = count } else { profile.tiles_z = count }
 		return "", true
 	}
-	material, kind, known := d3_profile_field(field)
-	if !known { return "", true }
+	// A row this build does not know is ignored, not refused: a profile written
+	// by a later one has to stay loadable.
+	name, kind := d3_profile_field(field)
 	switch kind {
-	case .Visual:    profile.visual[material] = value
-	case .Collision: profile.collision[material] = value
+	case .Collision:
+		if surface, known := d3_collision_surface(name); known { profile.collision[surface] = value }
+	case .Visual:
+		if material, known := d3_draw_material(name); known { profile.visual[material] = value }
 	case .Colour, .Colour_B:
+		material, known := d3_draw_material(name)
+		if !known { break }
 		colour, parsed := d3_colour_parse(value)
 		if !parsed { return fmt.tprintf("malformed colour %s in Dirt 3 profile", field), false }
 		if kind == .Colour { profile.colour[material] = colour } else { profile.colour_b[material] = colour }
@@ -130,10 +159,11 @@ d3_profile_complete :: proc(profile: D3_Venue_Profile) -> (msg: string, ok: bool
 	if profile.tiles_x < 1 || profile.tiles_z < 1 || profile.tiles_x*profile.tiles_z > D3_TILE_MAX {
 		return fmt.tprintf("a Dirt 3 profile must name a tile grid of at most %d cells", D3_TILE_MAX), false
 	}
-	for material in Collision_Material {
-		if profile.visual[material] == "" || profile.collision[material] == "" {
-			return "incomplete Dirt 3 material mapping", false
-		}
+	for material in Draw_Material {
+		if profile.visual[material] == "" { return "incomplete Dirt 3 material mapping", false }
+	}
+	for surface in Collision_Surface {
+		if profile.collision[surface] == "" { return "incomplete Dirt 3 surface mapping", false }
 	}
 	return "", true
 }
@@ -184,11 +214,12 @@ d3_profile_parse :: proc(
 d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
 	strings.write_string(&b, "# Written by dirtbench from the base venue's tracksplit.pssg.\n")
-	strings.write_string(&b, "# Values are PSSG SHADERINSTANCE ids in materials.pssg beside this file.\n")
 	fmt.sbprintf(&b, "default = %s\n", profile.id)
 	fmt.sbprintf(&b, "%s.pack = %d\n", profile.id, profile.pack)
-	for material in Collision_Material {
-		key := D3_MATERIAL_KEY[material]
+	strings.write_string(&b, "\n# What draws each material: a SHADERINSTANCE id in materials.pssg beside\n")
+	strings.write_string(&b, "# this file, and the two ends of its texture mix as argb.\n")
+	for material in Draw_Material {
+		key := D3_DRAW_KEY[material]
 		colour := profile.colour[material]
 		colour_b := profile.colour_b[material]
 		fmt.sbprintf(&b, "%s.%s = %s\n", profile.id, key, profile.visual[material])
@@ -202,8 +233,17 @@ d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_all
 			"%s.%s_colour_b = %02x%02x%02x%02x\n",
 			profile.id, key, colour_b[0], colour_b[1], colour_b[2], colour_b[3],
 		)
-		fmt.sbprintf(&b, "%s.%s_collision = %s\n", profile.id, key, profile.collision[material])
 	}
+	strings.write_string(&b, "\n# How each surface drives: a four-character code from surface_materials.xml\n")
+	strings.write_string(&b, "# at the install root. A separate list, because a material and a surface are\n")
+	strings.write_string(&b, "# not the same thing — see Draw_Material in d3/api.odin.\n")
+	for surface in Collision_Surface {
+		fmt.sbprintf(
+			&b, "%s.%s_collision = %s\n",
+			profile.id, D3_SURFACE_KEY[surface], profile.collision[surface],
+		)
+	}
+	strings.write_string(&b, "\n")
 	fmt.sbprintf(&b, "%s.paved_texture = %s\n", profile.id, profile.paved_texture)
 	fmt.sbprintf(&b, "%s.tiles_x = %d\n", profile.id, profile.tiles_x)
 	fmt.sbprintf(&b, "%s.tiles_z = %d\n", profile.id, profile.tiles_z)
@@ -219,10 +259,8 @@ d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
 	profile.pack = D3_PACK_STAMP
 	profile.tiles_x = 8
 	profile.tiles_z = 4
-	for material in Collision_Material {
-		profile.colour[material] = {0x00, 0xff, 0xff, 0x00}
-		profile.collision[material] = "GLD*"
-	}
+	for material in Draw_Material { profile.colour[material] = {0x00, 0xff, 0xff, 0x00} }
+	for surface in Collision_Surface { profile.collision[surface] = "GLD*" }
 	profile.colour[.Terrain] = {0x00, 0xff, 0x00, 0x00}
 	profile.collision[.Terrain] = "GRS*"
 	profile.collision[.Cliff] = "ROK*"
@@ -249,7 +287,7 @@ d3_profile_fixture :: proc() -> (profile: D3_Venue_Profile, msg: string, ok: boo
 	profile.template = transmute([]u8)D3_FIXTURE_MATERIALS
 	profile.lod = "lod"
 	profile.batch = "batchmaterial"
-	for material in Collision_Material { profile.visual[material] = "dirt_pebbles_01" }
+	for material in Draw_Material { profile.visual[material] = "dirt_pebbles_01" }
 	profile.visual[.Terrain] = "grass_01"
 	msg, ok = d3_profile_complete(profile)
 	return

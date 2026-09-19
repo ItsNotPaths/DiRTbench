@@ -8,6 +8,7 @@ package main
 // both branches without anyone walking them — and it is why most points store
 // nothing at all.
 
+import "core:fmt"
 import "core:testing"
 import "../geo"
 import "../gfx"
@@ -108,4 +109,28 @@ a_surface_survives_the_document :: proc(t: ^testing.T) {
 	testing.expect_value(t, SURFACE_KEY[.None], "")
 	testing.expect_value(t, surface_of(""), geo.Road_Surface.None)
 	testing.expect_value(t, surface_of("granite"), geo.Road_Surface.None)
+}
+
+// Every material the editor can make says what draws it and what it drives as.
+//
+// `MAT_EXPORT` is an array literal keyed by name, so a material added without a
+// row here does not fail to compile — it reads as all-zeroes, which is the Road
+// pair, and a cliff would quietly collide as gravel. Distinctness is what
+// catches that: two materials sharing a pair is either the omission or a
+// deliberate collision worth stating here.
+@(test)
+every_material_maps_to_its_own_pair :: proc(t: ^testing.T) {
+	seen := make(map[string]geo.Mat_Id, context.temp_allocator)
+	for mat in geo.Mat_Id {
+		export := MAT_EXPORT[mat]
+		key := fmt.tprintf("%v/%v", export.draw, export.surface)
+		if first, clash := seen[key]; clash {
+			testing.expectf(t, false,
+				"%v and %v both export as %s — one of them is missing its MAT_EXPORT row",
+				first, mat, key)
+			continue
+		}
+		seen[key] = mat
+	}
+	testing.expect_value(t, len(seen), len(geo.Mat_Id))
 }

@@ -266,8 +266,8 @@ d3_pack_requalify :: proc(file: ^Pssg_File, node: ^Pssg_Node, allocator: mem.All
 // a route out of this is the pack's acceptance test.
 d3_pack_probe_mesh :: proc(allocator := context.temp_allocator) -> []Collision_Triangle {
 	out := make([]Collision_Triangle, 2, allocator)
-	out[0] = {Points = {{0, 0, 0}, {10, 0, 0}, {0, 1, 10}}, Material = .Road}
-	out[1] = {Points = {{10, 0, 0}, {10, 1, 10}, {0, 1, 10}}, Material = .Terrain}
+	out[0] = {Points = {{0, 0, 0}, {10, 0, 0}, {0, 1, 10}}, Draw = .Road, Surface = .Road}
+	out[1] = {Points = {{10, 0, 0}, {10, 1, 10}, {0, 1, 10}}, Draw = .Terrain, Surface = .Terrain}
 	return out
 }
 
@@ -354,14 +354,14 @@ d3_pack_build :: proc(
 	paved := d3_surface_material(&file, instances, road, D3_PAVED_MATERIAL, art.paved_texture, scratch)
 	if paved == "" { paved = road }
 
-	for material in Collision_Material { profile.visual[material] = road }
+	for material in Draw_Material { profile.visual[material] = road }
 	profile.visual[.Terrain] = ground
 	profile.visual[.Cliff] = cliff
 	profile.visual[.Road_Paved] = paved
 	profile.paved_texture = art.paved_texture
 
 	wanted := make(map[string]bool, scratch)
-	for material in Collision_Material { wanted[profile.visual[material]] = true }
+	for material in Draw_Material { wanted[profile.visual[material]] = true }
 	wanted[profile.lod] = true
 	wanted[profile.batch] = true
 

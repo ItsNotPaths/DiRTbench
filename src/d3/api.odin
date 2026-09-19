@@ -6,7 +6,27 @@ Route_Sample :: struct {
 	Right:  [3]f32,
 }
 
-Collision_Material :: enum u8 {
+// How a triangle drives: grip, force feedback, tyre note, dust and mud all come
+// from the one four-character code this picks (see docs/dirt3-collision.md).
+Collision_Surface :: enum u8 {
+	Road,
+	Cliff,
+	Terrain,
+	Road_Paved,
+}
+
+// Which shader instance draws a triangle.
+//
+// Deliberately a **different** enum from the surface above, because the two do
+// not move together. A venue with no paving texture already draws its paved road
+// with the loose road's material and differs only in how it drives. Going the
+// other way, a run of road that fades from gravel into tarmac is one material
+// holding both textures with two codes under it, because paint can cross a
+// boundary gradually and grip cannot.
+//
+// So this grows when a new *look* is needed and the surface enum does not, which
+// is the point: a drawn-only material must not force a code nothing collides as.
+Draw_Material :: enum u8 {
 	Road,
 	Cliff,
 	Terrain,
@@ -14,12 +34,13 @@ Collision_Material :: enum u8 {
 }
 
 Collision_Triangle :: struct {
-	Points:   [3][3]f32,
-	Material: Collision_Material,
+	Points:  [3][3]f32,
+	Surface: Collision_Surface,
+	Draw:    Draw_Material,
 	// Per corner, in the same order as `Points`: how far that corner leans
-	// toward the material's second ground texture, 0..1. See geo.Tri_Mesh.blend.
-	// Collision ignores it; only the drawn surface reads it.
-	Blend:    [3]f32,
+	// toward the drawn material's second ground texture, 0..1. See
+	// geo.Tri_Mesh.blend. Collision ignores it; only the drawn surface reads it.
+	Blend:   [3]f32,
 }
 
 Progress_Marker_Kind :: enum u8 {
