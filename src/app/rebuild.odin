@@ -23,18 +23,12 @@ import "core:sync"
 import "core:thread"
 import "../geo"
 
-Rebuild_State :: enum u8 {
-	Idle,    // the main thread owns the job
-	Running, // the worker owns it
-	Done,    // the main thread owns it again, with a result in it
-}
-
-// One document's worker. `state` is the whole handshake — there is no lock,
-// because at no point do both threads own the job.
+// One document's worker and the job in its hands. See handoff.odin for the
+// rule `state` enforces.
 Rebuilder :: struct {
 	worker: ^thread.Thread,
 	wake:   sync.Sema,
-	state:  Rebuild_State,
+	state:  Handoff_State,
 	stop:   bool,
 	job:    Rebuild_Job,
 }
@@ -151,7 +145,7 @@ rebuild_dispatch :: proc(doc: ^Venue_Doc, dragging, point_drag: bool) {
 	}
 
 	rebuild_worker_start(doc)
-	sync.atomic_store(&r.state, Rebuild_State.Running)
+	sync.atomic_store(&r.state, Handoff_State.Running)
 	sync.sema_post(&r.wake)
 }
 
@@ -192,7 +186,7 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 	delete(j.terrain.controls)
 	geo.floors_delete(&j.terrain)
 	j^ = {}
-	sync.atomic_store(&r.state, Rebuild_State.Idle)
+	sync.atomic_store(&r.state, Handoff_State.Idle)
 	return
 }
 
@@ -266,7 +260,7 @@ rebuild_worker :: proc(t: ^thread.Thread) {
 		rebuild_job_run(&r.job)
 		// This thread's own arena. The frame loop's free_all cannot reach it.
 		free_all(context.temp_allocator)
-		sync.atomic_store(&r.state, Rebuild_State.Done)
+		sync.atomic_store(&r.state, Handoff_State.Done)
 	}
 }
 
