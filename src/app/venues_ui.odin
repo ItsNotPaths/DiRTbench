@@ -53,6 +53,8 @@ Venues_Screen :: struct {
 	delete_ready: string, // second click confirms project deletion
 	stage_ready:  string, // "<venue>/<route>" whose removal a second click confirms
 	stages_open:  string, // the one venue showing its stage list, "" for none
+	upload_open:  string, // the one venue showing its upload panel, "" for none
+	upload:       Upload_Form,
 	rows:         [dynamic]Stage_Row,
 	// Re-read `venues` between frames. Reloading mid-frame frees the array the
 	// row loop is walking.
@@ -72,6 +74,8 @@ venues_screen_delete :: proc(ps: ^Venues_Screen) {
 	delete(ps.delete_ready)
 	delete(ps.stage_ready)
 	delete(ps.stages_open)
+	delete(ps.upload_open)
+	upload_form_delete(&ps.upload)
 	for row in ps.rows {
 		delete(row.venue)
 		delete(row.route)
@@ -97,6 +101,13 @@ venue_for :: proc(ps: ^Venues_Screen, id: string) -> (^Venue, bool) {
 		}
 	}
 	return nil, false
+}
+
+// The same lookup from outside this file. The upload panel resolves its venue
+// between frames, by id, for the reason the open request does: the list is
+// reloaded between the click and the service call.
+venue_for_id :: proc(app: ^App, id: string) -> (^Venue, bool) {
+	return venue_for(&app.screen, id)
 }
 
 // --- the screen --------------------------------------------------------------
@@ -347,7 +358,14 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 			ps.reload_pending = ok
 		}
 	}
+	ui.im_same_line()
+	uploading := ps.upload_open == p.id
+	if ui.im_button(fmt.ctprintf("%s###upload_%s", uploading ? "Hide upload" : "Upload...", p.id)) {
+		delete(ps.upload_open)
+		ps.upload_open = uploading ? "" : strings.clone(p.id)
+	}
 	draw_venue_stages(app, p)
+	draw_venue_upload(app, p)
 	ui.igSpacing()
 }
 
@@ -654,6 +672,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	routes_free(&doc.routes)
 	doc.routes = venue_routes(p^)
 	doc.next_route = p.next_route
+	doc.shot = p.shot
 	delete(doc.open_venue)
 	doc.open_venue = strings.clone(p.id)
 	// The trees come with the art: the base venue picks the species, not the user.
@@ -844,6 +863,16 @@ draw_venues_frame :: proc(app: ^App) {
 	if app.screen.reload_pending {
 		venues_screen_reload(&app.screen)
 		app.screen.reload_pending = false
+	}
+	// A finished upload is claimed here, not in the panel: what it decides —
+	// which listing this venue now belongs to — outlives whichever panel is open.
+	if upload_tick(&app.uploader) {
+		up := &app.uploader
+		if up.job.ok {
+			upload_slug_remember(up.venue, up.job.slug_out)
+			upload_user_remember(up.job.username)
+		}
+		set_status(&app.status, up.job.message, up.job.ok)
 	}
 	gfx.BeginWindowFrame(&app.window)
 	gfx.ClearBackground({22, 24, 29, 255})

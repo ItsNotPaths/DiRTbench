@@ -157,15 +157,16 @@ draw_ribbon_edges :: proc(ribbon: []geo.Cross_Section, col: gfx.Color) {
 	}
 }
 
-// The venue itself, from the shared cache: what both window kinds draw first.
-draw_world :: proc(ed: ^Editor) {
-	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
-	geo.gpu_mesh_draw(ed.doc.terrain_mesh, ed.doc.material, ed.wireframe)
-	geo.gpu_mesh_draw(ed.doc.road, ed.doc.material, ed.wireframe)
-	draw_centreline(ed.doc.ribbon)
-	geo.gpu_mesh_draw(ed.doc.veg_mesh, ed.doc.material, ed.wireframe)
-	geo.gpu_mesh_draw(ed.doc.card_mesh, ed.doc.material, ed.wireframe)
-	draw_props(ed.doc, ed.wireframe)
+// The venue itself, from the shared cache: what both window kinds draw first,
+// and all the thumbnail draws. Takes the document rather than the window,
+// because the thumbnail is rendered with no window in front of it.
+draw_world :: proc(doc: ^Venue_Doc, wireframe: bool) {
+	geo.gpu_mesh_draw(doc.terrain_mesh, doc.material, wireframe)
+	geo.gpu_mesh_draw(doc.road, doc.material, wireframe)
+	draw_centreline(doc.ribbon)
+	geo.gpu_mesh_draw(doc.veg_mesh, doc.material, wireframe)
+	geo.gpu_mesh_draw(doc.card_mesh, doc.material, wireframe)
+	draw_props(doc, wireframe)
 }
 
 // The venue window's pass. What is left in the fixed-size overlay batch (see
@@ -177,7 +178,8 @@ draw_venue_scene :: proc(
 ) {
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
-	draw_world(ed)
+	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
+	draw_world(ed.doc, ed.wireframe)
 	draw_handles(ed.doc.spline, selected_point(ed))
 	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
 	draw_floors(ed)
@@ -195,7 +197,8 @@ draw_venue_scene :: proc(
 draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
-	draw_world(ed)
+	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
+	draw_world(ed.doc, ed.wireframe)
 	if route := selected_route(ed); route != nil {
 		draw_marker(ed.doc.spline, route.start, {110, 255, 140, 255})
 		draw_marker(ed.doc.spline, route.finish, {255, 110, 110, 255})

@@ -38,6 +38,11 @@ App :: struct {
 	// The window a button asked to open, serviced between frames. See
 	// app_service_open_request for why it cannot happen inside one.
 	open_request: Open_Request,
+	// The venue whose Upload button was pressed, serviced between frames for
+	// the same reason: the thumbnail render draws a scene of its own.
+	upload_request: [64]u8,
+	// The one upload in flight, and the last one's answer (upload.odin).
+	uploader: Uploader,
 	status:  Status,
 	show_demo: bool,
 	quit:    bool,
@@ -213,6 +218,7 @@ main :: proc() {
 
 	install_scan_init(&app.install)
 	defer install_scan_delete(&app.install)
+	defer uploader_delete(&app.uploader)
 	venues_screen_init(&app.screen)
 	defer venues_screen_delete(&app.screen)
 	// Defers run last-first, so the delete is written above the loop that has
@@ -229,6 +235,7 @@ main :: proc() {
 		venues_editors_reap(&app)
 		draw_venues_frame(&app)
 		app_service_open_request(&app)
+		app_service_upload_request(&app)
 		docs_rebuild(&app)
 		for ed in app.editors {
 			editor_frame(ed)

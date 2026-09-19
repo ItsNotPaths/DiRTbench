@@ -140,6 +140,9 @@ draw_menubar :: proc(ed: ^Editor) {
 		if ed.kind == .Venue && ui.igMenuItem_Bool("Road generator", nil, ed.show_gen, true) {
 			ed.show_gen = !ed.show_gen
 		}
+		if ed.kind == .Venue && ui.igMenuItem_Bool("Thumbnail", nil, ed.show_thumb, true) {
+			ed.show_thumb = !ed.show_thumb
+		}
 		ui.igSeparator()
 		if ui.igMenuItem_Bool("ImGui demo window", nil, ed.show_demo, true) {
 			ed.show_demo = !ed.show_demo
@@ -763,7 +766,7 @@ draw_targets :: proc(ed: ^Editor) {
 // menubar has switched on, one above the other. Absent while both are off, so
 // the road is uncovered on that side until something is asked for.
 draw_venue_tools :: proc(ed: ^Editor) {
-	if !ed.show_gen && !ed.show_targets {
+	if !ed.show_gen && !ed.show_targets && !ed.show_thumb {
 		return
 	}
 	open := sidebar_begin("Venue tools", .Right)
@@ -775,9 +778,65 @@ draw_venue_tools :: proc(ed: ^Editor) {
 	if ed.show_gen {
 		draw_generator(ed)
 	}
+	if ed.show_thumb {
+		draw_thumbnail_panel(ed)
+	}
 	if ed.show_targets {
 		draw_targets(ed)
 	}
+}
+
+// How this venue's picture is framed. The framing is the viewport's, so there
+// is nothing here to aim with: move the camera the way the camera is always
+// moved, and press the button.
+//
+// What is saved is where the camera stood and which way it faced. No image,
+// because the picture is rendered from this when the venue is uploaded and can
+// then never be out of date with the road.
+draw_thumbnail_panel :: proc(ed: ^Editor) {
+	sidebar_section("Thumbnail", &ed.show_thumb)
+
+	ui.im_text("The picture the site shows for this venue.")
+	shot := &ed.doc.shot
+	if shot.set {
+		ui.im_text_colored(
+			DIM_COL,
+			fmt.ctprintf("Saved from %.0f, %.0f, %.0f", shot.pos[0], shot.pos[1], shot.pos[2]),
+		)
+	} else {
+		ui.im_text_colored(DIM_COL, "No view saved. The whole road gets framed from above.")
+	}
+	ui.igSpacing()
+
+	// The thumbnail is square and the viewport is not, so this is measured
+	// against the picture that will be taken rather than against what is on
+	// screen. A view with none of the road in it cannot be saved: the point of
+	// a thumbnail is to show the venue.
+	cam := to_camera3d(ed.cam)
+	framed := thumbnail_framed(ed.doc, cam)
+	if framed < THUMB_MIN_FRAMED {
+		ui.im_text_colored(WARN_COL, "The road is not in this view.")
+	} else {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%.0f%% of the road is in frame.", framed * 100))
+	}
+
+	ui.igBeginDisabled(framed < THUMB_MIN_FRAMED)
+	if ui.im_button("Use this view") {
+		shot^ = {set = true, pos = cam.position, yaw = ed.cam.yaw, pitch = ed.cam.pitch}
+		mark_edited(ed.doc)
+		set_status(&ed.status, "thumbnail view saved; save the venue to keep it", true)
+	}
+	ui.igEndDisabled()
+	if shot.set {
+		ui.im_same_line()
+		if ui.im_button("Clear") {
+			shot^ = {}
+			mark_edited(ed.doc)
+			set_status(&ed.status, "thumbnail view cleared", true)
+		}
+	}
+	ui.igSpacing()
+	ui.im_text_colored(DIM_COL, "Uploading is in the project manager.")
 }
 
 // Records the finished ImGui frame into the window's swapchain pass: upload

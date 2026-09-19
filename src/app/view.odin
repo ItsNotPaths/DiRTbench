@@ -157,6 +157,7 @@ Editor :: struct {
 	show_demo:     bool,
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
+	show_thumb:    bool, // the Thumbnail panel
 
 	// The two prop browsers (props_ui.odin), one per role. `prop_placing` says
 	// which of them owns the next viewport click, and nothing is being placed
