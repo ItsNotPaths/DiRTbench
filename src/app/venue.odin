@@ -823,6 +823,9 @@ venue_compile :: proc(p: Venue, allocator := context.allocator) -> (out: []geo.S
 // Deploying alone leaves the base venue's own road in place under a new name,
 // so the two halves are one action.
 venue_publish :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	// Registration is a one-off; a second publish writes nothing there and says
+	// so. What that run really did is re-export, so report the export.
+	update := venue_already_deployed(vs, p)
 	deploy_msg, deployed := venue_deploy(vs, p)
 	if !deployed {
 		return deploy_msg, false
@@ -831,6 +834,9 @@ venue_publish :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	export_msg, exported := venue_export_all(vs, p)
 	if !exported {
 		return fmt.tprintf("%s; export: %s", deploy_msg, export_msg), false
+	}
+	if update {
+		return fmt.tprintf("updated deployed map %s; %s", p.name, export_msg), true
 	}
 	return fmt.tprintf("%s; %s", deploy_msg, export_msg), true
 }
