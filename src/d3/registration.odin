@@ -9,6 +9,7 @@ import "core:crypto/sha2"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
+import "core:slice"
 import "core:strings"
 
 Registration_Ids :: struct {
@@ -307,6 +308,174 @@ register_location :: proc(
 	return ids, "", true
 }
 
+// --- unregistration ----------------------------------------------------------
+//
+// The mirror of register_location. A deployment only appends to five tables,
+// so undoing one only subtracts from those five, which is what makes reverts
+// order-free.
+
+@(private = "file")
+append_unique :: proc(list: ^[dynamic]i32, id: i32) {
+	if !slice.contains(list[:], id) {
+		append(list, id)
+	}
+}
+
+@(private = "file")
+table_has_int :: proc(t: ^Table, name: string, value: i32) -> bool {
+	for row in t.rows {
+		if row_int(t, row, name) == value {
+			return true
+		}
+	}
+	return false
+}
+
+// Drop every row whose `name` field holds one of `ids`. Survivors keep their
+// ids, so nothing that references them has to be rewritten.
+@(private = "file")
+drop_rows_by_int :: proc(
+	t: ^Table,
+	name: string,
+	ids: []i32,
+	allocator := context.allocator,
+) {
+	kept := 0
+	for row in t.rows {
+		if slice.contains(ids, row_int(t, row, name)) {
+			row_delete(t, row, allocator)
+			continue
+		}
+		t.rows[kept] = row
+		kept += 1
+	}
+	resize(&t.rows, kept)
+}
+
+@(private = "file")
+drop_related_rows :: proc(
+	db: ^Database,
+	table_name, foreign_key: string,
+	ids: []i32,
+	allocator := context.allocator,
+) -> (
+	msg: string,
+	ok: bool,
+) {
+	table, found := database_table(db, table_name)
+	if !found {
+		return fmt.tprintf("database has no %s table", table_name), false
+	}
+	drop_rows_by_int(table, foreign_key, ids, allocator)
+	return "", true
+}
+
+@(private = "file")
+venue_model_scan :: proc(
+	models: ^Table,
+	location, venue: string,
+) -> (
+	model_ids, track_ids: [dynamic]i32,
+) {
+	model_ids = make([dynamic]i32, context.temp_allocator)
+	track_ids = make([dynamic]i32, context.temp_allocator)
+	for row in models.rows {
+		if row_str(models, row, "folder_string") != location ||
+		   row_str(models, row, "file_string") != venue {
+			continue
+		}
+		append(&model_ids, row_int(models, row, "id"))
+		append_unique(&track_ids, row_int(models, row, "track_id"))
+	}
+	return
+}
+
+// The candidates nothing in `t` points at any more.
+@(private = "file")
+orphaned_ids :: proc(t: ^Table, key: string, candidates: []i32) -> [dynamic]i32 {
+	out := make([dynamic]i32, context.temp_allocator)
+	for id in candidates {
+		if !table_has_int(t, key, id) {
+			append(&out, id)
+		}
+	}
+	return out
+}
+
+@(private = "file")
+location_ids_of_tracks :: proc(tracks: ^Table, ids: []i32) -> [dynamic]i32 {
+	out := make([dynamic]i32, context.temp_allocator)
+	for row in tracks.rows {
+		if slice.contains(ids, row_int(tracks, row, "id")) {
+			append_unique(&out, row_int(tracks, row, "location_id"))
+		}
+	}
+	return out
+}
+
+// Remove one venue's rows. The track and the location go only if nothing else
+// still points at them; `ids.track` and `ids.location` are -1 when they stayed.
+unregister_location :: proc(
+	db: ^Database,
+	location, venue: string,
+	allocator := context.allocator,
+) -> (
+	ids: Registration_Ids,
+	msg: string,
+	ok: bool,
+) {
+	ids.location, ids.track = -1, -1
+
+	locations, has_locations := database_table(db, "location")
+	if !has_locations {
+		return ids, "database has no location table", false
+	}
+	tracks, has_tracks := database_table(db, "track")
+	if !has_tracks {
+		return ids, "database has no track table", false
+	}
+	models, has_models := database_table(db, "track_model")
+	if !has_models {
+		return ids, "database has no track_model table", false
+	}
+
+	model_ids, track_ids := venue_model_scan(models, location, venue)
+	if len(model_ids) == 0 {
+		return ids, fmt.tprintf("%s/%s is not registered", location, venue), false
+	}
+
+	for table_name in ([]string{"track_model_conditions", "track_model_surface"}) {
+		if msg, ok = drop_related_rows(
+			db,
+			table_name,
+			"track_model_id",
+			model_ids[:],
+			allocator,
+		); !ok {
+			return
+		}
+	}
+	drop_rows_by_int(models, "id", model_ids[:], allocator)
+
+	// A shared track stays, and so does its location, both judged against what
+	// is left after the models went.
+	orphan_tracks := orphaned_ids(models, "track_id", track_ids[:])
+	location_ids := location_ids_of_tracks(tracks, orphan_tracks[:])
+	drop_rows_by_int(tracks, "id", orphan_tracks[:], allocator)
+	orphan_locations := orphaned_ids(tracks, "location_id", location_ids[:])
+	drop_rows_by_int(locations, "id", orphan_locations[:], allocator)
+
+	ids.models = make([]i32, len(model_ids), allocator)
+	copy(ids.models, model_ids[:])
+	if len(orphan_tracks) > 0 {
+		ids.track = orphan_tracks[0]
+	}
+	if len(orphan_locations) > 0 {
+		ids.location = orphan_locations[0]
+	}
+	return ids, "", true
+}
+
 @(private = "file")
 sha256_text :: proc(data: []u8, allocator := context.allocator) -> string {
 	ctx: sha2.Context_256
@@ -507,6 +676,68 @@ prepare_registration :: proc(
 		allocator = allocator,
 	)
 	return out, "", true
+}
+
+// The database half of a revert: the live database with one venue's rows gone.
+// Writes nothing; the caller receives verified replacement bytes.
+//
+// Localization stays: an unreferenced key costs nothing, and a one-file revert
+// cannot half-fail across three.
+prepare_unregistration :: proc(
+	root: string,
+	location, venue: string,
+	allocator := context.allocator,
+) -> (
+	database: []u8,
+	summary: string,
+	msg: string,
+	ok: bool,
+) {
+	defer if !ok {
+		delete(database, allocator)
+		delete(summary, allocator)
+		database, summary = nil, ""
+	}
+
+	database_path, _ := filepath.join({root, DATABASE_SUBPATH}, context.temp_allocator)
+	database_raw: []u8
+	db: Database
+	database_raw, db, msg, ok = load_registration_database(database_path)
+	if !ok {
+		return
+	}
+
+	ids: Registration_Ids
+	ids, msg, ok = unregister_location(&db, location, venue, context.temp_allocator)
+	if !ok {
+		return
+	}
+	database, msg, ok = database_encode(db, allocator)
+	if !ok {
+		return
+	}
+	if database_bytes_have_venue(database, location, venue) {
+		return database, summary, fmt.tprintf(
+			"%s/%s is still registered after removal",
+			location,
+			venue,
+		), false
+	}
+
+	kept :: "kept, still in use"
+	summary = fmt.aprintf(
+		"removed %d track_model rows: %v\n" +
+		"track row: %s\n" +
+		"location row: %s\n" +
+		"database sha256 before: %s",
+		len(ids.models),
+		ids.models,
+		ids.track < 0 ? kept : fmt.tprintf("%d removed", ids.track),
+		ids.location < 0 ? kept : fmt.tprintf("%d removed", ids.location),
+		sha256_text(database_raw, context.temp_allocator),
+		allocator = allocator,
+	)
+	return database, summary, "", true
 }
 
 database_bytes_have_venue :: proc(raw: []u8, location, venue: string) -> bool {
