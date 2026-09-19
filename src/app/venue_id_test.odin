@@ -5,6 +5,7 @@ package main
 // instead of a second one, so the tests here are about the split: the id never
 // moves, and the name is free to.
 
+import "core:fmt"
 import "core:os"
 import "core:path/filepath"
 import "core:strings"
@@ -84,6 +85,25 @@ a_rename_keeps_the_id :: proc(t: ^testing.T) {
 	testing.expect_value(t, back.name, "beta")
 	// The listing it belongs to travels with the document, not with the name.
 	testing.expect_value(t, back.source.slug, "alpha-ab12cd")
+}
+
+// The bug this exists for: `venue_save` addressed the file by id, which was
+// right while the id was the name. After a rename it wrote `<id>.json`, a file
+// nothing lists or reads, so every stage edit looked like it did nothing.
+@(test)
+a_venue_is_filed_under_its_name :: proc(t: ^testing.T) {
+	p := Venue{id = "c6919d780b98fc78", name = "DIRTBENCH"}
+	file := venue_file(p)
+	testing.expect(
+		t,
+		strings.has_suffix(file, "dirtbench.json"),
+		fmt.tprintf("a venue is filed at %s, which is not its name", file),
+	)
+	testing.expect(
+		t,
+		!strings.contains(file, p.id),
+		fmt.tprintf("the id reached the file name: %s", file),
+	)
 }
 
 // A document with no id is not a venue. It would upload as a listing keyed on

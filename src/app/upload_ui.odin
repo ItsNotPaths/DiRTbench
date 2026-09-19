@@ -61,8 +61,8 @@ upload_blocked :: proc(app: ^App, f: ^Upload_Form, p: ^Venue) -> string {
 	if doc := venue_doc_for(app, p.id); doc != nil && doc_unsaved(doc) {
 		return "save the venue first — the site is sent the file on disk"
 	}
-	if !os.exists(venue_path(venue_dir(p^))) {
-		return fmt.tprintf("%s is not on disk", venue_path(venue_dir(p^)))
+	if !os.exists(venue_file(p^)) {
+		return fmt.tprintf("%s is not on disk", venue_file(p^))
 	}
 	if strings.trim_space(buf_text(f.user[:])) == "" || buf_text(f.password[:]) == "" {
 		return "a username and password are needed"
@@ -262,7 +262,7 @@ app_service_upload_request :: proc(app: ^App) {
 		description = strings.clone(buf_text(f.description[:])),
 		changelog   = strings.clone(buf_text(f.changelog[:])),
 		slug        = strings.clone(upload_slug(p.id)),
-		level_path  = strings.clone(venue_path(venue_dir(p^))),
+		level_path  = strings.clone(venue_file(p^)),
 		image_path  = strings.clone(image),
 		image_ours  = ours,
 	})

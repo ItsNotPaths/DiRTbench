@@ -181,6 +181,13 @@ venue_dir :: proc(p: Venue, allocator := context.temp_allocator) -> string {
 	return sanitise_venue_name(p.name, allocator)
 }
 
+// Where this venue is filed. Always this rather than `venue_path` when the
+// venue itself is in hand: `venue_path` takes a bare string and cannot tell a
+// name from an id, and a write addressed by id lands in a file nothing reads.
+venue_file :: proc(p: Venue, allocator := context.temp_allocator) -> string {
+	return venue_path(venue_dir(p, context.temp_allocator), allocator)
+}
+
 // A venue name becomes a directory name, a `file_string` of at most 18 bytes,
 // and part of a localization key. Keep it to what all three accept: lower-case
 // letters, digits and underscores.
@@ -479,7 +486,7 @@ venue_save :: proc(p: Venue) -> (msg: string, ok: bool) {
 	if _, dir_ok := ensure_maps_dir(); !dir_ok {
 		return fmt.tprintf("could not create %s", maps_dir()), false
 	}
-	return venue_write(p, venue_path(p.id))
+	return venue_write(p, venue_file(p))
 }
 
 // The venue `p`, carrying this document's road and stage list, written to
@@ -570,9 +577,9 @@ venue_create :: proc(
 		venue_free(p, allocator)
 		return Venue{}, fmt.tprintf("could not create %s", maps_dir()), false
 	}
-	if msg, ok = venue_doc_write(p, &doc, venue_path(venue_dir(p))); !ok {
+	if msg, ok = venue_doc_write(p, &doc, venue_file(p)); !ok {
 		venue_free(p, allocator)
-		_ = os.remove(venue_path(venue_dir(p)))
+		_ = os.remove(venue_file(p))
 		return Venue{}, msg, false
 	}
 	// The pack is built now, while the base is known good, rather than at
@@ -580,7 +587,7 @@ venue_create :: proc(
 	// first venue on a base pays for it and the rest read it.
 	if _, msg, ok = content_pack_profile(vs, p.base); !ok {
 		venue_free(p, allocator)
-		_ = os.remove(venue_path(venue_dir(p)))
+		_ = os.remove(venue_file(p))
 		return Venue{}, msg, false
 	}
 	return p, "", true
@@ -970,7 +977,7 @@ venues_headless :: proc() -> bool {
 			fmt.printfln("    shaders        none: %s", profile_msg)
 		}
 		if p.version >= 2 {
-			fmt.printfln("    document       %s", venue_path(venue_dir(p)))
+			fmt.printfln("    document       %s", venue_file(p))
 		}
 		for route in p.routes {
 			marks := route_has_markers(route) ? "" : "   [no start/finish yet]"
@@ -1003,7 +1010,7 @@ venue_tracksplit_collision :: proc(
 	}
 	defer geo.terrain_delete(&doc.terrain)
 
-	if load_msg, loaded := load_road(&doc, venue_path(venue_dir(p))); !loaded {
+	if load_msg, loaded := load_road(&doc, venue_file(p)); !loaded {
 		return nil, nil, load_msg, false
 	}
 	defer delete(doc.spline.points)
@@ -1081,7 +1088,7 @@ venue_new_headless :: proc(name, base_id: string) -> bool {
 	}
 	defer venue_free(p)
 
-	fmt.printfln("created %s (%s) from %s, at %s", p.name, p.id, spec, venue_path(venue_dir(p)))
+	fmt.printfln("created %s (%s) from %s, at %s", p.name, p.id, spec, venue_file(p))
 	return true
 }
 

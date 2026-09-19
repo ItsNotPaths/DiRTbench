@@ -434,7 +434,7 @@ browse_install :: proc(
 	// Renamed upstream since we last took it: the venue is the same one, so
 	// the copy filed under the old name goes.
 	if have_held && venue_dir(held) != dir {
-		_ = os.remove(venue_path(venue_dir(held)))
+		_ = os.remove(venue_file(held))
 	}
 	// The art is not in the file and never travels: the pack is rebuilt out of
 	// whatever install this machine has. Built now, while a failure still means

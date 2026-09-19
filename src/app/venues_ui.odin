@@ -482,7 +482,7 @@ venue_fresh_id :: proc(app: ^App, p: ^Venue) {
 		return
 	}
 	fresh.id = venue_uuid(context.temp_allocator)
-	if msg, ok := venue_write(fresh, venue_path(venue_dir(fresh))); !ok {
+	if msg, ok := venue_write(fresh, venue_file(fresh)); !ok {
 		set_status(&app.status, msg, false)
 		return
 	}
@@ -519,18 +519,18 @@ venue_rename :: proc(app: ^App, p: ^Venue, typed: string) {
 		set_buf(name_row(ps, p.id, "", p.name).name[:], p.name)
 		return
 	}
-	was := venue_path(venue_dir(p^), context.temp_allocator)
+	was := venue_file(p^, context.temp_allocator)
 	fresh, load_msg, loaded := venue_load(p.id, context.temp_allocator)
 	if !loaded {
 		set_status(&app.status, load_msg, false)
 		return
 	}
 	fresh.name = name
-	if msg, ok := venue_write(fresh, venue_path(venue_dir(fresh))); !ok {
+	if msg, ok := venue_write(fresh, venue_file(fresh)); !ok {
 		set_status(&app.status, msg, false)
 		return
 	}
-	if was != venue_path(venue_dir(fresh), context.temp_allocator) {
+	if was != venue_file(fresh, context.temp_allocator) {
 		_ = os.remove(was)
 	}
 	// Every window on this venue saves by name, so they are told before the
