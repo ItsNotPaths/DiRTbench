@@ -22,7 +22,7 @@ brush_fixture :: proc(offsets: []f32) -> (doc: Venue_Doc, pos: []gfx.Vector3) {
 brush_mask_covers_the_radius :: proc(t: ^testing.T) {
 	doc, pos := brush_fixture({0, 0, 0, 0})
 	defer { geo.terrain_delete(&doc.terrain); delete(pos) }
-	ed := Editor{doc = &doc, terrain_brush_radius = 15}
+	ed := Editor{doc = &doc, terrain_brush = {radius = 15}}
 	defer { delete(ed.terrain_brush_mask); delete(ed.terrain_brush_offsets) }
 
 	terrain_brush_select(&ed, pos, 0)
@@ -33,7 +33,7 @@ brush_mask_covers_the_radius :: proc(t: ^testing.T) {
 	testing.expect(t, !ed.terrain_brush_mask[3], "30 m is outside it")
 
 	// A zero radius is a single-control brush, not an empty one.
-	ed.terrain_brush_radius = 0
+	ed.terrain_brush.radius = 0
 	terrain_brush_select(&ed, pos, 2)
 	testing.expect(t, ed.terrain_brush_mask[2], "the anchor survives a zero radius")
 	testing.expect(t, !ed.terrain_brush_mask[1], "nothing else does")
@@ -46,7 +46,7 @@ brush_mask_covers_the_radius :: proc(t: ^testing.T) {
 brush_move_is_relative_to_the_snapshot :: proc(t: ^testing.T) {
 	doc, pos := brush_fixture({5, -2, 9, 0})
 	defer { geo.terrain_delete(&doc.terrain); delete(pos) }
-	ed := Editor{doc = &doc, terrain_brush_radius = 15}
+	ed := Editor{doc = &doc, terrain_brush = {radius = 15}}
 	defer { delete(ed.terrain_brush_mask); delete(ed.terrain_brush_offsets) }
 
 	terrain_brush_select(&ed, pos, 0)
@@ -70,7 +70,7 @@ brush_move_is_relative_to_the_snapshot :: proc(t: ^testing.T) {
 brush_survives_controls_shrinking_under_it :: proc(t: ^testing.T) {
 	doc, pos := brush_fixture({0, 0, 0, 0})
 	defer { geo.terrain_delete(&doc.terrain); delete(pos) }
-	ed := Editor{doc = &doc, terrain_brush_radius = 100}
+	ed := Editor{doc = &doc, terrain_brush = {radius = 100}}
 	defer { delete(ed.terrain_brush_mask); delete(ed.terrain_brush_offsets) }
 
 	terrain_brush_select(&ed, pos, 0)
@@ -95,13 +95,13 @@ brush_survives_controls_shrinking_under_it :: proc(t: ^testing.T) {
 brush_clear_drops_the_phase_and_buffers :: proc(t: ^testing.T) {
 	doc, pos := brush_fixture({0, 0})
 	defer { geo.terrain_delete(&doc.terrain); delete(pos) }
-	ed := Editor{doc = &doc, terrain_brush_radius = 100, terrain_brush_phase = .Move}
+	ed := Editor{doc = &doc, terrain_brush = {radius = 100, phase = .Move}}
 	defer { delete(ed.terrain_brush_mask); delete(ed.terrain_brush_offsets) }
 
 	terrain_brush_select(&ed, pos, 0)
 	terrain_brush_snapshot(&ed)
 	terrain_brush_clear(&ed)
-	testing.expect_value(t, ed.terrain_brush_phase, Terrain_Brush_Phase.None)
+	testing.expect_value(t, ed.terrain_brush.phase, Brush_Phase.None)
 	testing.expect_value(t, len(ed.terrain_brush_mask), 0)
 	testing.expect_value(t, len(ed.terrain_brush_offsets), 0)
 

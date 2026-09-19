@@ -69,12 +69,6 @@ Selection :: struct {
 	sub:  int, // read by Floor_Vert alone, so a zero-value Selection is still None
 }
 
-Terrain_Brush_Phase :: enum {
-	None,
-	Size,
-	Move,
-}
-
 // What this window is for. A stage window and a venue window differ in what
 // they draw, what input they take and what panels they show, which is one
 // decision rather than a pile of booleans.
@@ -143,12 +137,11 @@ Editor :: struct {
 	gizmo_active:  bool,
 	gizmo_hovered: bool,
 	gizmo_mode:    Gizmo_Mode,
-	terrain_brush_phase: Terrain_Brush_Phase,
-	terrain_brush_radius: f32,
-	terrain_brush_radius_start: f32,
-	terrain_brush_mouse_y: f32,
-	terrain_brush_anchor_offset: f32,
-	terrain_brush_mask: [dynamic]bool,
+	// The terrain brush (brush.odin): the shared gesture state, plus the mask
+	// over the controls it selects and the offsets a move is measured from.
+	terrain_brush:        Brush,
+	terrain_brush_anchor: f32, // the anchor's offset, held still while sizing
+	terrain_brush_mask:   [dynamic]bool,
 	terrain_brush_offsets: [dynamic]f32,
 	// The floor outline being drawn, empty when none is (floor_edit.odin). Held
 	// as world points, so the corners keep the heights they were picked at.
@@ -223,62 +216,6 @@ resolve_node_selection :: proc(ed: ^Editor, node_pos: []gfx.Vector3, node_active
 		terrain_brush_clear(ed)
 	}
 	return sel_node
-}
-
-terrain_brush_clear :: proc(ed: ^Editor) {
-	ed.terrain_brush_phase = .None
-	clear(&ed.terrain_brush_mask)
-	clear(&ed.terrain_brush_offsets)
-}
-
-terrain_brush_select :: proc(ed: ^Editor, node_pos: []gfx.Vector3, selected: int) {
-	resize(&ed.terrain_brush_mask, len(node_pos))
-	for &affected in ed.terrain_brush_mask {
-		affected = false
-	}
-	if selected < 0 || selected >= len(node_pos) {
-		return
-	}
-	centre := node_pos[selected]
-	r2 := ed.terrain_brush_radius * ed.terrain_brush_radius
-	for p, i in node_pos {
-		dx, dz := p.x - centre.x, p.z - centre.z
-		ed.terrain_brush_mask[i] = i == selected || dx * dx + dz * dz <= r2
-	}
-}
-
-// Every masked control back to its snapshot height, plus dy. The bounds hold
-// against a rebuild that resized the controls under a live brush.
-terrain_brush_apply :: proc(ed: ^Editor, dy: f32) {
-	for &c, i in ed.doc.terrain.controls {
-		if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
-		   ed.terrain_brush_mask[i] {
-			c.offset = ed.terrain_brush_offsets[i] + dy
-		}
-	}
-	mark_terrain_dirty(ed.doc)
-}
-
-// The live brush's control count and radius, over the viewport.
-terrain_brush_overlay :: proc(ed: ^Editor) {
-	if ed.terrain_brush_phase == .None {
-		return
-	}
-	count := 0
-	for selected in ed.terrain_brush_mask {
-		if selected {
-			count += 1
-		}
-	}
-	txt := fmt.ctprintf("terrain brush: %d controls  %.0f m", count, ed.terrain_brush_radius)
-	ui.draw_overlay_text_centered(txt, 40, 72, f32(gfx.GetScreenWidth()), 0xff50beff)
-}
-
-terrain_brush_snapshot :: proc(ed: ^Editor) {
-	resize(&ed.terrain_brush_offsets, len(ed.doc.terrain.controls))
-	for c, i in ed.doc.terrain.controls {
-		ed.terrain_brush_offsets[i] = c.offset
-	}
 }
 
 // --- the compiled stage -------------------------------------------------------
@@ -447,74 +384,6 @@ view_defaults :: proc() -> Editor {
 world_per_pixel :: proc(ed: ^Editor, cam3d: gfx.Camera3D) -> f32 {
 	return ed.cam.distance * 2 * math.tan(math.to_radians(cam3d.fovy * 0.5)) /
 		f32(max(gfx.GetScreenHeight(), 1))
-}
-
-// The terrain-node gizmo and the brush that grows out of it. Returns whether it
-// owns the mouse this frame.
-terrain_brush_gizmo :: proc(
-	ed: ^Editor, node_pos: []gfx.Vector3, sel_node: int, cam3d: gfx.Camera3D,
-) -> (used: bool) {
-	mouse := gfx.GetMousePosition()
-	left_down := gfx.IsMouseButtonDown(.LEFT)
-	right_down := gfx.IsMouseButtonDown(.RIGHT)
-
-	// RMB joining the node drag starts brush sizing, and may join again
-	// mid-move to re-size without dropping the node. Movement before the
-	// first join is intentional single-node editing; a later join keeps
-	// the moved offsets and re-anchors on them.
-	if ed.terrain_brush_phase != .Size && left_down && right_down {
-		ed.terrain_brush_phase = .Size
-		ed.terrain_brush_mouse_y = mouse.y
-		ed.terrain_brush_radius_start = ed.terrain_brush_radius
-		ed.terrain_brush_anchor_offset = ed.doc.terrain.controls[ed.sel.idx].offset
-		terrain_brush_select(ed, node_pos, sel_node)
-	}
-
-	// ImGuizmo owns the original LMB drag. It must keep receiving every frame,
-	// including brush sizing and movement, or it resumes later with the whole
-	// accumulated mouse delta and snaps the anchor node. Brush phases discard
-	// its output but let its internal drag state advance and release normally.
-	gizmo_y, gizmo_dragging := ui.gizmo_manipulate_height(node_pos[sel_node], cam3d)
-
-	switch ed.terrain_brush_phase {
-	case .Size:
-		used = true
-		// ImGuizmo may have owned LMB immediately before RMB entered brush
-		// mode. Pin its last value throughout sizing: this phase changes only
-		// the affected set, never terrain height.
-		if ed.sel.idx >= 0 && ed.sel.idx < len(ed.doc.terrain.controls) {
-			ed.doc.terrain.controls[ed.sel.idx].offset = ed.terrain_brush_anchor_offset
-		}
-		if !left_down {
-			terrain_brush_clear(ed)
-		} else if right_down {
-			brush_per_pixel := clamp(world_per_pixel(ed, cam3d) * 2, f32(0.1), f32(2))
-			ed.terrain_brush_radius = clamp(ed.terrain_brush_radius_start +
-				(ed.terrain_brush_mouse_y - mouse.y) * brush_per_pixel,
-				f32(0), ed.doc.terrain.reach_m * 4)
-			terrain_brush_select(ed, node_pos, sel_node)
-		} else {
-			ed.terrain_brush_phase = .Move
-			ed.terrain_brush_mouse_y = mouse.y
-			terrain_brush_snapshot(ed)
-		}
-	case .Move:
-		used = true
-		if !left_down {
-			terrain_brush_clear(ed)
-		} else {
-			move_per_pixel := clamp(world_per_pixel(ed, cam3d), f32(0.01), f32(1))
-			terrain_brush_apply(ed, (ed.terrain_brush_mouse_y - mouse.y) * move_per_pixel)
-		}
-	case .None:
-		// Height only, so an ordinary LMB drag keeps the single-control gizmo.
-		if gizmo_dragging {
-			geo.terrain_set_node(&ed.doc.terrain, ed.sel.idx, gizmo_y)
-			mark_terrain_dirty(ed.doc)
-		}
-		used = gizmo_dragging
-	}
-	return
 }
 
 // The gizmo pass. ImGuizmo both draws and reports interaction, so this is one
@@ -841,7 +710,7 @@ venue_frame :: proc(ed: ^Editor) {
 	// ImGuizmo draws into an ImGui draw list, so it lives here rather than
 	// inside BeginMode3D, and projects itself with the camera's matrices.
 	ui.imgui_backend_begin()
-	terrain_brush_overlay(ed)
+	brush_overlay(ed)
 	gizmo_used := editor_gizmos(ed, cam3d, node_pos, sel_node)
 
 	draw_menubar(ed)
