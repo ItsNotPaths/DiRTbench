@@ -373,10 +373,18 @@ WindowSwapchainFormat :: proc(window: ^Window) -> c.int {
 NativeWindow :: proc(window: ^Window) -> rawptr {
 	return rawptr(window.handle)
 }
+// The surface being drawn into. A capture answers for itself, so the scene's
+// aspect ratio comes off the thumbnail and not off whatever size the window is.
 GetScreenWidth :: proc() -> i32 {
+	if active_capture != nil {
+		return active_capture.w
+	}
 	return active_window == nil ? 0 : active_window.width
 }
 GetScreenHeight :: proc() -> i32 {
+	if active_capture != nil {
+		return active_capture.h
+	}
 	return active_window == nil ? 0 : active_window.height
 }
 GetFrameTime :: proc() -> f32 {

@@ -63,6 +63,27 @@ clip_far:  f32 = 10000
 wire_mode: bool
 cull_mode: bool = true
 
+// Where the scene pass draws. A capture (capture.odin) takes precedence over
+// the active window, so the same draw calls fill a thumbnail or a viewport with
+// nothing in between knowing which.
+Render_Target :: struct {
+	cmd:   ^sdl.GPUCommandBuffer,
+	color: ^sdl.GPUTexture,
+	depth: ^sdl.GPUTexture,
+	w, h:  i32,
+	clear: sdl.FColor,
+}
+
+render_target :: proc() -> Render_Target {
+	if c := active_capture; c != nil {
+		return {c.cmd, c.color, c.depth, c.w, c.h, c.clear}
+	}
+	if w := active_window; w != nil {
+		return {w.cmd, w.swapchain, w.depth, w.swapchain_w, w.swapchain_h, w.clear}
+	}
+	return {}
+}
+
 LoadMaterialDefault :: proc() -> Material {
 	return {}
 }
@@ -294,14 +315,18 @@ BeginMode3D :: proc(camera: Camera3D) {
 // render pass over the swapchain. A frame with no 3D draws opens no pass;
 // the ImGui pass clears instead.
 EndMode3D :: proc() {
-	w := active_window
+	t := render_target()
 	defer clear(&scene_draws)
 	defer clear(&batch_lines)
 	defer clear(&batch_tris)
-	if w == nil || w.cmd == nil || w.swapchain == nil || w.depth == nil || gpu_device == nil {
+	if t.cmd == nil || t.color == nil || t.depth == nil || gpu_device == nil {
 		return
 	}
-	if len(scene_draws) == 0 && len(batch_lines) == 0 && len(batch_tris) == 0 {
+	// A window with nothing to draw opens no pass; the ImGui pass clears it
+	// instead. A capture has no ImGui pass behind it, so it must open one
+	// anyway or the texture is read back holding whatever was there before.
+	if len(scene_draws) == 0 && len(batch_lines) == 0 && len(batch_tris) == 0 &&
+	   active_capture == nil {
 		return
 	}
 	if total := len(batch_lines) + len(batch_tris); total > 0 {
@@ -311,14 +336,14 @@ EndMode3D :: proc() {
 		copy(out[:len(batch_lines)], batch_lines[:])
 		copy(out[len(batch_lines):], batch_tris[:])
 		sdl.UnmapGPUTransferBuffer(gpu_device, batch_xfer)
-		copy_pass := sdl.BeginGPUCopyPass(w.cmd)
+		copy_pass := sdl.BeginGPUCopyPass(t.cmd)
 		sdl.UploadToGPUBuffer(copy_pass, {transfer_buffer = batch_xfer}, {buffer = batch_buf, size = u32(total) * size_of(Upload_Vertex)}, true)
 		sdl.EndGPUCopyPass(copy_pass)
 	}
-	depth_info := sdl.GPUDepthStencilTargetInfo{texture = w.depth, clear_depth = 1, load_op = .CLEAR, store_op = .DONT_CARE, stencil_load_op = .DONT_CARE, stencil_store_op = .DONT_CARE}
-	color_info := sdl.GPUColorTargetInfo{texture = w.swapchain, clear_color = w.clear, load_op = .CLEAR, store_op = .STORE}
-	pass := sdl.BeginGPURenderPass(w.cmd, &color_info, 1, &depth_info)
-	sdl.SetGPUViewport(pass, {w = f32(w.swapchain_w), h = f32(w.swapchain_h), min_depth = 0, max_depth = 1})
+	depth_info := sdl.GPUDepthStencilTargetInfo{texture = t.depth, clear_depth = 1, load_op = .CLEAR, store_op = .DONT_CARE, stencil_load_op = .DONT_CARE, stencil_store_op = .DONT_CARE}
+	color_info := sdl.GPUColorTargetInfo{texture = t.color, clear_color = t.clear, load_op = .CLEAR, store_op = .STORE}
+	pass := sdl.BeginGPURenderPass(t.cmd, &color_info, 1, &depth_info)
+	sdl.SetGPUViewport(pass, {w = f32(t.w), h = f32(t.h), min_depth = 0, max_depth = 1})
 	for d in scene_draws {
 		if d.mesh.buffer == nil {
 			continue
@@ -326,25 +351,27 @@ EndMode3D :: proc() {
 		sdl.BindGPUGraphicsPipeline(pass, pipelines[PIPELINE_FOR_FILL[int(d.wire)][int(d.cull)]])
 		binding := sdl.GPUBufferBinding{buffer = d.mesh.buffer}
 		sdl.BindGPUVertexBuffers(pass, 0, &binding, 1)
-		push_mvp(w.cmd, d.mvp)
+		push_mvp(t.cmd, d.mvp)
 		sdl.DrawGPUPrimitives(pass, d.mesh.verts, 1, 0, 0)
 	}
 	if len(batch_lines) > 0 {
 		sdl.BindGPUGraphicsPipeline(pass, pipelines[.Lines])
 		binding := sdl.GPUBufferBinding{buffer = batch_buf}
 		sdl.BindGPUVertexBuffers(pass, 0, &binding, 1)
-		push_mvp(w.cmd, scene_mvp(Matrix(1)))
+		push_mvp(t.cmd, scene_mvp(Matrix(1)))
 		sdl.DrawGPUPrimitives(pass, u32(len(batch_lines)), 1, 0, 0)
 	}
 	if len(batch_tris) > 0 {
 		sdl.BindGPUGraphicsPipeline(pass, pipelines[.Tri_Fill])
 		binding := sdl.GPUBufferBinding{buffer = batch_buf}
 		sdl.BindGPUVertexBuffers(pass, 0, &binding, 1)
-		push_mvp(w.cmd, scene_mvp(Matrix(1)))
+		push_mvp(t.cmd, scene_mvp(Matrix(1)))
 		sdl.DrawGPUPrimitives(pass, u32(len(batch_tris)), 1, u32(len(batch_lines)), 0)
 	}
 	sdl.EndGPURenderPass(pass)
-	w.scene_drawn = true
+	if active_capture == nil && active_window != nil {
+		active_window.scene_drawn = true
+	}
 }
 
 push_mvp :: proc(cmd: ^sdl.GPUCommandBuffer, mvp: Matrix) {
@@ -353,8 +380,11 @@ push_mvp :: proc(cmd: ^sdl.GPUCommandBuffer, mvp: Matrix) {
 }
 
 ClearBackground :: proc(color: Color) {
-	if active_window != nil {
-		active_window.clear = sdl.FColor{f32(color[0]) / 255, f32(color[1]) / 255, f32(color[2]) / 255, f32(color[3]) / 255}
+	c := sdl.FColor{f32(color[0]) / 255, f32(color[1]) / 255, f32(color[2]) / 255, f32(color[3]) / 255}
+	if active_capture != nil {
+		active_capture.clear = c
+	} else if active_window != nil {
+		active_window.clear = c
 	}
 }
 
