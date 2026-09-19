@@ -88,3 +88,93 @@ cliff_envelope_covers_its_span_and_no_more :: proc(t: ^testing.T) {
 // Raw-deflate `src` by round-tripping it through zlib and stripping the 2-byte
 // header and 4-byte checksum, which is exactly the bare stream a zip member
 // holds. Odin's core has an inflater but no deflater, so the fixture is built
+
+// --- road edges at rest ------------------------------------------------------
+
+// `parent` and `weld` are array positions in memory and point ids in the file.
+// The two agree until a point is deleted, which is why every venue looked fine
+// until one had been: a reader with only the file in front of it has nothing
+// but the ids to go on.
+//
+// Three points whose ids are nothing like their positions, chained 0 <- 1 <- 2,
+// with the last welded back to the first.
+@(private = "file")
+gapped_road :: proc(allocator := context.allocator) -> Venue_Road {
+	pts := make([]Stage_Point, 3, allocator)
+	pts[0] = {id = 40, parent = -1, weld = -1, pos = {0, 0, 0}, rot = {0, 0, 0, 1}, width = 8}
+	pts[1] = {id = 41, parent = 40, weld = -1, pos = {0, 0, 10}, rot = {0, 0, 0, 1}, width = 8}
+	pts[2] = {id = 99, parent = 41, weld = 40, pos = {0, 0, 20}, rot = {0, 0, 0, 1}, width = 8}
+	return Venue_Road{points = pts}
+}
+
+@(test)
+road_edges_survive_a_write_as_ids :: proc(t: ^testing.T) {
+	road := gapped_road()
+	defer delete(road.points)
+	doc := Venue_Doc{}
+	defer doc_delete(&doc)
+	msg, ok := doc_load_road(&doc, road)
+	testing.expectf(t, ok, "a road whose ids are not its indices would not load: %s", msg)
+
+	// In memory the edges are positions.
+	testing.expect_value(t, doc.spline.points[1].parent, 0)
+	testing.expect_value(t, doc.spline.points[2].parent, 1)
+	testing.expect_value(t, doc.spline.points[2].weld, 0)
+
+	// On the way out they are ids again, so an independent reader can follow
+	// them. Writing the position here is what made every upload fail.
+	out := road_block(&doc, context.allocator)
+	defer delete(out.points)
+	testing.expect_value(t, out.points[0].parent, -1)
+	testing.expect_value(t, out.points[1].parent, 40)
+	testing.expect_value(t, out.points[2].parent, 41)
+	testing.expect_value(t, out.points[2].weld, 40)
+}
+
+// The round trip is the property that matters: load, write, load again, and the
+// graph is the same graph.
+@(test)
+a_gapped_road_round_trips :: proc(t: ^testing.T) {
+	road := gapped_road()
+	defer delete(road.points)
+	first := Venue_Doc{}
+	defer doc_delete(&first)
+	msg, ok := doc_load_road(&first, road)
+	testing.expectf(t, ok, "the road would not load: %s", msg)
+
+	written := road_block(&first, context.allocator)
+	defer delete(written.points)
+
+	second := Venue_Doc{}
+	defer doc_delete(&second)
+	reload_msg, reloaded := doc_load_road(&second, written)
+	testing.expectf(t, reloaded, "a written road would not load back: %s", reload_msg)
+
+	testing.expect_value(t, len(second.spline.points), len(first.spline.points))
+	for p, i in second.spline.points {
+		testing.expect_value(t, p.id, first.spline.points[i].id)
+		testing.expect_value(t, p.parent, first.spline.points[i].parent)
+		testing.expect_value(t, p.weld, first.spline.points[i].weld)
+	}
+}
+
+// A parent naming a point that is not in the file is the failure the site
+// caught. The tool has to refuse it too, rather than resolve it to a position.
+@(test)
+a_road_edge_naming_no_point_is_refused :: proc(t: ^testing.T) {
+	road := gapped_road()
+	defer delete(road.points)
+	doc := Venue_Doc{}
+	defer doc_delete(&doc)
+
+	road.points[2].parent = 70 // no such id, and a valid position in a 3-point road
+	_, ok := doc_load_road(&doc, road)
+	testing.expect(t, !ok, "a parent naming no point was accepted")
+
+	// A parent later in the array is refused too: build_ribbon reads a parent's
+	// frame before the point that hangs off it.
+	road.points[2].parent = 41
+	road.points[1].parent = 99
+	_, ok = doc_load_road(&doc, road)
+	testing.expect(t, !ok, "a parent further down the array was accepted")
+}

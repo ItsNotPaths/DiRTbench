@@ -158,6 +158,16 @@ point_index :: proc(sp: Spline, id: int) -> int {
 	return -1
 }
 
+// The id of the point at this position, or -1 for -1. The inverse of
+// point_index, and what turns an in-memory edge into one a file can hold:
+// `parent` and `weld` are array positions in flight and ids at rest.
+point_id :: proc(sp: Spline, idx: int) -> int {
+	if idx < 0 || idx >= len(sp.points) {
+		return -1
+	}
+	return sp.points[idx].id
+}
+
 // Every index the graph stores moves when the array does. One place, so an edit
 // cannot shift parents and quietly forget welds.
 shift_links :: proc(sp: ^Spline, at, skip: int) {

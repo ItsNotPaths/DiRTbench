@@ -28,8 +28,11 @@ STAGE_EXT :: ".json"
 Stage_Point :: struct {
 	// Stable point identity. What a stage's start, finish and pins name.
 	id:          int,
+	// Both name a point by **id**, never by its position in `points`. The two
+	// differ the moment a point is deleted, and an independent reader has only
+	// the ids to go on. -1 for none.
 	parent:      int,
-	// Second edge out of this point, closing a loop. -1 for none.
+	// Second edge out of this point, closing a loop.
 	weld:        int,
 	pos:         [3]f32,
 	rot:         [4]f32, // x, y, z, w
@@ -157,8 +160,11 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 	for p, i in sp.points {
 		pts[i] = Stage_Point {
 			id          = p.id,
-			parent      = p.parent,
-			weld        = p.weld,
+			// Ids, not the array positions the spline holds: the file is the
+			// thing that travels, and a position means nothing outside the
+			// array it indexes. Markers have always been written this way.
+			parent      = geo.point_id(sp, p.parent),
+			weld        = geo.point_id(sp, p.weld),
 			pos         = {p.xform.translation.x, p.xform.translation.y, p.xform.translation.z},
 			rot         = quat_to_array(p.xform.rotation),
 			width       = p.width,
@@ -245,23 +251,42 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 	if len(road.points) < 2 {
 		return fmt.tprintf("road has %d points, needs at least 2", len(road.points)), false
 	}
+	// `parent` and `weld` name points by id in the file and by array position in
+	// memory, so nothing can be converted until every id is known. Ids first,
+	// then the edges against the map they build.
+	index_of := make(map[int]int, len(road.points), context.temp_allocator)
 	for p, i in road.points {
-		if p.parent < -1 || p.parent >= i {
-			return fmt.tprintf("road point %d has invalid parent %d", i, p.parent), false
-		}
-		// A weld may point forward, unlike a parent. It may not point at itself,
-		// which would sample an edge of zero length.
-		if p.weld < -1 || p.weld >= len(road.points) || p.weld == i {
-			return fmt.tprintf("road point %d has invalid weld %d", i, p.weld), false
-		}
-		// A repeated id would make point_index answer with the first of them, silently.
 		if p.id < 0 {
 			return fmt.tprintf("road point %d has invalid id %d", i, p.id), false
 		}
-		for q in road.points[i + 1:] {
-			if q.id == p.id {
-				return fmt.tprintf("road point %d repeats id %d", i, p.id), false
+		// A repeated id would make point_index answer with the first of them, silently.
+		if _, repeated := index_of[p.id]; repeated {
+			return fmt.tprintf("road point %d repeats id %d", i, p.id), false
+		}
+		index_of[p.id] = i
+	}
+
+	parents := make([]int, len(road.points), context.temp_allocator)
+	welds := make([]int, len(road.points), context.temp_allocator)
+	for p, i in road.points {
+		parents[i], welds[i] = -1, -1
+		if p.parent != -1 {
+			// A parent must sit earlier in the array: build_ribbon walks the
+			// points in order and reads each parent's frame before its own.
+			at, found := index_of[p.parent]
+			if !found || at >= i {
+				return fmt.tprintf("road point %d has invalid parent %d", i, p.parent), false
 			}
+			parents[i] = at
+		}
+		if p.weld != -1 {
+			// A weld may point forward, unlike a parent. It may not point at
+			// itself, which would sample an edge of zero length.
+			at, found := index_of[p.weld]
+			if !found || at == i {
+				return fmt.tprintf("road point %d has invalid weld %d", i, p.weld), false
+			}
+			welds[i] = at
 		}
 	}
 
@@ -283,11 +308,11 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 				taper,
 				p.cliff_angle,
 				p.roughness,
-				p.parent,
+				parents[i],
 			),
 		)
 		np := &sp.points[len(sp.points)-1]
-		np.weld = p.weld
+		np.weld = welds[i]
 		np.id = p.id
 		sp.next_id = max(sp.next_id, np.id + 1)
 	}
