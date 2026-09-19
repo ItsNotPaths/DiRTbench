@@ -76,7 +76,7 @@ fixture_of :: proc(sp: geo.Spline) -> (f: Fixture) {
 	geo.terrain_ensure(&f.terr, f.ribbon, 0)
 	ds := geo.sample_spacing(f.ribbon)
 	mid := len(f.ribbon) / 2
-	f.seam_x = abs(geo.verge_seam(f.ribbon[mid], 0, geo.VERGE_ROWS, mid, 0, ds[mid]).x)
+	f.seam_x = abs(geo.verge_seam(f.ribbon[mid], 0, geo.VERGE_ROWS, 0).x)
 	return
 }
 

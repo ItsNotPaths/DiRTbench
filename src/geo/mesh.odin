@@ -26,20 +26,108 @@ CLIFF_MIN :: 0.01 // below this a cliff is nothing, and emits no geometry
 // lower bound is small because a steep overhang would let the cliff face poke
 // down through the road surface it grew from.
 CLIFF_ANGLE_MIN :: -5.0
-CLIFF_ANGLE_MAX :: 15.0
+CLIFF_ANGLE_MAX :: 75.0
 
 // Height slider range, metres. A rally stage is walled by rock cuttings and
 // banks a car could plausibly be contained by, not by canyon faces.
 CLIFF_HEIGHT_MAX :: 7.0
 
-// Vertex jitter, as a fraction of the local quad size at roughness 1.
+// Rock on a cliff face.
 //
-// It is scaled by the *cell* — the smaller of the along-road sample spacing and
-// the row height — not by the cliff's height. Scaling by height folds the mesh
-// inside out: a 30 m cliff at high roughness would displace vertices several
-// metres while the ribbon samples sit ~1.7 m apart, so vertices overshoot their
-// neighbours and the faces invert. Staying under half a cell cannot fold.
-CLIFF_JITTER :: 0.45
+// One rule, and every trap below is a corollary of it: **a face vertex is a
+// function of the smooth face and nothing else.** Not of the ribbon index, not
+// of the spacing to the next sample, not of how finely the face is cut into
+// rows. Two reasons, both learned the hard way:
+//
+//   - The ribbon emits two coincident samples at every node, one ending the edge
+//     into it and one starting the edge out of it, and they know different
+//     things about their neighbours. Anything twins can disagree about opens a
+//     crack at every node.
+//   - The road mesh and the terrain compute the shared vertices separately and
+//     are welded only by both landing on the same position, to the bit.
+//
+// Three things shape it:
+//
+//   - **It stands off along the face normal.** A world-space offset spends most
+//     of its length sliding the face along itself, where it shows as nothing.
+//     Along the normal every metre is relief, and the face stays a height field
+//     over its own smooth self, which is why it cannot fold.
+//   - **It goes to nothing at both ends of the profile.** The road edge is where
+//     the road surface welds; the crest is where the terrain, the billboards and
+//     the scatter all weld. Leave the crest alone and none of them can tear, and
+//     the terrain's 2D triangulation keeps the well-behaved rim it was written
+//     for. The cost is a clean skyline; the alternative was holes.
+//   - **It only ever stands proud.** The smooth face is where the rock was cut
+//     away for the road, so anything leaning back in hangs over the road. The
+//     noise is mapped to 0..1 rather than fenced after the fact.
+//
+// What is left is the amplitude, and the only real limit on it is spikiness:
+// past about a slope of 1 the triangles stand off the wall like blades. Octaves
+// that halve in both wavelength and amplitude each carry the same slope, so the
+// count costs nothing in steepness and the depth is the one knob.
+CLIFF_ROCK_DEPTH :: 0.7   // relief at full roughness, as a fraction of cliff height
+CLIFF_ROCK_WAVE :: 6.0   // metres across the largest lump
+CLIFF_ROCK_OCTAVES :: 5   // each half the wavelength of the one before
+CLIFF_ROCK_KEEP :: 0.8    // and this much of its amplitude: 0.5 is one big bowl
+CLIFF_ROCK_CONTRAST :: 3.0 // how hard the noise is pushed to its extremes
+
+// One hashed lattice corner, in [-1,1].
+rock_lattice :: proc(x, y, z: i32, seed: u32) -> f32 {
+	h := hash_u32(u32(x) * 73856093 ~ u32(y) * 19349663 ~ u32(z) * 83492791 ~ seed)
+	return f32(h) / f32(max(u32)) * 2 - 1
+}
+
+// One octave of value noise at a world point, in [-1,1]. Trilinear between the
+// eight lattice corners around it, each axis smoothstepped so the field is
+// smooth across a lattice plane rather than creased along it.
+rock_octave :: proc(p: gfx.Vector3, seed: u32) -> f32 {
+	base := gfx.Vector3{math.floor(p.x), math.floor(p.y), math.floor(p.z)}
+	i := [3]i32{i32(base.x), i32(base.y), i32(base.z)}
+	t := p - base
+	s := gfx.Vector3{t.x*t.x*(3-2*t.x), t.y*t.y*(3-2*t.y), t.z*t.z*(3-2*t.z)}
+	c: [8]f32
+	for k in 0 ..< 8 {
+		c[k] = rock_lattice(i.x+i32(k&1), i.y+i32((k>>1)&1), i.z+i32((k>>2)&1), seed)
+	}
+	x00 := math.lerp(c[0], c[1], s.x)
+	x10 := math.lerp(c[2], c[3], s.x)
+	x01 := math.lerp(c[4], c[5], s.x)
+	x11 := math.lerp(c[6], c[7], s.x)
+	return math.lerp(math.lerp(x00, x10, s.y), math.lerp(x01, x11, s.y), s.z)
+}
+
+// How far the rock stands off the smooth face at `p`, in metres. `f` is the
+// position up the profile: 0 at the road edge, 1 at the crest, and the offset is
+// zero at both.
+// Positive stands toward the road, negative cuts back into the hillside, and
+// `height` is the cliff's, which is what sets how big its rock can be.
+//
+// `room` is how far this vertex may come toward the road before it crosses the
+// road edge: the distance the smooth face has already leaned out by, measured
+// along the normal. It is the *only* fence, and it is a hard one — the rock the
+// eye reads as rock is the part standing toward you, and on a sheer cut there
+// is nowhere for it to stand. That is geometry, not tuning: lean the face back
+// (the angle slider) and the room appears.
+rock_offset :: proc(p: gfx.Vector3, height, f, room: f32) -> f32 {
+	sum, total, amp, wave := f32(0), f32(0), f32(1), f32(CLIFF_ROCK_WAVE)
+	for i in 0 ..< CLIFF_ROCK_OCTAVES {
+		sum += rock_octave(p / wave, u32(i) * 0x9E3779B9) * amp
+		total += amp
+		amp *= CLIFF_ROCK_KEEP
+		wave *= 0.5
+	}
+	// Stretched to its extremes, and centred on the cut. Summed noise piles up
+	// around its middle, so without the stretch every column gets the same shape
+	// at the same height — one dip running the length of the cliff. Without the
+	// centring every column gets it in the same *direction*, which is a face
+	// that only ever hollows out.
+	n := clamp((sum / total) * CLIFF_ROCK_CONTRAST, -1, 1)
+	h := n * (CLIFF_ROCK_DEPTH * height) * (4 * f * (1 - f))
+	// Cutting the protrusions off at the road edge would leave a flat spot every
+	// time one reached it, and a flat spot in a rough face is a step with a
+	// steep triangle either side of it. Scale that half to fit the room instead.
+	return h > 0 ? h * min(1, room / max(abs(h), 1e-3)) : h
+}
 
 // Road-surface tessellation.
 //
@@ -199,17 +287,6 @@ hash_u32 :: proc(x: u32) -> u32 {
 	return h
 }
 
-// A per-vertex offset in [-1,1]^3, keyed on (ribbon sample, row, side).
-verge_jitter :: proc(sample, row, side: int) -> gfx.Vector3 {
-	seed := u32(sample) * 73856093 ~ u32(row) * 19349663 ~ u32(side) * 83492791
-	unit := proc(h: u32) -> f32 {return f32(h) / f32(max(u32)) * 2 - 1}
-	return {
-		unit(hash_u32(seed)),
-		unit(hash_u32(seed ~ 0x9E3779B9)),
-		unit(hash_u32(seed ~ 0x85EBCA6B)),
-	}
-}
-
 // side 0 = the verge on the ribbon's `left` end (+right), side 1 = the other.
 cliff_height :: proc(cs: Cross_Section, side: int) -> f32 {
 	return side == 0 ? cs.cliff_l : cs.cliff_r
@@ -274,24 +351,38 @@ verge_sample :: proc(p: Verge_Profile, f: f32) -> Verge_Point {
 	return p.pts[p.n - 1]
 }
 
+// The face's own outward normal: the profile's direction turned a quarter turn
+// in the (outward, up) plane. A vertical face gives plain `outward`; a face laid
+// back on its angle tips the normal over with it, which is what puts height
+// variation into the crest of a shallow cliff and none into a sheer one.
+verge_normal :: proc(cs: Cross_Section, prof: Verge_Profile, side: int) -> gfx.Vector3 {
+	outward := side == 0 ? cs.right : -cs.right
+	if prof.n < 2 { return outward }
+	d := prof.pts[prof.n-1] - prof.pts[0]
+	l := math.sqrt(d.x*d.x + d.y*d.y)
+	if l <= 0 { return outward }
+	return (outward * d.y - cs.up * d.x) / l
+}
+
 // A vertex on the swept verge face.
 //
-// Row 0 sits exactly on the road edge with zero jitter, so the verge is
-// watertight with the road surface. Jitter ramps in along the profile, and its
-// amplitude is bounded by the local cell so the surface cannot fold (see
-// CLIFF_JITTER). `ds` is the along-road spacing at this sample; it must be a
-// property of the sample, never of the quad, or two quads sharing a vertex
-// would place it differently and tear the verge open.
+// Row 0 sits exactly on the road edge, undisplaced, so the verge is watertight
+// with the road surface. The rock ramps in along the profile from there.
 //
-// Rows are spaced evenly along the profile's *arc length*, so the row height is
-// `len/rows` — height/cos(angle) for a single tilted segment. That is the right
-// quantity for the fold bound, which is about the distance between rows, not
-// about how much of that distance was vertical.
+// The displacement is a function of the *smooth* face position and nothing else
+// — no ribbon index, no row number, no tessellation. Two callers that agree on
+// the cross-section agree on the vertex, to the bit, without having to agree on
+// how they got there.
+//
+// `roughness` is the global slider, and this slice's own `cliff_rough` adds to
+// it — the same arrangement the road surface has with its per-node offset, and
+// deliberately a separate number from it. A cliff is rock; the road is what a
+// car drives on.
 verge_vertex :: proc(
 	cs: Cross_Section,
 	prof: Verge_Profile,
-	side, row, rows, sample: int,
-	roughness, ds: f32,
+	side, row, rows: int,
+	roughness: f32,
 ) -> gfx.Vector3 {
 	outward := side == 0 ? cs.right : -cs.right
 	edge := cs.pos + outward * (cs.width * 0.5)
@@ -303,28 +394,62 @@ verge_vertex :: proc(
 	q := verge_sample(prof, f)
 	p := edge + outward * q.x + cs.up * q.y
 
-	// A short verge has short rows, so its jitter shrinks with it and it still
-	// fades smoothly to nothing rather than ending in a jittery stub.
-	cell := min(ds, prof.len / f32(rows))
-	amp := cell * CLIFF_JITTER * roughness * f
-	j := verge_jitter(sample, row, side)
-	return p + (cs.right * j.x + cs.up * j.y + cs.fwd * j.z) * amp
+	eff := clamp(roughness + cs.cliff_rough, 0, 1)
+	if eff <= 0 {
+		return p
+	}
+	// How big the rock may be is the cliff's *height*, never the length of its
+	// face. Lay a 7 m cliff back to 75 degrees and its face is 25 m long, so an
+	// amplitude keyed off that length juts 18 m out of the middle of it.
+	top := prof.pts[prof.n - 1]
+	// cos(face angle) is the normal's outward part, so the lean at this row over
+	// it is the room the rock has to come toward the road in.
+	room := q.x * prof.len / max(top.y, 1e-3)
+	return p - verge_normal(cs, prof, side) * (rock_offset(p, top.y, f, room) * eff)
 }
 
-// Where the verge hands off to the terrain: the profile's last point, jitter and
+// One cross-section's face, bottom to top: the vertices, and `v` beside them.
+//
+// `v` is metres along the *rock*, accumulated from the vertices themselves, not
+// metres along the smooth cut they were drawn on. The two differ by however far
+// the rock stands off, which is metres — a texture laid out on the smooth cut
+// stretches over every lump and squashes into every hollow. Same reason `u` runs
+// along the road's arc: UVs here are metres over UV_TILE_M in both axes, so the
+// texel density is meant to be uniform.
+//
+// (`u` is still the smooth arc. Two neighbouring samples differ in displacement
+// by far less than two neighbouring rows do, and a per-row `u` would have to
+// accumulate along the whole road, per row, across branches.)
+Verge_Column :: struct {
+	p: [VERGE_ROWS + 1]gfx.Vector3,
+	v: [VERGE_ROWS + 1]f32,
+}
+
+verge_column :: proc(
+	cs: Cross_Section,
+	prof: Verge_Profile,
+	side, rows: int,
+	roughness: f32,
+) -> (col: Verge_Column) {
+	for k in 0 ..= min(rows, VERGE_ROWS) {
+		col.p[k] = verge_vertex(cs, prof, side, k, rows, roughness)
+		if k > 0 {
+			col.v[k] = col.v[k - 1] + gfx.Vector3Length(col.p[k] - col.p[k - 1])
+		}
+	}
+	return
+}
+
+// Where the verge hands off to the terrain: the profile's last point, rock and
 // all. A cliff's crest; a ditch's outer lip; the bare road edge where there is
 // no verge at all, which is exactly right and needs no special case.
 //
 // **The terrain's innermost column must be this proc, called with this sample's
-// own `sample`, `ds` and `roughness`.** The two meshes share no vertex buffer —
+// own cross-section and `roughness`.** The two meshes share no vertex buffer —
 // they are welded only by both emitting bit-identical positions. Recompute the
 // seam any other way and the skirt tears off the verge.
-verge_seam :: proc(
-	cs: Cross_Section,
-	side, rows, sample: int,
-	roughness, ds: f32,
-) -> gfx.Vector3 {
-	return verge_vertex(cs, verge_profile(cs, side), side, rows, rows, sample, roughness, ds)
+verge_seam :: proc(cs: Cross_Section, side, rows: int, roughness: f32) -> gfx.Vector3 {
+	return verge_vertex(cs, verge_profile(cs, side), side, rows, rows, roughness)
 }
 
 // --- building ---------------------------------------------------------------
@@ -441,9 +566,22 @@ sample_spacing :: proc(ribbon: []Cross_Section) -> []f32 {
 // quantity the rows are spaced by, so a taller cliff shows more texture rather
 // than a stretched one. The two neighbouring cross-sections have different
 // profile lengths, so `v` is computed per column, not per quad.
-build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, rows: int, roughness: f32) {
-	ds := sample_spacing(ribbon)
+build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, rows: int, roughness: f32) {
 	for side in 0 ..< 2 {
+		// Metres along the rock, the same way `v` is metres up it. The road's own
+		// arc is the wrong ruler here: two neighbouring samples can stand a metre
+		// apart on the smooth cut and four metres apart once their rock is on,
+		// which stretches the texture by as much again.
+		//
+		// One number for the whole rung, advanced by what its rows moved on
+		// average — not one per row. Per-row runs drift apart over a few hundred
+		// metres of road, and a quad whose two corners are twenty metres apart in
+		// `u` is sheared beyond anything the stretch was worth fixing.
+		//
+		// Never reset, not even where a quad is skipped. Twins at a node sit in
+		// the same place, so the run carries across a break with nothing added,
+		// and a reset there would put a texture seam at every node.
+		u_run: f32
 		for i in 0 ..< len(ribbon) - 1 {
 			if ribbon[i + 1].break_before { continue }
 			p0 := verge_profile(ribbon[i], side)
@@ -451,21 +589,24 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, rows: in
 			if p0.n < 2 && p1.n < 2 {
 				continue
 			}
-			ua := arc[i] / UV_TILE_M
-			ub := arc[i + 1] / UV_TILE_M
+			ca := verge_column(ribbon[i], p0, side, rows, roughness)
+			cb := verge_column(ribbon[i + 1], p1, side, rows, roughness)
+			step: f32
+			for k in 0 ..= min(rows, VERGE_ROWS) {
+				step += gfx.Vector3Length(cb.p[k] - ca.p[k])
+			}
+			ua := u_run / UV_TILE_M
+			ub := (u_run + step / f32(min(rows, VERGE_ROWS) + 1)) / UV_TILE_M
+			defer u_run = ub * UV_TILE_M
 			for k in 0 ..< rows {
-				a := verge_vertex(ribbon[i], p0, side, k, rows, i, roughness, ds[i])
-				b := verge_vertex(ribbon[i], p0, side, k + 1, rows, i, roughness, ds[i])
-				c := verge_vertex(ribbon[i + 1], p1, side, k + 1, rows, i + 1, roughness, ds[i + 1])
-				d := verge_vertex(ribbon[i + 1], p1, side, k, rows, i + 1, roughness, ds[i + 1])
+				a, b := ca.p[k], ca.p[k + 1]
+				c, d := cb.p[k + 1], cb.p[k]
 				col := lerp_col(CLIFF_BOT, CLIFF_TOP, f32(k) / f32(rows))
 
-				lo := f32(k) / f32(rows)
-				hi := f32(k + 1) / f32(rows)
-				uv_a := [2]f32{ua, lo * p0.len / UV_TILE_M}
-				uv_b := [2]f32{ua, hi * p0.len / UV_TILE_M}
-				uv_c := [2]f32{ub, hi * p1.len / UV_TILE_M}
-				uv_d := [2]f32{ub, lo * p1.len / UV_TILE_M}
+				uv_a := [2]f32{ua, ca.v[k] / UV_TILE_M}
+				uv_b := [2]f32{ua, ca.v[k + 1] / UV_TILE_M}
+				uv_c := [2]f32{ub, cb.v[k + 1] / UV_TILE_M}
+				uv_d := [2]f32{ub, cb.v[k] / UV_TILE_M}
 
 				// Sweeping the profile along the road gives each quad the normal
 				// cross(fwd, t) on side 0 and cross(t, fwd) on side 1, where t is
@@ -499,7 +640,7 @@ build_tri_mesh :: proc(
 	}
 	arc := ribbon_arc(ribbon) // temp-allocated; the UVs are metres along it
 	build_road_surface(&m, ribbon, arc, roughness)
-	build_verges(&m, ribbon, arc, VERGE_ROWS, roughness)
+	build_verges(&m, ribbon, VERGE_ROWS, roughness)
 	return m
 }
 

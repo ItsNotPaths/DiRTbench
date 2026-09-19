@@ -43,7 +43,10 @@ Stage_Point :: struct {
 	span_r:      f32,
 	cliff_taper: f32,
 	cliff_angle: f32, // degrees off vertical; + leans away from the road
-	roughness:   f32, // per-node offset from the global roughness
+	// A key added after the format settled, like Stage_Veg.billboards: a venue
+	// written before it reads as 0, which is what an old venue meant.
+	cliff_rough: f32, // how broken the cliff face reads, 0..1
+	roughness:   f32, // per-node offset from the global road roughness
 }
 
 // No species here: they belong to the venue's base art, and are read off it
@@ -184,6 +187,7 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 			span_r      = p.span_r,
 			cliff_taper = p.cliff_taper,
 			cliff_angle = p.cliff_angle,
+			cliff_rough = p.cliff_rough,
 			roughness   = p.roughness,
 		}
 	}
@@ -317,6 +321,7 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 				p.span_r,
 				taper,
 				p.cliff_angle,
+				p.cliff_rough,
 				p.roughness,
 				parents[i],
 			),

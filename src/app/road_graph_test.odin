@@ -1,5 +1,6 @@
 package main
 
+import "core:math"
 import "core:os"
 import "core:testing"
 import "../gfx"
@@ -514,4 +515,307 @@ graph_reach_measures_the_road_in_metres :: proc(t: ^testing.T) {
 	far := geo.graph_reach(sp, 2, 1000)
 	testing.expect_value(t, far[0], 80)
 	testing.expect_value(t, far[4], 80)
+}
+
+// Two roughness knobs, and they are not the same one. The knob on the point
+// panel is the road surface a car drives on; the one under Cliffs is the rock
+// face. The verge used to read the global slider alone, which is held at zero,
+// so the cliff jitter could not be reached from the editor at all.
+@(test)
+cliff_roughness_moves_the_face_and_the_road_knob_does_not :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 4, 40)
+	for &p in sp.points { p.cliff_r, p.cliff_rough = 4, 0 }
+	smooth := road_mesh(&sp)
+
+	for &p in sp.points { p.roughness = 1 }
+	cliff_dev, road_dev := mesh_deviation(smooth, road_mesh(&sp))
+	testing.expect_value(t, cliff_dev, 0) // the road knob leaves rock alone
+	testing.expect(t, road_dev > 0.01, "the road knob must move the road")
+
+	for &p in sp.points { p.roughness, p.cliff_rough = 0, 1 }
+	cliff_dev, road_dev = mesh_deviation(smooth, road_mesh(&sp))
+	testing.expect(t, cliff_dev > 0.1, "the cliff knob must break up the face")
+	testing.expect_value(t, road_dev, 0) // and leave the road alone
+}
+
+@(private = "file")
+road_mesh :: proc(sp: ^geo.Spline) -> geo.Tri_Mesh {
+	ribbon := geo.build_ribbon(sp^, 14, context.temp_allocator)
+	return geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+}
+
+// Mean metres each material's vertices moved between two builds of one road.
+// Both meshes come off the same spline topology, so the two are the same
+// vertices in the same order and can be compared straight across.
+@(private = "file")
+mesh_deviation :: proc(a, b: geo.Tri_Mesh) -> (cliff, road: f32) {
+	cliff_n, road_n: f32
+	for mat, tri in a.mat {
+		for corner in 0 ..< 3 {
+			i := tri*3 + corner
+			d := gfx.Vector3Length(b.pos[i] - a.pos[i])
+			switch mat {
+			case .Cliff:           cliff += d; cliff_n += 1
+			case .Road, .RoadSand: road += d;  road_n += 1
+			case .Terrain:
+			}
+		}
+	}
+	return cliff / max(cliff_n, 1), road / max(road_n, 1)
+}
+
+// The bug a rough cliff used to show: the crest is the line the terrain welds
+// to, and the terrain triangulates it in plan. A per-vertex random walked
+// neighbouring crest points on top of each other and past each other, which
+// dropped points out of the weld and left holes along the lip. A field cannot
+// do that while its gradient stays under 1, and this is what says so.
+//
+// Both spacings matter. Control points far apart give a ribbon coarse enough
+// that the short octave is no longer representable, and drawing it anyway is
+// the per-vertex random again — see the band limit in rock_displacement.
+@(test)
+a_rough_cliff_keeps_its_crest_in_order :: proc(t: ^testing.T) {
+	rough_cliff_holds(t, 40)
+	rough_cliff_holds(t, 120)
+}
+
+@(private = "file")
+rough_cliff_holds :: proc(t: ^testing.T, spacing: f32) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 6, spacing) // up +z, so the right-hand cliff stands on -x
+	for &p in sp.points {
+		p.cliff_r = geo.CLIFF_HEIGHT_MAX
+		p.cliff_rough = 1
+	}
+	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
+	ds := geo.sample_spacing(ribbon)
+
+	moved, prev := false, gfx.Vector3{}
+	for cs, i in ribbon {
+		seam := geo.verge_seam(cs, 1, geo.VERGE_ROWS, 0)
+		if i > 0 {
+			testing.expect(t, seam.z > prev.z, "the crest must not double back along the road")
+			step := abs(seam.x-prev.x) + abs(seam.z-prev.z)
+			testing.expect(t, step > 0.2, "two crest points must not collapse onto one another")
+			moved = moved || abs(seam.x - prev.x) > 0.01
+		}
+		prev = seam
+	}
+	testing.expect(t, moved, "a rough crest must actually wander, or this proves nothing")
+
+	// And the face itself stays the right way out. The cliff stands on -x and is
+	// the wall you drive past, so every triangle on it looks back at the road,
+	// which a folded one would not.
+	mesh := geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+	faces := 0
+	for mat, tri in mesh.mat {
+		if mat != .Cliff { continue }
+		faces += 1
+		testing.expect(t, mesh.nrm[tri*3].x > 0, "a rough face must not turn a triangle inside out")
+	}
+	testing.expect(t, faces > 100, "the test road must actually grow a cliff")
+}
+
+// Rock stands off the cut face, and the cut was made for the road. Three things
+// the amplitude was chosen against, all measured: no stone over the road at any
+// slider setting, no triangle standing off the wall like a blade, and no face
+// turned inside out on a bend — where the face normals converge and a fold would
+// show first.
+@(test)
+rock_stands_off_the_face_and_never_over_the_road :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 6, 24) // the cliff stands on -x, the road is 8 m wide
+	for &p in sp.points { p.cliff_r, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 0 }
+	smooth := road_mesh(&sp)
+	for &p in sp.points { p.cliff_rough = 1 }
+	rough := road_mesh(&sp)
+
+	relief, n := f32(0), f32(0)
+	faces, blades := 0, 0
+	for mat, tri in rough.mat {
+		if mat != .Cliff { continue }
+		// Not how *steep* the face gets: a rough face is steep facets, and the
+		// angle off the wall measures roughness and spikiness with one number,
+		// so asserting on it only pins a look. Facing away from the road is a
+		// defect either way — it reads as a hole through the cliff.
+		faces += 1
+		if rough.nrm[tri*3].x <= 0 { blades += 1 }
+		for corner in 0 ..< 3 {
+			i := tri*3 + corner
+			testing.expect(t, rough.pos[i].x <= -geo.DEFAULT_WIDTH*0.5 + 0.01, "rock must not lean over the road")
+			relief += gfx.Vector3Length(rough.pos[i] - smooth.pos[i]); n += 1
+		}
+	}
+	testing.expect_value(t, blades, 0) // no face may turn its back on the road
+	// Relief worth the name: well under the amplitude it was tuned to, so this
+	// catches the field being turned off, not the next tuning pass.
+	testing.expect(t, relief/max(n, 1) > 0.4, "a face at full roughness must actually stand off the smooth cut")
+
+	bend: geo.Spline
+	defer delete(bend.points)
+	for i in 0 ..< 10 {
+		a := f32(i) * 0.25
+		pos := gfx.Vector3{25*math.cos(a) - 25, 0, 25*math.sin(a)}
+		geo.spline_push(&bend, geo.make_point(pos, gfx.QuaternionFromAxisAngle({0,1,0}, -a), geo.DEFAULT_WIDTH, parent = i - 1))
+	}
+	for &p in bend.points { p.cliff_l, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 1 }
+	ribbon := geo.build_ribbon(bend, 14, context.temp_allocator)
+	mesh := geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+	bend_faces := 0
+	for mat, tri in mesh.mat {
+		if mat != .Cliff { continue }
+		bend_faces += 1
+		// By position, not by index: a tapered cliff skips samples, so the
+		// triangle's place in the soup does not name the sample it grew from.
+		c := (mesh.pos[tri*3] + mesh.pos[tri*3+1] + mesh.pos[tri*3+2]) / 3
+		best, near := max(f32), ribbon[0]
+		for cs in ribbon {
+			if d := gfx.Vector3Length(cs.pos - c); d < best { best, near = d, cs }
+		}
+		testing.expect(t, gfx.Vector3DotProduct(mesh.nrm[tri*3], -near.right) > 0, "a face on a bend must not turn inside out")
+	}
+	testing.expect(t, bend_faces > 100, "the bend must actually grow a cliff")
+}
+
+// The ribbon emits two coincident samples at every node: one ending the edge
+// into it, one starting the edge out of it. They stand at the same place but
+// know different things about their neighbours — the first has no next sample on
+// its own edge, so its spacing reads as zero.
+//
+// Any face vertex that reads something a twin can disagree about opens a crack
+// at every node, the width of the disagreement. Band-limiting the rock field by
+// the local sample spacing did exactly that, for 1.5 m of gap on a 5 m cliff,
+// through the face and the terrain welded to it. Hence: a face vertex is a
+// function of the smooth face, and of nothing that varies between twins.
+@(test)
+node_twins_build_the_same_cliff :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 6, 40)
+	// A branch makes the road a graph, which is what a venue always is, and the
+	// graph sampler is the one that emits the twins.
+	branch := geo.extrude_point(&sp, 3)
+	sp.points[branch].xform.translation = {30, 0, 150}
+	testing.expect(t, !geo.is_linear(sp), "the test road must take the graph sampler")
+	for &p in sp.points { p.cliff_l, p.cliff_r, p.cliff_rough = 5, 5, 1 }
+
+	ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
+	twins := 0
+	for i in 0 ..< len(ribbon) {
+		for j in i + 1 ..< len(ribbon) {
+			if gfx.Vector3Length(ribbon[i].pos - ribbon[j].pos) > 0.001 { continue }
+			twins += 1
+			for side in 0 ..< 2 {
+				pa := geo.verge_profile(ribbon[i], side)
+				pb := geo.verge_profile(ribbon[j], side)
+				for row in 0 ..= geo.VERGE_ROWS {
+					a := geo.verge_vertex(ribbon[i], pa, side, row, geo.VERGE_ROWS, 0)
+					b := geo.verge_vertex(ribbon[j], pb, side, row, geo.VERGE_ROWS, 0)
+					testing.expect_value(t, gfx.Vector3Length(a - b), 0)
+				}
+			}
+		}
+	}
+	testing.expect(t, twins >= 4, "the test road must actually put twins at its nodes")
+}
+
+// The crest is the one line the rest of the world welds to: the terrain rim, the
+// billboards and the scatter all read `verge_seam`, and the terrain triangulates
+// it in plan. A crest that moves with the roughness drags all of them with it,
+// and the 2D triangulation is where that turns into holes — points bunching
+// together or crossing over in plan view.
+//
+// So rock goes to nothing at the crest, exactly as it does at the road edge, and
+// the whole class of seam goes with it. The cost is a clean skyline.
+@(test)
+the_crest_never_moves :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 6, 40)
+	branch := geo.extrude_point(&sp, 3)
+	sp.points[branch].xform.translation = {30, 0, 150}
+	for &p in sp.points { p.cliff_l, p.cliff_r, p.cliff_rough = 5, 5, 0 }
+	smooth := geo.build_ribbon(sp, 14, context.temp_allocator)
+	for &p in sp.points { p.cliff_rough = 1 }
+	rough := geo.build_ribbon(sp, 14, context.temp_allocator)
+
+	testing.expect_value(t, len(rough), len(smooth))
+	for i in 0 ..< len(smooth) {
+		for side in 0 ..< 2 {
+			a := geo.verge_seam(smooth[i], side, geo.VERGE_ROWS, 0)
+			b := geo.verge_seam(rough[i], side, geo.VERGE_ROWS, 0)
+			testing.expect_value(t, gfx.Vector3Length(a - b), 0)
+		}
+	}
+}
+
+// How big the rock gets is set by the cliff's height and by nothing else. Lay a
+// cliff back and its face grows much faster than it does: a 7 m cliff at 75
+// degrees has a 25 m face, and an amplitude keyed off that length put an 18 m
+// jut through the middle of it. The lean buys room for rock to stand toward the
+// road; it must not buy more rock.
+@(test)
+a_laid_back_cliff_grows_no_bigger_rock :: proc(t: ^testing.T) {
+	worst_at :: proc(angle: f32) -> f32 {
+		sp: geo.Spline
+		defer delete(sp.points)
+		straight_road(&sp, 6, 24)
+		for &p in sp.points { p.cliff_r, p.cliff_angle, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, angle, 0 }
+		smooth := geo.build_ribbon(sp, 14, context.temp_allocator)
+		for &p in sp.points { p.cliff_rough = 1 }
+		rough := geo.build_ribbon(sp, 14, context.temp_allocator)
+
+		worst: f32
+		for i in 0 ..< len(smooth) {
+			ps := geo.verge_profile(smooth[i], 1)
+			pr := geo.verge_profile(rough[i], 1)
+			if ps.n < 2 { continue }
+			for row in 1 ..< geo.VERGE_ROWS {
+				a := geo.verge_vertex(smooth[i], ps, 1, row, geo.VERGE_ROWS, 0)
+				b := geo.verge_vertex(rough[i], pr, 1, row, geo.VERGE_ROWS, 0)
+				worst = max(worst, gfx.Vector3Length(a - b))
+			}
+		}
+		return worst
+	}
+
+	sheer, laid := worst_at(geo.CLIFF_ANGLE_MIN + 1), worst_at(geo.CLIFF_ANGLE_MAX)
+	testing.expect(t, sheer > 1, "a sheer face must still grow rock")
+	testing.expect(t, laid < sheer*1.25, "laying a cliff back must not inflate its rock")
+}
+
+// UVs here are metres over UV_TILE_M in both axes, so the texture should land at
+// one density everywhere. Drawn on the smooth cut they do not: the rock stands
+// metres off it, and every edge came out stretched, up to 3.4x, mean 1.22. Both
+// axes now measure the rock itself — `v` up each column, `u` along the road by
+// what the rung's rows actually moved.
+@(test)
+the_cliff_texture_keeps_its_density :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	straight_road(&sp, 6, 24)
+	for &p in sp.points { p.cliff_r, p.cliff_angle, p.cliff_rough = geo.CLIFF_HEIGHT_MAX, 45, 1 }
+	mesh := geo.build_tri_mesh(geo.build_ribbon(sp, 14, context.temp_allocator), 0, context.temp_allocator)
+
+	worst, sum, n := f32(0), f32(0), f32(0)
+	for mat, tri in mesh.mat {
+		if mat != .Cliff { continue }
+		for e in 0 ..< 3 {
+			a, b := mesh.pos[tri*3 + e], mesh.pos[tri*3 + (e+1)%3]
+			ua, ub := mesh.uv[tri*3 + e], mesh.uv[tri*3 + (e+1)%3]
+			span := gfx.Vector3Length({ub.x-ua.x, ub.y-ua.y, 0}) * geo.UV_TILE_M
+			if span < 1e-4 { continue }
+			r := gfx.Vector3Length(b - a) / span
+			worst = max(worst, r); sum += r; n += 1
+		}
+	}
+	testing.expect(t, n > 100, "the test road must actually grow a cliff")
+	// Centred, not merely bounded: UVs on the smooth cut can only ever stretch,
+	// so the mean is what catches that coming back.
+	testing.expect(t, abs(sum/n - 1) < 0.1, "the texture must land at the density it asks for")
+	testing.expect(t, worst < 2.5, "no edge may stretch the texture over its own length")
 }

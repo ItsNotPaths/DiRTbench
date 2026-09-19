@@ -317,7 +317,7 @@ field_samples :: proc(
 		s.fwd = {f.x, f.z}
 
 		for side in 0 ..< 2 {
-			seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
+			seam := verge_seam(cs, side, vrows, roughness)
 			out_dir := terrain_outward(cs, side)
 			s.seam[side] = {seam.x, seam.z}
 			s.seam_y[side] = seam.y
@@ -850,7 +850,7 @@ terrain_field_build :: proc(
 	//    cliff top's own vertices, and they are the weld.
 	for side in 0 ..< 2 {
 		for i in 0 ..< n {
-			seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
+			seam := verge_seam(ribbon[i], side, vrows, roughness)
 			if !dedupe_add(&seen, seam.x, seam.z) {
 				continue
 			}
@@ -869,7 +869,7 @@ terrain_field_build :: proc(
 	for u in ([]f32{cell * 1.0, cell * 2.5}) {
 		for side in 0 ..< 2 {
 			for i := 0; i < n; i += step {
-				seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
+				seam := verge_seam(ribbon[i], side, vrows, roughness)
 				o := terrain_outward(ribbon[i], side)
 				p := [2]f32{seam.x + o.x * u, seam.z + o.z * u}
 				add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
@@ -883,7 +883,7 @@ terrain_field_build :: proc(
 	//    simply rejected by the probe.
 	for side in 0 ..< 2 {
 		for i := 0; i < n; i += step {
-			seam := verge_seam(ribbon[i], side, vrows, i, roughness, ds[i])
+			seam := verge_seam(ribbon[i], side, vrows, roughness)
 			o := terrain_outward(ribbon[i], side)
 			p := [2]f32{seam.x + o.x * t.reach_m, seam.z + o.z * t.reach_m}
 			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
@@ -1106,8 +1106,8 @@ build_terrain_skirt :: proc(
 			if ribbon[i + 1].break_before {
 				continue
 			}
-			a := verge_seam(ribbon[i], side, VERGE_ROWS, i, roughness, ds[i])
-			b := verge_seam(ribbon[i + 1], side, VERGE_ROWS, i + 1, roughness, ds[i + 1])
+			a := verge_seam(ribbon[i], side, VERGE_ROWS, roughness)
+			b := verge_seam(ribbon[i + 1], side, VERGE_ROWS, roughness)
 			ia, a_ok := at[{a.x, a.z}]
 			ib, b_ok := at[{b.x, b.z}]
 			if a_ok && b_ok {

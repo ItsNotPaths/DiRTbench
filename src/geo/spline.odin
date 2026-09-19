@@ -26,6 +26,9 @@ HERMITE_TENSION :: 1.0  // tangent scale; higher == wider swoops
 DEFAULT_CLIFF_SPAN :: 48.0  // metres of road a cliff covers, end to end
 DEFAULT_CLIFF_TAPER :: 16.0 // metres of that span spent rising and falling
 DEFAULT_CLIFF_ANGLE :: 6.0  // degrees off vertical, leaning away from the road
+// Rock, not a smooth ramp. Mid-slider: the field behind it cannot fold a face at
+// any setting (see CLIFF_ROCK_SLOPE), so this is a look, not a safe limit.
+DEFAULT_CLIFF_ROUGH :: 0.5
 
 Point :: struct {
 	// Stable identity, handed out by spline_push/spline_inject and never
@@ -69,11 +72,16 @@ Point :: struct {
 	// Degrees off vertical. Positive leans the face away from the road;
 	// negative leans it back over the road, overhanging it.
 	cliff_angle: f32,
+	// How broken the cliff face reads, 0..1, shared by both sides and lerped
+	// along the road like `cliff_angle`. Nothing to do with `roughness` below:
+	// that one is the road surface a car drives on, this one is rock. See
+	// CLIFF_JITTER in mesh.odin for the amplitude it buys.
+	cliff_rough: f32,
 
-	// Per-node roughness offset, added to the global roughness slider and then
-	// clamped to [0,1] along the road (lerped between control points, like
-	// `cliff_angle`). Lets one stretch read rougher or smoother than the stage
-	// baseline. The absolute displacement it can produce is still hard-capped —
+	// Per-node **road surface** roughness offset, added to the global roughness
+	// slider and then clamped to [0,1] along the road (lerped between control
+	// points, like `cliff_angle`). Lets one stretch read rougher or smoother
+	// than the stage baseline. The absolute displacement is hard-capped —
 	// see ROUGH_MAX_M in mesh.odin — because the tightest target is the Trackmania
 	// Stadium car. Signed: negative smooths a stretch below the global baseline.
 	roughness:   f32,
@@ -202,9 +210,12 @@ Cross_Section :: struct {
 	// Cliff face angle, degrees off vertical. Unlike the heights this simply
 	// interpolates along the segment, the way width does.
 	cliff_angle: f32,
-	// Per-node roughness offset at this slice, lerped between the two control
-	// points (like `cliff_angle`). Combined with the global slider and clamped
-	// where the road surface is displaced (build_road_surface).
+	// Cliff face roughness at this slice, lerped the same way. Drives the verge
+	// jitter (verge_vertex); the road surface never reads it.
+	cliff_rough: f32,
+	// Per-node **road surface** roughness offset at this slice, lerped between
+	// the two control points (like `cliff_angle`). Combined with the global
+	// slider and clamped where the road is displaced (build_road_surface).
 	roughness:   f32,
 }
 
@@ -259,6 +270,7 @@ make_point :: proc(
 	span_r: f32 = DEFAULT_CLIFF_SPAN,
 	cliff_taper: f32 = DEFAULT_CLIFF_TAPER,
 	cliff_angle: f32 = DEFAULT_CLIFF_ANGLE,
+	cliff_rough: f32 = DEFAULT_CLIFF_ROUGH,
 	roughness:   f32 = 0,
 	parent:      int = -1,
 ) -> Point {
@@ -273,6 +285,7 @@ make_point :: proc(
 		span_r      = span_r,
 		cliff_taper = cliff_taper,
 		cliff_angle = cliff_angle,
+		cliff_rough = cliff_rough,
 		roughness   = roughness,
 	}
 }
@@ -331,9 +344,10 @@ sample_at :: proc(sp: Spline, seg: int, t: f32) -> Cross_Section {
 	width := p0.width + (p1.width - p0.width) * t
 	angle := p0.cliff_angle + (p1.cliff_angle - p0.cliff_angle) * t
 	rough := p0.roughness + (p1.roughness - p0.roughness) * t
+	cliff_rough := p0.cliff_rough + (p1.cliff_rough - p0.cliff_rough) * t
 	return Cross_Section {
 		pos = pos, right = right, up = up, fwd = fwd,
-		width = width, cliff_angle = angle, roughness = rough,
+		width = width, cliff_angle = angle, cliff_rough = cliff_rough, roughness = rough,
 		e_from = seg, e_to = seg + 1, t = t,
 	}
 }
@@ -353,6 +367,7 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 		width = p0.width + (p1.width-p0.width)*t,
 		e_from = parent, e_to = child, t = t,
 		cliff_angle = p0.cliff_angle+(p1.cliff_angle-p0.cliff_angle)*t,
+		cliff_rough = p0.cliff_rough+(p1.cliff_rough-p0.cliff_rough)*t,
 		roughness = p0.roughness+(p1.roughness-p0.roughness)*t,
 	}
 }
@@ -570,7 +585,7 @@ insert_point :: proc(
 		// carries the lerped roughness for the same reason.
 		frame.cliff_l, frame.cliff_r,
 		src.span_l, src.span_r, src.cliff_taper, frame.cliff_angle,
-		frame.roughness, from,
+		frame.cliff_rough, frame.roughness, from,
 	)
 	if sp.points[to].parent != from {
 		at_idx := spline_push(sp, np)
@@ -689,6 +704,7 @@ append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
 	span_r := f32(DEFAULT_CLIFF_SPAN)
 	taper := f32(DEFAULT_CLIFF_TAPER)
 	angle := f32(DEFAULT_CLIFF_ANGLE)
+	cliff_rough := f32(DEFAULT_CLIFF_ROUGH)
 	rough: f32
 	if n := len(sp.points); n > 0 {
 		last := sp.points[n - 1]
@@ -698,10 +714,12 @@ append_point :: proc(sp: ^Spline, at: gfx.Vector3) -> int {
 		cliff_l, cliff_r = last.cliff_l, last.cliff_r
 		span_l, span_r, taper = last.span_l, last.span_r, last.cliff_taper
 		angle = last.cliff_angle
-		rough = last.roughness
+		cliff_rough, rough = last.cliff_rough, last.roughness
 	}
 	parent := len(sp.points) - 1
-	return spline_push(sp, make_point(at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, rough, parent))
+	return spline_push(sp, make_point(
+		at, rot, width, cliff_l, cliff_r, span_l, span_r, taper, angle, cliff_rough, rough, parent,
+	))
 }
 
 // --- markers -----------------------------------------------------------------
@@ -826,7 +844,7 @@ marker_point :: proc(sp: Spline, e: Edge_At) -> Point {
 	return make_point(
 		cs.pos, quat_from_frame(cs.fwd, cs.up), cs.width,
 		cs.cliff_l, cs.cliff_r, src.span_l, src.span_r,
-		src.cliff_taper, cs.cliff_angle, cs.roughness, -1,
+		src.cliff_taper, cs.cliff_angle, cs.cliff_rough, cs.roughness, -1,
 	)
 }
 

@@ -197,7 +197,7 @@ billboard_rays :: proc(
 			i := veg_sample_at_arc(arc, run, clamp(lo + f32(step) * spacing, lo, hi))
 			cs := ribbon[i]
 			for side in 0 ..< 2 {
-				seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
+				seam := verge_seam(cs, side, vrows, roughness)
 				o := terrain_outward(cs, side)
 				append(&out, Billboard_Ray {
 					at  = {seam.x, seam.z},
@@ -442,7 +442,7 @@ billboard_near_cards :: proc(
 		fwd := gfx.Vector3{cs.fwd.x, 0, cs.fwd.z}
 		fwd = gfx.Vector3Length(fwd) > 1e-4 ? gfx.Vector3Normalize(fwd) : gfx.Vector3{0, 0, 1}
 		for side in 0 ..< 2 {
-			seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
+			seam := verge_seam(cs, side, vrows, roughness)
 			o := terrain_outward(cs, side)
 			for col in 0 ..< cols {
 				if len(out) >= BILLBOARD_MAX {

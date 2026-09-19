@@ -563,10 +563,11 @@ draw_point_selection :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("width", &p.width, 2, 32, "%.1f m", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
 	}
-	// Per-node roughness offset, added to the global slider (both clamped to [0,1]
-	// where the road is displaced). Negative smooths this stretch below the stage
-	// baseline; positive roughens it. The 7-inch cap still applies regardless.
-	if ui.igSliderFloat("roughness offset", &p.roughness, -1, 1, "%+.2f", ui.IM_SLIDER_NONE) {
+	// The road surface only, and the cliffs have their own below. A per-node
+	// offset from the global slider (both clamped to [0,1] where the road is
+	// displaced): negative smooths this stretch below the stage baseline,
+	// positive roughens it. The 7-inch cap still applies regardless.
+	if ui.igSliderFloat("road roughness", &p.roughness, -1, 1, "%+.2f", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
 	}
 
@@ -589,6 +590,11 @@ draw_point_selection :: proc(ed: ^Editor) {
 		mark_dirty(ed.doc)
 	}
 	if ui.igSliderFloat("angle", &p.cliff_angle, geo.CLIFF_ANGLE_MIN, geo.CLIFF_ANGLE_MAX, "%.1f deg", ui.IM_SLIDER_NONE) {
+		mark_dirty(ed.doc)
+	}
+	// The face, not the road: how broken the rock reads. Held at zero a cliff is
+	// a smooth ramp, which is what every stage looked like before this existed.
+	if ui.igSliderFloat("roughness", &p.cliff_rough, 0, 1, "%.2f", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
 	}
 

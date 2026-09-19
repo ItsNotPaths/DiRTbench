@@ -523,7 +523,7 @@ veg_generate :: proc(
 		fwd = gfx.Vector3Length(fwd) > 1e-4 ? gfx.Vector3Normalize(fwd) : gfx.Vector3{0, 0, 1}
 
 		for side in 0 ..< 2 {
-			seam := verge_seam(cs, side, vrows, i, roughness, ds[i])
+			seam := verge_seam(cs, side, vrows, roughness)
 			o := terrain_outward(cs, side)
 
 			for col in columns {
