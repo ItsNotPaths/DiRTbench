@@ -96,6 +96,7 @@ TERRAIN_MAX_POINTS :: 250_000
 Terrain_Control :: struct {
 	x, z:   f32,
 	base_y: f32,
+	u:      f32, // metres out from the verge, for the warp
 	offset: f32,
 	radius: f32,
 }
@@ -106,6 +107,7 @@ Terrain :: struct {
 	blend_m: f32, // metres over which sculpt offsets take over from the verge
 	cell_m:  f32, // spacing of the interior points
 	row_m:   f32, // target world-space distance between sculpt controls
+	warp_m:  f32, // global lift of the ground by the time it reaches `reach_m`
 	controls: [dynamic]Terrain_Control,
 	controls_gen: u64,
 	// Flat pads cut into the ground (floor.odin). Authored and world-space, so
@@ -126,6 +128,7 @@ TERRAIN_DEFAULTS :: Terrain {
 	blend_m = 48,
 	cell_m  = 4,
 	row_m   = 10,
+	warp_m  = 0,
 }
 
 terrain_delete :: proc(t: ^Terrain) {
@@ -171,6 +174,7 @@ terrain_reset :: proc(t: ^Terrain) {
 	d := TERRAIN_DEFAULTS
 	t.enabled = d.enabled
 	t.reach_m, t.blend_m, t.cell_m, t.row_m = d.reach_m, d.blend_m, d.cell_m, d.row_m
+	t.warp_m = d.warp_m
 	terrain_invalidate(t)
 	// The pads go with it. terrain_invalidate deliberately keeps them: they are
 	// world-space and owe the road nothing, so replacing the spline must not
@@ -667,6 +671,26 @@ terrain_control_base_y :: proc(v: Terrain_Point) -> f32 {
 	return y
 }
 
+// How far out from the verge a point sits, blended across its legs.
+terrain_point_u :: proc(v: Terrain_Point) -> f32 {
+	u: f32
+	for k in 0 ..< v.n {
+		u += v.legs[k].w * v.legs[k].u
+	}
+	return u
+}
+
+// The global lift: ground climbs away from the road, on top of whatever the
+// controls say rather than instead of it. Quadratic, so the verge stays where
+// the road put it and the rise is all in the outer half.
+terrain_warp :: proc(t: ^Terrain, u: f32) -> f32 {
+	if t.warp_m == 0 {
+		return 0
+	}
+	s := clamp(u / max(t.reach_m, 1e-3), 0, 1)
+	return t.warp_m * s * s
+}
+
 Control_Buckets :: distinct map[[2]i32]int
 
 terrain_control_add :: proc(
@@ -690,7 +714,13 @@ terrain_control_add :: proc(
 			}
 		}
 	}
-	c := Terrain_Control{x = p.x, z = p.z, base_y = terrain_control_base_y(p), radius = radius}
+	c := Terrain_Control {
+		x      = p.x,
+		z      = p.z,
+		base_y = terrain_control_base_y(p),
+		u      = terrain_point_u(p),
+		radius = radius,
+	}
 	best_d2 := (spacing * 1.5) * (spacing * 1.5)
 	for q in old {
 		dx, dz := c.x - q.x, c.z - q.z
@@ -726,11 +756,7 @@ terrain_controls_ensure :: proc(t: ^Terrain, f: ^Terrain_Field) {
 		if p.fixed || p.n == 0 {
 			continue
 		}
-		u: f32
-		for k in 0 ..< p.n {
-			u += p.legs[k].w * p.legs[k].u
-		}
-		if u < t.reach_m - band {
+		if terrain_point_u(p) < t.reach_m - band {
 			continue
 		}
 		_ = terrain_control_add(t, &buckets, bucket_cell, p, spacing, spacing * 3, old[:])
@@ -741,10 +767,7 @@ terrain_controls_ensure :: proc(t: ^Terrain, f: ^Terrain_Field) {
 		if p.fixed || p.n == 0 {
 			continue
 		}
-		u: f32
-		for k in 0 ..< p.n {
-			u += p.legs[k].w * p.legs[k].u
-		}
+		u := terrain_point_u(p)
 		if u <= max(t.blend_m * 0.5, interior_spacing * 0.5) || u >= t.reach_m - band {
 			continue
 		}
@@ -1030,7 +1053,7 @@ terrain_world_height :: proc(t: ^Terrain, p: [2]f32, legs: [2]Terrain_Leg, n: in
 		u += legs[k].w * legs[k].u
 	}
 	fade := math.smoothstep(f32(0), max(t.blend_m, 1e-3), u)
-	return base_y + terrain_control_offset(t, p) * fade
+	return base_y + terrain_warp(t, u) + terrain_control_offset(t, p) * fade
 }
 
 // Y at a terrain point: seam-following base plus the sparse world control field.
@@ -1188,7 +1211,8 @@ terrain_set_node :: proc(t: ^Terrain, i: int, y: f32) {
 	if i < 0 || i >= terrain_node_count(t) {
 		return
 	}
-	t.controls[i].offset = y - t.controls[i].base_y
+	c := &t.controls[i]
+	c.offset = y - c.base_y - terrain_warp(t, c.u)
 }
 
 // Picking radius follows the world-space control spacing.
@@ -1208,7 +1232,7 @@ terrain_node_world :: proc(
 	}
 	out := make([]gfx.Vector3, len(t.controls), allocator)
 	for c, i in t.controls {
-		out[i] = {c.x, c.base_y + c.offset, c.z}
+		out[i] = {c.x, c.base_y + terrain_warp(t, c.u) + c.offset, c.z}
 	}
 	return out
 }

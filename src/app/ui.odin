@@ -594,6 +594,11 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 		mark_terrain_dirty(ed.doc)
 	}
 	t.blend_m = min(t.blend_m, t.reach_m)
+	// Lifts the ground away from the road, on top of the sculpt rather than in
+	// place of it: the nodes keep whatever the user dragged them to.
+	if ui.igSliderFloat("warp up", &t.warp_m, 0, 120, "%.0f m", ui.IM_SLIDER_NONE) {
+		mark_terrain_dirty(ed.doc)
+	}
 	// Spacing of the interior points the ground is triangulated from.
 	if ui.igSliderFloat("cell", &t.cell_m, 1, 32, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)

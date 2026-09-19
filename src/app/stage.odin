@@ -102,6 +102,7 @@ Stage_Terrain :: struct {
 	blend_m:  f32,
 	cell_m:   f32,
 	row_m:    f32,
+	warp_m:   f32, // a new key rather than a version bump: absent reads as 0
 	controls: []Stage_Terrain_Control,
 }
 
@@ -248,6 +249,7 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 			blend_m  = terrain.blend_m,
 			cell_m   = terrain.cell_m,
 			row_m    = terrain.row_m,
+			warp_m   = terrain.warp_m,
 			controls = controls,
 		}
 	}
@@ -410,6 +412,7 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		terrain.blend_m = max(t.blend_m, 0)
 		terrain.cell_m = max(t.cell_m, 1)
 		terrain.row_m = clamp(t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX)
+		terrain.warp_m = clamp(t.warp_m, 0, geo.TERRAIN_REACH_MAX)
 		geo.terrain_sculpt_load(terrain, saved)
 	}
 	{
