@@ -819,3 +819,29 @@ the_cliff_texture_keeps_its_density :: proc(t: ^testing.T) {
 	testing.expect(t, abs(sum/n - 1) < 0.1, "the texture must land at the density it asks for")
 	testing.expect(t, worst < 2.5, "no edge may stretch the texture over its own length")
 }
+
+// Growing the road takes its height from the node it grew from, never from the
+// cursor: the cursor only ever rides the world plane at y=0.
+@(test)
+grow_road_copies_the_parent_height :: proc(t: ^testing.T) {
+	sp: geo.Spline
+	defer delete(sp.points)
+	seed_spline(&sp)
+	tail := len(sp.points) - 1
+	sp.points[tail].xform.translation.y = 45
+
+	// From the selection, off the tail.
+	idx := grow_road(&sp, tail, {30, 0, 160})
+	testing.expect_value(t, sp.points[idx].xform.translation.y, f32(45))
+	testing.expect_value(t, sp.points[idx].xform.translation.x, f32(30))
+
+	// From the head, which grows backwards and renumbers the array.
+	sp.points[0].xform.translation.y = 12
+	head := grow_road(&sp, 0, {-30, 0, -20})
+	testing.expect_value(t, sp.points[head].xform.translation.y, f32(12))
+
+	// With nothing selected it appends to the tail and takes the tail's height.
+	want := sp.points[len(sp.points) - 1].xform.translation.y
+	app := grow_road(&sp, -1, {99, 0, 99})
+	testing.expect_value(t, sp.points[app].xform.translation.y, want)
+}

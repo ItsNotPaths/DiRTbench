@@ -266,22 +266,33 @@ doc_set_base :: proc(doc: ^Venue_Doc, base: string) {
 // Grow the road at `g`. With a point selected the new node is its child, which
 // is a branch when that point already had one. With no selection it appends to
 // the tail, the old behaviour.
+//
+// Only x and z come from `g`: the cursor that picked it rides the world plane at
+// y=0, so taking its height would drop every new node to the ground however high
+// the road had climbed. The height is the node grown from — the tail with
+// nothing selected — read before the extrude, which renumbers the array when it
+// grows off the head.
 grow_road :: proc(sp: ^geo.Spline, from: int, g: gfx.Vector3) -> int {
+	at := g
+	if tail := len(sp.points) - 1; tail >= 0 {
+		src := from >= 0 && from <= tail ? from : tail
+		at.y = sp.points[src].xform.translation.y
+	}
 	if from < 0 || from >= len(sp.points) {
-		return geo.append_point(sp, g)
+		return geo.append_point(sp, at)
 	}
 	idx := geo.extrude_point(sp, from)
 	if idx < 0 || idx >= len(sp.points) {
 		return idx
 	}
 	p := &sp.points[idx]
-	p.xform.translation = g
+	p.xform.translation = at
 	// Extruding the head grows backwards, so that node is aimed at its child
 	// instead of away from a parent it does not have.
 	if p.parent >= 0 {
-		p.xform.rotation = geo.heading_quat(sp.points[p.parent].xform.translation, g)
+		p.xform.rotation = geo.heading_quat(sp.points[p.parent].xform.translation, at)
 	} else if child := geo.first_child(sp^, idx); child >= 0 {
-		p.xform.rotation = geo.heading_quat(g, sp.points[child].xform.translation)
+		p.xform.rotation = geo.heading_quat(at, sp.points[child].xform.translation)
 	}
 	return idx
 }
