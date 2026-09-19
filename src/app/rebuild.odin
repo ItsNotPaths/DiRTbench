@@ -17,10 +17,26 @@ package main
 //
 // rebuild_geometry (document.odin) is still the synchronous path, and is still
 // what the CLI, the exporter and the tests use.
+//
+// --- the preview pass ---
+//
+// The ground is by far the slowest of the three, and nearly all of that is the
+// interior point set: its cost goes as 1/cell^2. So a stage whose ground takes
+// longer than PREVIEW_MIN_MS gets a coarse pass first, at PREVIEW_CELL times the
+// cell, landed as soon as it is ready; the full-resolution pass follows on the
+// next dispatch. Keep editing and you keep getting coarse ground, and the fine
+// one arrives once you stop.
+//
+// A preview is *only* what is drawn. It never touches the document's own field —
+// the exporter, the picking and the scatter all read that, and it stays at full
+// resolution throughout — and it never derives the sculpt controls, which belong
+// to the document's cell and not to this pass's. Nothing a preview produces can
+// reach a deployed route.
 
 import "core:slice"
 import "core:sync"
 import "core:thread"
+import "core:time"
 import "../geo"
 
 // One document's worker and the job in its hands. See handoff.odin for the
@@ -31,7 +47,19 @@ Rebuilder :: struct {
 	state:  Handoff_State,
 	stop:   bool,
 	job:    Rebuild_Job,
+	// The coarse pass's own field, kept across previews so a pure sculpt change
+	// re-evaluates its heights instead of rebuilding it. Never the document's.
+	preview_field: geo.Terrain_Field,
+	// How long the last full-resolution ground took. Nothing is previewed until
+	// one has been timed, so a stage that rebuilds quickly never flickers.
+	ground_ms:     f64,
 }
+
+// The coarse pass's cell, as a multiple of the document's. Three is about a
+// ninth of the interior points and still reads as the same landscape: the rim
+// is every ribbon sample either way, so the road edge is exact in both.
+PREVIEW_CELL :: f32(3)
+PREVIEW_MIN_MS :: 80.0
 
 // The rebuild, in and out. The input half is filled at dispatch, the output half
 // by the worker, and rebuild_land swaps the output into the document.
@@ -45,6 +73,9 @@ Rebuild_Job :: struct {
 	do_road:    bool,
 	do_ground:  bool,
 	do_veg:     bool,
+	// Coarse ground only: no controls derived, no scatter, and the field that
+	// comes back is the rebuilder's rather than the document's.
+	preview:    bool,
 	// The document's control set as it stood at dispatch. A document that has
 	// moved on from this — a load, a regenerate, a flatten — must not have the
 	// job's copy written back over it. See rebuild_land.
@@ -55,6 +86,7 @@ Rebuild_Job :: struct {
 	road_mesh:   geo.Tri_Mesh,
 	field:       geo.Terrain_Field, // moved in, moved back
 	ground_mesh: geo.Tri_Mesh,
+	ground_ms:   f64, // the full-resolution ground's cost, for the preview gate
 	veg:         []geo.Veg_Instance,
 	veg_mesh:    geo.Tri_Mesh,
 	card_kinds:  [geo.Billboard_Tier][]geo.Billboard_Kind, // borrowed; the venue art outlives the job
@@ -94,6 +126,11 @@ rebuild_join :: proc(doc: ^Venue_Doc) {
 // reading it.
 rebuild_stop :: proc(doc: ^Venue_Doc) {
 	r := &doc.rebuild
+	// Deferred, so a document that never grew a worker still frees it.
+	defer {
+		geo.terrain_field_delete(&r.preview_field)
+		r.preview_field = {}
+	}
 	if r.worker == nil {
 		return
 	}
@@ -105,19 +142,28 @@ rebuild_stop :: proc(doc: ^Venue_Doc) {
 	r.worker = nil
 }
 
+// The field a job trades with: a preview swaps the rebuilder's own, everything
+// else the document's. Dispatch takes from here and landing returns to here.
+job_field :: proc(doc: ^Venue_Doc, preview: bool) -> ^geo.Terrain_Field {
+	return preview ? &doc.rebuild.preview_field : &doc.terrain_field
+}
+
 // What is stale, copied, and handed over. The deferral rules are the
 // synchronous path's: the terrain waits out a point drag because the road has to
 // follow the gizmo live, and the scatter waits out any drag at all.
 rebuild_dispatch :: proc(doc: ^Venue_Doc, dragging, point_drag: bool) {
+	r := &doc.rebuild
 	ground := doc.dirty_terrain && !point_drag
-	veg := !dragging && (doc.veg_dirty || doc.veg_gen != doc.ribbon_gen || doc.dirty_road)
+	// Coarse first, and only once per edit: clearing `preview_due` while leaving
+	// `dirty_terrain` set is what makes the next dispatch the full-resolution one.
+	preview := ground && doc.terrain_preview_due && r.ground_ms >= PREVIEW_MIN_MS
+	veg := !preview && !dragging && (doc.veg_dirty || doc.veg_gen != doc.ribbon_gen || doc.dirty_road)
 	if !doc.dirty_road && !ground && !veg {
 		return
 	}
 	// The row_m clamp is the slider's, not the rebuild's, so it stays here.
 	geo.terrain_ensure(&doc.terrain, doc.ribbon, doc.roughness)
 
-	r := &doc.rebuild
 	r.job = Rebuild_Job {
 		spline     = spline_snapshot(doc.spline),
 		terrain    = terrain_snapshot(doc.terrain),
@@ -129,15 +175,21 @@ rebuild_dispatch :: proc(doc: ^Venue_Doc, dragging, point_drag: bool) {
 		do_road    = doc.dirty_road,
 		do_ground  = ground,
 		do_veg     = veg,
+		preview    = preview,
 		base_gen   = doc.terrain.controls_gen,
 		base_count = len(doc.terrain.controls),
-		field      = doc.terrain_field,
 	}
-	doc.terrain_field = {}
+	// A preview leaves the document's field where it is, so picking and the
+	// exporter keep reading full-resolution ground while the coarse one draws.
+	home := job_field(doc, preview)
+	r.job.field = home^
+	home^ = {}
 	// Cleared here, not on landing: an edit made while the job runs re-sets them,
 	// and the next tick dispatches again on top of the result.
 	doc.dirty_road = false
-	if ground {
+	if preview {
+		doc.terrain_preview_due = false
+	} else if ground {
 		doc.dirty_terrain = false
 	}
 	if veg {
@@ -161,11 +213,15 @@ rebuild_land :: proc(doc: ^Venue_Doc) -> (controls_moved: bool) {
 		geo.gpu_mesh_unload(&doc.road)
 		doc.road = geo.gpu_mesh_upload(j.road_mesh)
 	}
-	geo.terrain_field_delete(&doc.terrain_field)
-	doc.terrain_field = j.field
+	home := job_field(doc, j.preview)
+	geo.terrain_field_delete(home)
+	home^ = j.field
 
 	if j.do_ground {
-		controls_moved = rebuild_land_controls(doc, j)
+		if !j.preview {
+			controls_moved = rebuild_land_controls(doc, j)
+			r.ground_ms = j.ground_ms
+		}
 		geo.gpu_mesh_unload(&doc.terrain_mesh)
 		doc.terrain_mesh = geo.gpu_mesh_upload(j.ground_mesh)
 	}
@@ -278,7 +334,9 @@ rebuild_job_run :: proc(j: ^Rebuild_Job) {
 	}
 	if j.do_ground {
 		j.ground_mesh = geo.tri_mesh_make(context.allocator)
+		start := time.now()
 		rebuild_job_ground(j, ribbon)
+		j.ground_ms = time.duration_milliseconds(time.since(start))
 	}
 	if j.do_veg {
 		j.veg = geo.veg_generate(ribbon, &j.terrain, j.veg_params, j.roughness, context.allocator)
@@ -292,6 +350,10 @@ rebuild_job_run :: proc(j: ^Rebuild_Job) {
 }
 
 // The CPU half of geo.terrain_mesh_rebuild. Everything but the upload.
+//
+// A preview asks for the same build at a coarser interior spacing. Nothing else
+// scales with it: the sculpt offsets, the reach and the warp are read as they
+// stand, which is why the coarse ground sits where the fine one will.
 rebuild_job_ground :: proc(j: ^Rebuild_Job, ribbon: []geo.Cross_Section) {
 	if !j.terrain.enabled || len(ribbon) < 2 {
 		return
@@ -301,6 +363,9 @@ rebuild_job_ground :: proc(j: ^Rebuild_Job, ribbon: []geo.Cross_Section) {
 		return
 	}
 	ds := geo.sample_spacing(ribbon)
-	geo.terrain_field_ensure(&j.field, &j.terrain, ribbon, arc, ds, j.roughness, j.ribbon_gen)
+	geo.terrain_field_ensure(
+		&j.field, &j.terrain, ribbon, arc, ds, j.roughness, j.ribbon_gen,
+		cell_scale = j.preview ? PREVIEW_CELL : 1,
+	)
 	geo.build_terrain_mesh(&j.ground_mesh, &j.terrain, &j.field, ribbon, j.roughness)
 }

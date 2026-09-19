@@ -17,21 +17,15 @@ terrain_world_control_is_exact_at_its_handle :: proc(t: ^testing.T) {
 	testing.expect_value(t, geo.terrain_control_offset(&terrain, {21, 20}), f32(0))
 }
 
-// A branched road is sampled as one run per graph edge, laid end to end in one
-// ribbon. Every field query that walks the ribbon must stay inside its own run:
-// the sample after the last one of an edge belongs to a different edge somewhere
-// else on the map. This builds a T — a main road that climbs to a dead end, and a
-// level branch leaving it halfway — and checks the ground around both.
-@(test)
-branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer geo.spline_free(&sp)
-	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
-		{{0, 0, 0}, -1},
-		{{0, 0, 200}, 0},
-		{{0, 30, 400}, 1}, // main road, climbing to a dead end
-		{{200, 0, 200}, 1}, // branch, level, leaving the junction sideways
-	}
+@(private = "file")
+Seed :: struct {
+	pos:    gfx.Vector3,
+	parent: int,
+}
+
+// A road grown point by point, each heading set from its parent.
+@(private = "file")
+seeded_road :: proc(seeds: []Seed) -> (sp: geo.Spline) {
 	for s in seeds {
 		rot := gfx.Quaternion(1)
 		if s.parent >= 0 {
@@ -39,6 +33,23 @@ branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 		}
 		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
 	}
+	return
+}
+
+// A branched road is sampled as one run per graph edge, laid end to end in one
+// ribbon. Every field query that walks the ribbon must stay inside its own run:
+// the sample after the last one of an edge belongs to a different edge somewhere
+// else on the map. This builds a T — a main road that climbs to a dead end, and a
+// level branch leaving it halfway — and checks the ground around both.
+@(test)
+branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
+	sp := seeded_road({
+		{{0, 0, 0}, -1},
+		{{0, 0, 200}, 0},
+		{{0, 30, 400}, 1}, // main road, climbing to a dead end
+		{{200, 0, 200}, 1}, // branch, level, leaving the junction sideways
+	})
+	defer geo.spline_free(&sp)
 	testing.expect(t, !geo.is_linear(sp), "the T should not be classified as linear")
 
 	terrain := geo.TERRAIN_DEFAULTS
@@ -95,25 +106,17 @@ branched_road_terrain_stays_within_its_own_edge :: proc(t: ^testing.T) {
 // the middle of a straight.
 @(test)
 nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer geo.spline_free(&sp)
 	// Segment lengths and sampling as the editor uses them: the rim must come out
 	// denser than the corridor is wide, or Delaunay bridges the road instead of
 	// running its edges along the rim, and no centroid test can tell the two apart.
-	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
+	sp := seeded_road({
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},
 		{{0, 12, 160}, 1},  // main road climbs to a dead end
 		{{80, 0, 80}, 1},   // branch leaves the junction
 		{{140, 8, 130}, 3}, // and climbs to its own dead end
-	}
-	for s in seeds {
-		rot := gfx.Quaternion(1)
-		if s.parent >= 0 {
-			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
-		}
-		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
-	}
+	})
+	defer geo.spline_free(&sp)
 
 	terrain := geo.TERRAIN_DEFAULTS
 	terrain.enabled = true
@@ -170,21 +173,13 @@ nothing_lands_on_a_branched_road :: proc(t: ^testing.T) {
 // shows up between two legs needs.
 @(private = "file")
 branched_road :: proc() -> (sp: geo.Spline) {
-	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
+	return seeded_road({
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},
 		{{0, 0, 160}, 1},
 		{{40, 0, 120}, 1}, // a branch that runs back alongside the main road
 		{{40, 0, 40}, 3},
-	}
-	for s in seeds {
-		rot := gfx.Quaternion(1)
-		if s.parent >= 0 {
-			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
-		}
-		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
-	}
-	return
+	})
 }
 
 // A straight road of the same width: the control. It cannot overlap itself, so
@@ -384,21 +379,13 @@ vegetation_keeps_off_every_branch :: proc(t: ^testing.T) {
 // in its own corridor a few metres long at every node of a branched route.
 @(test)
 a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
-	sp: geo.Spline
-	defer geo.spline_free(&sp)
-	seeds := [?]struct{pos: gfx.Vector3, parent: int}{
+	sp := seeded_road({
 		{{0, 0, 0}, -1},
 		{{0, 0, 80}, 0},  // the junction
 		{{0, 0, 160}, 1}, // straight on
 		{{80, 0, 80}, 1}, // and off to the side
-	}
-	for s in seeds {
-		rot := gfx.Quaternion(1)
-		if s.parent >= 0 {
-			rot = geo.heading_quat(seeds[s.parent].pos, s.pos)
-		}
-		geo.spline_push(&sp, geo.make_point(s.pos, rot, geo.DEFAULT_WIDTH, parent = s.parent))
-	}
+	})
+	defer geo.spline_free(&sp)
 	terrain := geo.TERRAIN_DEFAULTS
 	terrain.enabled = true
 	defer geo.terrain_delete(&terrain)
@@ -425,6 +412,93 @@ a_junction_is_still_inside_the_road :: proc(t: ^testing.T) {
 		testing.expectf(t, pr.ok && pr.su < 0,
 			"%.1f m past the junction reads as %.2f m outside the road", dz, pr.su)
 	}
+}
+
+// hash_far is the interior pass's O(1) reject, so it must never say "nothing in
+// range" about a point that has a sample in range. Checked against a brute-force
+// nearest over a branched road, at every distance the field build cares about.
+@(test)
+hash_far_never_rejects_a_point_in_range :: proc(t: ^testing.T) {
+	sp := seeded_road({
+		{{0, 0, 0}, -1},
+		{{0, 0, 200}, 0},
+		{{0, 30, 400}, 1},
+		{{200, 0, 200}, 1},
+	})
+	defer geo.spline_free(&sp)
+	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
+	defer delete(ribbon)
+	arc := geo.ribbon_arc(ribbon, context.allocator)
+	defer delete(arc)
+	fs := geo.field_samples(ribbon, arc, geo.sample_spacing(ribbon), 0)
+	lo := [2]f32{max(f32), max(f32)}
+	hi := [2]f32{min(f32), min(f32)}
+	for s in fs {
+		lo[0] = min(lo[0], s.p[0]);  lo[1] = min(lo[1], s.p[1])
+		hi[0] = max(hi[0], s.p[0]);  hi[1] = max(hi[1], s.p[1])
+	}
+	hash := geo.hash_build(fs, lo, hi, 8)
+
+	// Well outside the road's own extent on every side, so the clamped border
+	// cells are covered too.
+	rejected := 0
+	for z := f32(-300); z <= 700; z += 7 {
+		for x := f32(-300); x <= 500; x += 7 {
+			p := [2]f32{x, z}
+			nearest := max(f32)
+			for s in fs {
+				nearest = min(nearest, math.sqrt(geo.dist2(p, s.p)))
+			}
+			for d in ([]f32{0, 5, 50, 200, 264}) {
+				if geo.hash_far(hash, p, d) {
+					rejected += 1
+					testing.expectf(t, nearest > d,
+						"rejected (%.0f, %.0f) at d=%.0f with a sample %.2f m away", x, z, d, nearest)
+				}
+			}
+		}
+	}
+	// The bound must also fire, or an always-false hash_far passes vacuously.
+	testing.expect(t, rejected > 0, "hash_far rejected nothing over the whole sweep")
+}
+
+// The coarse preview pass must be visible only. It reads the sculpt controls and
+// leaves them exactly as it found them, because they are derived at the
+// document's own cell and renumbering them at a coarser one reseats every offset.
+@(test)
+preview_field_leaves_the_sculpt_controls_alone :: proc(t: ^testing.T) {
+	field: geo.Terrain_Field
+	defer geo.terrain_field_delete(&field)
+	doc, ribbon := sculpt_doc(&field)
+	defer doc_delete(&doc)
+	defer delete(ribbon)
+
+	for &c, i in doc.terrain.controls {
+		c.offset = f32(i % 5) - 2
+	}
+	before := slice.clone(doc.terrain.controls[:])
+	defer delete(before)
+	gen := doc.terrain.controls_gen
+	testing.expect(t, len(before) > 0, "the fixture derived no controls")
+
+	coarse := doc.terrain
+	preview: geo.Terrain_Field
+	defer geo.terrain_field_delete(&preview)
+	arc := geo.ribbon_arc(ribbon, context.allocator)
+	defer delete(arc)
+	geo.terrain_field_ensure(
+		&preview, &coarse, ribbon, arc, geo.sample_spacing(ribbon), 0, 1,
+		cell_scale = PREVIEW_CELL,
+	)
+
+	testing.expect_value(t, coarse.controls_gen, gen)
+	testing.expect_value(t, len(coarse.controls), len(before))
+	for c, i in coarse.controls {
+		testing.expectf(t, c == before[i], "control %d moved under the preview pass", i)
+	}
+	// And it is genuinely a cheaper field, or the pass buys nothing.
+	testing.expectf(t, len(preview.pts) < len(field.pts),
+		"coarse field has %d points against the full %d", len(preview.pts), len(field.pts))
 }
 
 // --- sculpt persistence -------------------------------------------------------

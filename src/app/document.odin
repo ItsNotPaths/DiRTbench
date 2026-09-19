@@ -67,6 +67,8 @@ Venue_Doc :: struct {
 	// Two flags, not one: the road is cheap to rebuild and the terrain is not.
 	dirty_road:    bool,
 	dirty_terrain: bool,
+	// A coarse ground has not been shown for this edit yet. See rebuild.odin.
+	terrain_preview_due: bool,
 	// Every change to a saved field ticks this. The dirty flags above cannot
 	// stand in for it: a rebuild clears them every frame. An edit that does not
 	// call mark_dirty must call mark_edited.
@@ -134,6 +136,7 @@ Status :: struct {
 mark_dirty :: proc(doc: ^Venue_Doc) {
 	doc.dirty_road = true
 	doc.dirty_terrain = true
+	doc.terrain_preview_due = true
 	doc.veg_dirty = true
 	doc.edits += 1
 }
@@ -174,6 +177,7 @@ doc_saved :: proc(doc: ^Venue_Doc) {
 // ribbon_gen it keys on has not ticked, hence the explicit flag.
 mark_terrain_dirty :: proc(doc: ^Venue_Doc) {
 	doc.dirty_terrain = true
+	doc.terrain_preview_due = true
 	doc.veg_dirty = true
 	doc.edits += 1
 }

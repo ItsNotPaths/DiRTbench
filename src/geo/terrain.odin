@@ -340,6 +340,9 @@ Sample_Hash :: struct {
 	nx, nz: int,
 	starts: []int, // nx*nz + 1, prefix-summed
 	items:  []int,
+	// Cells from here to the nearest cell holding a sample. What makes hash_far
+	// an array read rather than a ring walk.
+	away:   []i32,
 }
 
 hash_coord :: proc(h: Sample_Hash, p: [2]f32) -> (int, int) {
@@ -377,7 +380,54 @@ hash_build :: proc(
 		h.items[h.starts[ci] + cursor[ci]] = i
 		cursor[ci] += 1
 	}
+	h.away = hash_away(h, allocator)
 	return h
+}
+
+// Chessboard distance in cells to the nearest occupied cell, in two sweeps.
+//
+// Chessboard rather than Manhattan: this is read as a *lower bound* on a world
+// distance, and Manhattan overstates it, which would reject ground that is
+// really in range.
+hash_away :: proc(h: Sample_Hash, allocator := context.temp_allocator) -> []i32 {
+	FAR :: i32(1 << 20)
+	d := make([]i32, h.nx * h.nz, allocator)
+	for ci in 0 ..< len(d) {
+		d[ci] = h.starts[ci + 1] > h.starts[ci] ? 0 : FAR
+	}
+	sweep :: proc(h: Sample_Hash, d: []i32, gx, gz: int, nbrs: [4][2]int) {
+		ci := gz * h.nx + gx
+		for o in nbrs {
+			ox, oz := gx + o[0], gz + o[1]
+			if ox < 0 || ox >= h.nx || oz < 0 || oz >= h.nz {
+				continue
+			}
+			d[ci] = min(d[ci], d[oz * h.nx + ox] + 1)
+		}
+	}
+	for gz in 0 ..< h.nz {
+		for gx in 0 ..< h.nx {
+			sweep(h, d, gx, gz, {{-1, -1}, {0, -1}, {1, -1}, {-1, 0}})
+		}
+	}
+	for gz := h.nz - 1; gz >= 0; gz -= 1 {
+		for gx := h.nx - 1; gx >= 0; gx -= 1 {
+			sweep(h, d, gx, gz, {{1, 0}, {-1, 1}, {0, 1}, {1, 1}})
+		}
+	}
+	return d
+}
+
+// True when no sample can be within `d` of `p`. Conservative by construction: a
+// cell that might hold one in range always answers false, so this only ever
+// saves a ring walk that was going to come back empty.
+//
+// Two cells `k` apart in the chessboard metric hold points at least `(k-1)*cell`
+// apart, and hash_coord clamps a point outside the grid onto the border cell,
+// which can only understate how far out it really is.
+hash_far :: proc(h: Sample_Hash, p: [2]f32, d: f32) -> bool {
+	gx, gz := hash_coord(h, p)
+	return f32(h.away[gz * h.nx + gx] - 1) * h.cell > d
 }
 
 dist2 :: proc(a, b: [2]f32) -> f32 {
@@ -650,6 +700,7 @@ Terrain_Sig :: struct {
 	reach:      f32,
 	cell:       f32,
 	rough:      f32,
+	cell_scale: f32,
 }
 
 Terrain_Field :: struct {
@@ -806,6 +857,7 @@ terrain_field_build :: proc(
 	arc: []f32,
 	ds: []f32,
 	roughness: f32,
+	cell_scale := f32(1),
 ) {
 	clear(&f.pts)
 	clear(&f.tris)
@@ -822,9 +874,6 @@ terrain_field_build :: proc(
 		lo[0] = min(lo[0], s.p[0]);  lo[1] = min(lo[1], s.p[1])
 		hi[0] = max(hi[0], s.p[0]);  hi[1] = max(hi[1], s.p[1])
 	}
-	hash := hash_build(fs, lo, hi, max(t.cell_m * 2, 8))
-	near_other := terrain_near_other(t, fs, hash)
-
 	limit := t.reach_m + 64
 
 	// Grow the cell rather than allocate without bound on a huge stage.
@@ -838,10 +887,32 @@ terrain_field_build :: proc(
 		}
 		cell *= 2
 	}
+	// After the growth, not before it: a long stage is already at whatever cell
+	// the point budget allows, and a preview asked for a multiple of the cell
+	// actually in use, not of the one that was asked for.
+	cell *= cell_scale
 	margin := cell * TERRAIN_RIM_MARGIN
+
+	// Every hash answer is exact whatever its cell, so the cell is sized by
+	// measurement alone. The floor is the load-bearing half: a ring walk pays
+	// per cell visited, scanning one big cell's run of samples is far cheaper,
+	// and 32 m is at or within a few per cent of best on stages from 3 to 16 km.
+	hash := hash_build(fs, lo, hi, max(cell * 2, 32))
+	near_other := terrain_near_other(t, fs, hash)
 
 	seen := make(Dedupe, 1 << 14, context.temp_allocator)
 	defer delete_map(seen)
+
+	// A candidate past this from every centreline sample is past `reach` from
+	// every seam, because no seam sits further out than `max_e`. Answering that
+	// off the cell grid is what keeps the interior pass off the ring walk: most
+	// of a stage's bounding box is nowhere near its road, and rejecting one of
+	// those points the long way costs a search out to `limit` that finds nothing.
+	max_e: f32
+	for s in fs {
+		max_e = max(max_e, abs(s.e[0]), abs(s.e[1]))
+	}
+	far := t.reach_m + max_e
 
 	add_interior := proc(
 		f: ^Terrain_Field,
@@ -850,8 +921,11 @@ terrain_field_build :: proc(
 		fs: []Field_Sample,
 		near_other: []bool,
 		p: [2]f32,
-		reach, margin, limit: f32,
+		reach, margin, limit, far: f32,
 	) {
+		if hash_far(hash, p, far) {
+			return
+		}
 		pr := field_probe(hash, fs, near_other, p, limit)
 		if !pr.ok || pr.su < margin || pr.su > reach {
 			return
@@ -893,7 +967,7 @@ terrain_field_build :: proc(
 				seam := verge_seam(ribbon[i], side, roughness)
 				o := terrain_outward(ribbon[i], side)
 				p := [2]f32{seam.x + o.x * u, seam.z + o.z * u}
-				add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
+				add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit, far)
 			}
 		}
 	}
@@ -907,7 +981,7 @@ terrain_field_build :: proc(
 			seam := verge_seam(ribbon[i], side, roughness)
 			o := terrain_outward(ribbon[i], side)
 			p := [2]f32{seam.x + o.x * t.reach_m, seam.z + o.z * t.reach_m}
-			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
+			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit, far)
 		}
 	}
 
@@ -920,7 +994,7 @@ terrain_field_build :: proc(
 	for iz in 0 ..= nz {
 		for ix in 0 ..= nx {
 			p := [2]f32{gx0 + f32(ix) * cell, gz0 + f32(iz) * cell}
-			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit)
+			add_interior(f, &seen, hash, fs, near_other, p, t.reach_m, margin, limit, far)
 		}
 	}
 
@@ -981,6 +1055,12 @@ terrain_field_build :: proc(
 	}
 }
 
+// `cell_scale` above 1 builds the same field at a coarser interior spacing: the
+// rim is still every ribbon sample, so the road edge is identical, and only the
+// ground between is thinner. That is the editor's preview pass (rebuild.odin),
+// and it is the one thing that may not derive the sculpt controls — they belong
+// to the document's own cell, and re-deriving them at a coarser one renumbers
+// the whole set and re-seats every offset by nearest neighbour.
 terrain_field_ensure :: proc(
 	f: ^Terrain_Field,
 	t: ^Terrain,
@@ -989,21 +1069,23 @@ terrain_field_ensure :: proc(
 	ds: []f32,
 	roughness: f32,
 	ribbon_gen: u64,
+	cell_scale := f32(1),
 ) {
 	sig := Terrain_Sig {
 		ribbon_gen = ribbon_gen,
 		reach      = t.reach_m,
 		cell       = t.cell_m,
 		rough      = roughness,
+		cell_scale = cell_scale,
 	}
-	if f.valid && f.sig == sig {
+	if !f.valid || f.sig != sig {
+		terrain_field_build(f, t, ribbon, arc, ds, roughness, cell_scale)
+		f.sig = sig
+		f.valid = true
+	}
+	if cell_scale == 1 {
 		terrain_controls_ensure(t, f)
-		return
 	}
-	terrain_field_build(f, t, ribbon, arc, ds, roughness)
-	f.sig = sig
-	f.valid = true
-	terrain_controls_ensure(t, f)
 }
 
 terrain_control_offset :: proc(t: ^Terrain, p: [2]f32) -> f32 {
