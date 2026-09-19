@@ -4,14 +4,14 @@ package main
 //
 // Everything here writes into the installed game: it hardlinks the base venue's
 // art into a directory of our own, clones its registration rows into
-// database.bin, and keeps a backup of every file it overwrites. venue.odin owns
-// the project on our side of that line and never reaches across it.
+// database.bin, and keeps a one-time stock backup of the registration files it
+// overwrites. venue.odin owns the project on our side of that line and never
+// reaches across it.
 //
-// Two rules the whole file is built around. **Every write is backed up once**
-// (`ensure_backup`), so the first deployment of a venue is the only one that
-// records what stock looked like. And **a revert only runs in the order it
-// staged in** (`revert_order_ok`), because a registration restored before its
-// files are gone is a menu entry pointing at nothing.
+// Two rules the whole file is built around. **Stock is copied aside once**
+// (`ensure_stock_backup`), before the first write to a registration file. And
+// **a revert subtracts**: it takes one venue's rows out of the live database
+// rather than restoring a snapshot, so reverts need no order.
 
 import "core:fmt"
 import "core:mem"
@@ -220,7 +220,7 @@ bytes_equal :: proc(a, b: []u8) -> bool {
 
 @(private = "file")
 registration_paths :: proc(root: string) -> [3]string {
-	database, _ := filepath.join({root, "database/database.bin"}, context.temp_allocator)
+	database, _ := filepath.join({root, d3.DATABASE_SUBPATH}, context.temp_allocator)
 	eng, _ := filepath.join(
 		{root, "language/language_extensions_eng.lng"},
 		context.temp_allocator,
@@ -232,53 +232,52 @@ registration_paths :: proc(root: string) -> [3]string {
 	return {database, eng, use}
 }
 
+// One copy of stock, taken before the first write to a registration file and
+// never again. Reverts do not read it; it exists so the install can be put back
+// by hand. An older `.rallysculpt-stock` counts.
 @(private = "file")
-ensure_backup :: proc(path, suffix: string) -> (backup: string, msg: string, ok: bool) {
-	backup = fmt.tprintf("%s%s", path, suffix)
+ensure_stock_backup :: proc(path: string) -> (msg: string, ok: bool) {
+	for suffix in ([]string{".rallysculpt-stock", ".dirtbench-stock"}) {
+		if os.is_file(fmt.tprintf("%s%s", path, suffix)) {
+			return "", true
+		}
+	}
 	live, read_err := os.read_entire_file(path, context.temp_allocator)
 	if read_err != nil {
-		return "", fmt.tprintf("could not read %s: %v", path, read_err), false
+		return fmt.tprintf("could not read %s: %v", path, read_err), false
 	}
-	if os.exists(backup) {
-		saved, backup_err := os.read_entire_file(backup, context.temp_allocator)
-		if backup_err != nil || !bytes_equal(live, saved) {
-			return "", fmt.tprintf("existing backup differs from live file: %s", backup), false
-		}
-		return backup, "", true
-	}
+	backup := fmt.tprintf("%s.dirtbench-stock", path)
 	if copy_err := os.copy_file(backup, path); copy_err != nil {
-		return "", fmt.tprintf("could not back up %s: %v", path, copy_err), false
+		return fmt.tprintf("could not back up %s: %v", path, copy_err), false
 	}
 	saved, backup_err := os.read_entire_file(backup, context.temp_allocator)
 	if backup_err != nil || !bytes_equal(live, saved) {
-		return "", fmt.tprintf("backup verification failed: %s", backup), false
+		return fmt.tprintf("backup verification failed: %s", backup), false
 	}
-	return backup, "", true
+	return "", true
 }
 
 @(private = "file")
-restore_registration_files :: proc(paths, backups: [3]string) -> (msg: string, ok: bool) {
-	saved: [3][]u8
-	for backup, i in backups {
-		read_err: os.Error
-		saved[i], read_err = os.read_entire_file(backup, context.temp_allocator)
-		if read_err != nil {
-			return fmt.tprintf("could not read %s: %v", backup, read_err), false
-		}
+write_registration_file :: proc(path: string, data: []u8) -> (msg: string, ok: bool) {
+	if write_msg, written := d3.atomic_write_file(path, data); !written {
+		return write_msg, false
 	}
+	actual, verify_err := os.read_entire_file(path, context.temp_allocator)
+	if verify_err != nil || !bytes_equal(actual, data) {
+		return fmt.tprintf("write verification failed: %s", path), false
+	}
+	return "", true
+}
 
+// Every file is attempted even after one fails, because this is also the
+// rollback path: leaving the rest half-written would be worse than the error.
+@(private = "file")
+write_registration_files :: proc(paths: [3]string, contents: [3][]u8) -> (msg: string, ok: bool) {
 	first_error := ""
 	for path, i in paths {
-		if write_msg, written := d3.atomic_write_file(path, saved[i]); !written {
+		if write_msg, written := write_registration_file(path, contents[i]); !written {
 			if first_error == "" {
 				first_error = write_msg
-			}
-			continue
-		}
-		actual, verify_err := os.read_entire_file(path, context.temp_allocator)
-		if verify_err != nil || !bytes_equal(actual, saved[i]) {
-			if first_error == "" {
-				first_error = fmt.tprintf("restore verification failed: %s", path)
 			}
 		}
 	}
@@ -440,18 +439,21 @@ venue_deploy_preflight :: proc(vs: ^Install_Scan, p: Venue) -> (string, bool) {
 	), true
 }
 
+// `previous` is what the three files held before this deployment: a rollback
+// for this write only, held in memory so nothing outside this call can depend
+// on it.
 @(private = "file")
 publish_venue_deployment :: proc(
 	staged, target: string,
-	paths, backups: [3]string,
-	replacements: [3][]u8,
+	paths: [3]string,
+	previous, replacements: [3][]u8,
 ) -> (string, bool) {
 	if publish_err := os.rename(staged, target); publish_err != nil {
 		return fmt.tprintf("could not publish %s: %v", target, publish_err), false
 	}
 	for path, i in paths {
-		if write_msg, written := d3.atomic_write_file(path, replacements[i]); !written {
-			rollback_msg, rolled_back := restore_registration_files(paths, backups)
+		if write_msg, written := write_registration_file(path, replacements[i]); !written {
+			rollback_msg, rolled_back := write_registration_files(paths, previous)
 			_ = os.remove_all(target)
 			if !rolled_back {
 				return fmt.tprintf(
@@ -481,12 +483,15 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		deployment.registration.eng,
 		deployment.registration.use,
 	}
-	backups: [3]string
-	backup_suffix := fmt.tprintf(".dirtbench-%s", venue_dir(p))
+	previous: [3][]u8
 	for path, i in paths {
-		backups[i], msg, ok = ensure_backup(path, backup_suffix)
-		if !ok {
+		if msg, ok = ensure_stock_backup(path); !ok {
 			return
+		}
+		read_err: os.Error
+		previous[i], read_err = os.read_entire_file(path, context.temp_allocator)
+		if read_err != nil {
+			return fmt.tprintf("could not read %s: %v", path, read_err), false
 		}
 	}
 
@@ -509,7 +514,7 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		staged,
 		deployment.target,
 		paths,
-		backups,
+		previous,
 		replacements,
 	)
 	published = !os.exists(staged)
@@ -519,29 +524,8 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	return fmt.tprintf("%s\ndeployed", venue_deployment_text(deployment)), true
 }
 
-@(private = "file")
-revert_order_ok :: proc(vs: ^Install_Scan, p: Venue, database_backup: []u8) -> (string, bool) {
-	projects := venues_list(context.temp_allocator)
-	for other in projects {
-		if other.id == p.id {
-			continue
-		}
-		other_dir := venue_dir(other)
-		installed, found := d3.install_venue(&vs.install, other_dir, other_dir)
-		if !found || !d3.venue_playable(installed^) {
-			continue
-		}
-		if !d3.database_bytes_have_venue(database_backup, other_dir, other_dir) {
-			return fmt.tprintf(
-				"revert %s before %s; deployments must be reverted newest first",
-				other.name,
-				p.name,
-			), false
-		}
-	}
-	return "", true
-}
-
+// Take this venue's rows out of the live database and delete its deployed
+// directory. Order-free: nothing another venue registered is touched.
 venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	if !vs.found {
 		return install_scan_status_text(vs), false
@@ -556,31 +540,36 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	}
 
 	paths := registration_paths(vs.install.root)
-	backups: [3]string
-	for path, i in paths {
-		backups[i] = fmt.tprintf("%s.dirtbench-%s", path, dir)
-		if !os.is_file(backups[i]) {
-			return fmt.tprintf("missing verified backup: %s", backups[i]), false
-		}
-	}
-	database_backup, read_err := os.read_entire_file(backups[0], context.temp_allocator)
-	if read_err != nil {
-		return fmt.tprintf("could not read %s: %v", backups[0], read_err), false
-	}
-	if msg, ok = revert_order_ok(vs, p, database_backup); !ok {
+	if msg, ok = ensure_stock_backup(paths[0]); !ok {
 		return
 	}
-	if msg, ok = restore_registration_files(paths, backups); !ok {
+	replacement, summary, prepare_msg, prepared := d3.prepare_unregistration(
+		vs.install.root,
+		dir,
+		dir,
+		context.temp_allocator,
+	)
+	if !prepared {
+		return prepare_msg, false
+	}
+	// Registration first: files left behind by a failed delete are invisible to
+	// the game, a menu entry pointing at nothing is not.
+	if msg, ok = write_registration_file(paths[0], replacement); !ok {
 		return
 	}
 	if remove_err := os.remove_all(target); remove_err != nil {
 		return fmt.tprintf(
-			"registration restored but could not remove %s: %v",
+			"registration removed but could not delete %s: %v",
 			target,
 			remove_err,
 		), false
 	}
-	return fmt.tprintf("reverted %s; document remains at %s", p.name, venue_path(dir)), true
+	return fmt.tprintf(
+		"%s\nreverted %s; document remains at %s",
+		summary,
+		p.name,
+		venue_path(dir),
+	), true
 }
 
 venue_deploy_preflight_headless :: proc(key: string) -> bool {
