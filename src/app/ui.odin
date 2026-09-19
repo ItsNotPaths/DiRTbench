@@ -306,6 +306,7 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 	}
 
 	draw_pins_section(ed, route)
+	draw_setup_section(ed, route)
 
 	// The gates are drawn on this stage's ribbon, but their numbers are the
 	// venue's, so a change here moves every stage's gates.
@@ -315,7 +316,8 @@ draw_stage_inspector :: proc(ed: ^Editor) {
 
 	ui.igSeparatorText("Controls")
 	ui.im_text("point at the road and press S for the start line")
-	ui.im_text("F sets the finish, P drops a pin. The road is read-only here.")
+	ui.im_text("F sets the finish, P drops a pin, U the setup pin.")
+	ui.im_text("The road is read-only here.")
 	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")
 }
 
@@ -340,6 +342,23 @@ draw_pins_section :: proc(ed: ^Editor, route: ^Venue_Route) {
 		ordered_remove(&route.pins, remove)
 		mark_edited(ed.doc)
 		set_status(&ed.status, "pin removed", true)
+	}
+}
+
+// Where the setup screen stands. Without one the game puts it on the start
+// grid, which is what every stage did before there was a pin for it.
+draw_setup_section :: proc(ed: ^Editor, route: ^Venue_Route) {
+	ui.igSeparatorText("Setup pin")
+	if !geo.marker_valid(ed.doc.spline, route.setup) {
+		ui.im_text_colored(DIM_COL, "none — the setup screen sits on the start grid")
+		return
+	}
+	ui.im_text(fmt.ctprintf("edge %d-%d", route.setup.from, route.setup.to))
+	ui.im_same_line()
+	if ui.im_button("Remove###setup") {
+		route.setup = {from = -1, to = -1}
+		mark_edited(ed.doc)
+		set_status(&ed.status, "setup pin removed", true)
 	}
 }
 

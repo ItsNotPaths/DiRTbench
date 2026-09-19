@@ -108,6 +108,12 @@ pick_ribbon :: proc(
 
 // --- Rendering --------------------------------------------------------------
 
+// What each kind of marker is, by colour, wherever it is drawn or named.
+START_COL :: gfx.Color{110, 255, 140, 255}
+FINISH_COL :: gfx.Color{255, 110, 110, 255}
+PIN_COL :: gfx.Color{120, 190, 255, 255}
+SETUP_COL :: gfx.Color{200, 130, 255, 255}
+
 draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 	for i in 0 ..< len(ribbon) - 1 {
 		if ribbon[i + 1].break_before { continue }
@@ -115,7 +121,15 @@ draw_centreline :: proc(ribbon: []geo.Cross_Section) {
 	}
 }
 
-// A start or finish line, drawn across the road where it sits.
+// How a marker's diamond floats over the road it names: the gem's half-width
+// and half-height, and how far its point sits above the centre line.
+MARKER_GEM_R :: f32(5.5)
+MARKER_GEM_H :: f32(8.5)
+MARKER_GEM_LIFT :: f32(12)
+
+// A start, finish, pin or setup marker, drawn across the road where it sits
+// with a coloured diamond above it. The line says exactly where; the diamond is
+// what carries across a venue.
 draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: gfx.Color) {
 	at, on_road := geo.marker_resolve(sp, m)
 	if !on_road {
@@ -126,6 +140,11 @@ draw_marker :: proc(sp: geo.Spline, m: geo.Road_Marker, col: gfx.Color) {
 	gfx.DrawLine3D(l, r, col)
 	gfx.DrawLine3D(l, l + cs.up * 4, col)
 	gfx.DrawLine3D(r, r + cs.up * 4, col)
+	// Stem first, so the gem reads as standing over this stretch and not as
+	// floating loose over the venue.
+	tip := cs.pos + cs.up * MARKER_GEM_LIFT
+	gfx.DrawLine3D(cs.pos, tip, col)
+	gfx.DrawDiamond(tip + {0, MARKER_GEM_H, 0}, MARKER_GEM_R, MARKER_GEM_H, col)
 }
 
 // `weights` is the live road brush's hold on each point, or empty. A point it
@@ -216,11 +235,12 @@ draw_stage_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
 	draw_world(ed.doc, ed.wireframe)
 	if route := selected_route(ed); route != nil {
-		draw_marker(ed.doc.spline, route.start, {110, 255, 140, 255})
-		draw_marker(ed.doc.spline, route.finish, {255, 110, 110, 255})
+		draw_marker(ed.doc.spline, route.start, START_COL)
+		draw_marker(ed.doc.spline, route.finish, FINISH_COL)
 		for pin in route.pins {
-			draw_marker(ed.doc.spline, pin, {120, 190, 255, 255})
+			draw_marker(ed.doc.spline, pin, PIN_COL)
 		}
+		draw_marker(ed.doc.spline, route.setup, SETUP_COL)
 	}
 	if ed.stage.state == .Ready {
 		draw_ribbon_edges(ed.stage.ribbon, {255, 235, 120, 255})

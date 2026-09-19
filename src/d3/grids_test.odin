@@ -42,7 +42,7 @@ grids_test_transform :: proc(node: ^Pssg_Node) -> (rows: [4][3]f32, ok: bool) {
 grids_place_the_start_on_the_route_facing_travel :: proc(t: ^testing.T) {
 	line := grids_test_line()
 	markers := []Progress_Marker{{.Start,50},{.Checkpoint,140},{.Finish,230}}
-	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), context.temp_allocator)
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), nil, context.temp_allocator)
 	testing.expect(t, ok, msg)
 
 	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
@@ -67,7 +67,7 @@ grids_place_the_start_on_the_route_facing_travel :: proc(t: ^testing.T) {
 grids_slots_trail_the_start_and_follow_the_bend :: proc(t: ^testing.T) {
 	line := grids_test_line()
 	markers := []Progress_Marker{{.Start,120},{.Checkpoint,170},{.Finish,220}}
-	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), context.temp_allocator)
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), nil, context.temp_allocator)
 	testing.expect(t, ok, msg)
 	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
 	testing.expect(t, read_ok, read_msg)
@@ -107,4 +107,45 @@ grids_slots_trail_the_start_and_follow_the_bend :: proc(t: ^testing.T) {
 		testing.expect(t, math.abs(math.sqrt(dx*dx+dy*dy+dz*dz)-D3_GRID_SLOT_PITCH) < 0.5)
 		testing.expect(t, math.abs(origins[i][1]-D3_GRID_SLOT_LIFT) < 0.01)
 	}
+}
+
+// Without a setup pin the service node sits on the standing grid, which is
+// where it was before there was a pin for it.
+@(test)
+grids_put_the_service_node_on_the_grid_by_default :: proc(t: ^testing.T) {
+	line := grids_test_line()
+	markers := []Progress_Marker{{.Start,50},{.Checkpoint,140},{.Finish,230}}
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), nil, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+
+	grid, _ := grids_test_transform(grids_test_node(&file, "grid_start_standing_route_0"))
+	service, got := grids_test_transform(grids_test_node(&file, "grid_service_route_0"))
+	testing.expect(t, got)
+	testing.expect_value(t, service, grid)
+}
+
+// With one, it stands there instead, facing the road it was pinned to.
+@(test)
+grids_put_the_service_node_on_the_setup_pin :: proc(t: ^testing.T) {
+	line := grids_test_line()
+	markers := []Progress_Marker{{.Start,50},{.Checkpoint,140},{.Finish,230}}
+	pin := Route_Sample{Centre={-30,7,60}, Left={-30,7,64}, Right={-30,7,56}}
+	data, msg, ok := d3_grids_build(line, markers, d3_test_profile(), pin, context.temp_allocator)
+	testing.expect(t, ok, msg); if !ok { return }
+	file, read_msg, read_ok := pssg_read(data, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+
+	rows, got := grids_test_transform(grids_test_node(&file, "grid_service_route_0"))
+	testing.expect(t, got); if !got { return }
+	testing.expect(t, math.abs(rows[3][0]-pin.Centre[0]) < 0.01)
+	testing.expect(t, math.abs(rows[3][2]-pin.Centre[2]) < 0.01)
+	testing.expect(t, math.abs(rows[3][1]-(pin.Centre[1]+D3_GRID_CLEARANCE)) < 0.01)
+	// left->right runs down -Z here, so the node's own lateral axis does too.
+	testing.expect(t, rows[0][2] < -0.99)
+	// The standing grid is untouched by the pin.
+	grid, _ := grids_test_transform(grids_test_node(&file, "grid_start_standing_route_0"))
+	station := d3_station_at(line, 50-8)
+	testing.expect(t, math.abs(grid[3][0]-station.centre[0]) < 0.01)
 }

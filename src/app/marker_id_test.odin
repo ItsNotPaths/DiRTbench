@@ -343,3 +343,28 @@ reverse_compiles_the_same_stage :: proc(t: ^testing.T) {
 		)
 	}
 }
+
+// The setup pin is a marker like the rest: turning the road round has to turn
+// it too, or the setup screen is left standing on a road that no longer runs
+// that way.
+@(test)
+reverse_turns_the_setup_pin_with_the_road :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	seed_spline(&doc.spline)
+	routes_add(&doc.routes, &doc.next_route)
+	r := &doc.routes[0]
+	r.setup = geo.marker_of(doc.spline, {from = 1, to = 2, t = 0.5})
+	was, had := marker_pos(doc.spline, r.setup)
+	testing.expect(t, had)
+
+	geo.reverse_spline(&doc.spline)
+	routes_reverse(doc.routes[:])
+
+	now, ok := marker_pos(doc.spline, r.setup)
+	testing.expect(t, ok, "the setup pin lost its road when the road turned round")
+	testing.expect(
+		t, gfx.Vector3Distance(was, now) < 0.01,
+		"the turned setup pin is not on the same spot of road",
+	)
+}

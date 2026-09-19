@@ -62,6 +62,9 @@ Export_Job :: struct {
 	// still carries the donor's hardlinked copy would otherwise put the base
 	// venue's grass, on the base venue's ground, into ours.
 	Ground_Cover: bool,
+	// Where the setup screen's service grid stands, from the stage's setup pin.
+	// Unset puts it on the start grid, which is where it always was.
+	Service:      Maybe(Route_Sample),
 }
 
 // The names the editor calls this package by.

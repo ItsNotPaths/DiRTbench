@@ -90,6 +90,10 @@ Venue_Route :: struct {
 	// one is how a longer way is asked for. Not control points — a pin says
 	// which road, not where a point goes.
 	pins:   [dynamic]geo.Road_Marker,
+	// Where the setup screen stands: the pre-race service area, with the car on
+	// show and the tuning menu over it. Optional — unplaced, the export leaves
+	// it on the start grid, which is where it always used to be.
+	setup:  geo.Road_Marker,
 }
 
 // The route ids and menu names, in order, as the registration and the staging
@@ -566,6 +570,7 @@ venue_create :: proc(
 		name   = strings.clone(shown, allocator),
 		start  = {from = -1, to = -1},
 		finish = {from = -1, to = -1},
+		setup  = {from = -1, to = -1},
 	}
 	doc := doc_defaults()
 	defer doc_delete(&doc)
@@ -690,6 +695,7 @@ routes_add :: proc(routes: ^[dynamic]Venue_Route, next: ^int, allocator := conte
 		name   = strings.clone(fmt.tprintf("STAGE %d", len(routes) + 1), allocator),
 		start  = {from = -1, to = -1},
 		finish = {from = -1, to = -1},
+		setup  = {from = -1, to = -1},
 	})
 }
 
@@ -710,6 +716,7 @@ routes_follow_split :: proc(routes: []Venue_Route, split: geo.Edge_Split) {
 	for &r in routes {
 		geo.marker_follow(&r.start, split)
 		geo.marker_follow(&r.finish, split)
+		geo.marker_follow(&r.setup, split)
 		for &p in r.pins {
 			geo.marker_follow(&p, split)
 		}
@@ -723,6 +730,7 @@ routes_reverse :: proc(routes: []Venue_Route) {
 	for &r in routes {
 		r.start = geo.marker_reversed(r.start)
 		r.finish = geo.marker_reversed(r.finish)
+		r.setup = geo.marker_reversed(r.setup)
 		for &p in r.pins {
 			p = geo.marker_reversed(p)
 		}
@@ -752,6 +760,7 @@ venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue
 			start  = r.start,
 			finish = r.finish,
 			pins   = pins,
+			setup  = r.setup,
 		})
 	}
 	return out

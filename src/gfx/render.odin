@@ -474,6 +474,37 @@ SphereEx :: proc(sink: Tri_Sink, center: Vector3, radius: f32, rings, slices: i3
 	}
 }
 
+DrawDiamond :: proc(centre: Vector3, radius, half_height: f32, color: Color) {
+	Diamond(batch_sink(), centre, radius, half_height, color)
+}
+
+// An octahedron standing on its point: the map-pin shape, readable from any
+// angle. Faces are shaded off a fixed light, because the overlay batch carries
+// no lighting and one flat colour reads as a hexagon rather than a solid.
+Diamond :: proc(sink: Tri_Sink, centre: Vector3, radius, half_height: f32, color: Color) {
+	top := centre + Vector3{0, half_height, 0}
+	bottom := centre - Vector3{0, half_height, 0}
+	ring := [4]Vector3{
+		centre + {radius, 0, 0}, centre + {0, 0, radius},
+		centre + {-radius, 0, 0}, centre + {0, 0, -radius},
+	}
+	for i in 0 ..< 4 {
+		a, b := ring[i], ring[(i + 1) % 4]
+		for tri in ([2][3]Vector3{{top, a, b}, {bottom, b, a}}) {
+			normal := Vector3Normalize(
+				Vector3CrossProduct(tri[1] - tri[0], tri[2] - tri[0]),
+			)
+			sink.emit(sink.user, tri[0], tri[1], tri[2], shade_face(color, normal))
+		}
+	}
+}
+
+// Lambert against one overhead light, floored so no face goes black.
+shade_face :: proc(col: Color, normal: Vector3) -> Color {
+	lit := 0.55 + 0.45 * max(0, Vector3DotProduct(normal, Vector3Normalize({0.35, 1, 0.2})))
+	return {u8(f32(col.r) * lit), u8(f32(col.g) * lit), u8(f32(col.b) * lit), col.a}
+}
+
 DrawCylinderEx :: proc(start, end: Vector3, start_radius, end_radius: f32, sides: i32, color: Color) {
 	CylinderEx(batch_sink(), start, end, start_radius, end_radius, sides, color)
 }

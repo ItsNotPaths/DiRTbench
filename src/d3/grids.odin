@@ -65,7 +65,7 @@ d3_grid_slot_local :: proc(grid, slot: Route_Station) -> (lateral, tangent, orig
 	return -project(sl,gl,gt), -project(st,gl,gt), slot_origin
 }
 
-d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profile: ^D3_Venue_Profile, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
+d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profile: ^D3_Venue_Profile, service: Maybe(Route_Sample) = nil, allocator := context.allocator) -> (data: []u8, msg: string, ok: bool) {
 	if len(line) < 2 { return nil, "Dirt 3 grid needs a route", false }
 
 	arena: virtual.Arena
@@ -125,10 +125,17 @@ d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profil
 	// Every stock grids.pssg also carries a `grid_service` node with 3 slots:
 	// where the AI cars stand for the intro showcase and the entrants/tune
 	// menus, distinct from the standing grid above and not on the route at
-	// all. Missing it is what leaves those cars with nowhere valid to spawn —
-	// co-locating it with the standing grid keeps it on real ground with no
-	// route position of its own to invent.
-	service_node, service_msg, service_ok := d3_grid_service_node(&types, gl, gt, origin, scratch)
+	// all. Missing it is what leaves those cars with nowhere valid to spawn.
+	//
+	// The stage's setup pin places it. Without one it sits on the standing
+	// grid: real ground, with no position of its own to invent.
+	sl, st, service_origin := gl, gt, origin
+	if pin, placed := service.?; placed {
+		station := Route_Station{centre = pin.Centre, left = pin.Left, right = pin.Right}
+		sl, st = d3_grid_frame(station)
+		service_origin = {pin.Centre[0], pin.Centre[1]+D3_GRID_CLEARANCE, pin.Centre[2]}
+	}
+	service_node, service_msg, service_ok := d3_grid_service_node(&types, sl, st, service_origin, scratch)
 	if !service_ok { return nil, service_msg, false }
 
 	root_frame, root_msg, root_ok := d3_grid_node_frame(&types, {1,0,0}, {0,0,1}, {0,0,0}, {}, {}, scratch)
@@ -150,8 +157,11 @@ d3_grids_build :: proc(line: []Route_Station, markers: []Progress_Marker, profil
 	encoded, wrote := pssg_write(&out, allocator)
 	if !wrote { return nil, "could not encode grids.pssg", false }
 	heading := math.mod(math.to_degrees(math.atan2(gt[0], gt[2]))+360, 360)
-	return encoded, fmt.tprintf("%d slots from (%.2f, %.2f, %.2f), heading %.1f deg",
-		D3_GRID_SLOTS, origin[0], origin[1], origin[2], heading), true
+	_, pinned := service.?
+	return encoded, fmt.tprintf("%d slots from (%.2f, %.2f, %.2f), heading %.1f deg; setup %s (%.2f, %.2f, %.2f)",
+		D3_GRID_SLOTS, origin[0], origin[1], origin[2], heading,
+		pinned ? "pinned at" : "on the grid at",
+		service_origin[0], service_origin[1], service_origin[2]), true
 }
 
 // The presentational grid: 3 slots line abreast at the standing grid's own
@@ -191,7 +201,7 @@ d3_grid_node_frame :: proc(types: ^Pssg_Types, lateral, tangent, origin, lo, hi:
 
 d3_write_grids :: proc(job: ^Export_Job, profile: ^D3_Venue_Profile) -> (msg: string, ok: bool) {
 	line := d3_route_stations(job.Route)
-	data, detail, built := d3_grids_build(line, job.Markers, profile)
+	data, detail, built := d3_grids_build(line, job.Markers, profile, job.Service)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "grids.pssg", data); !written { return write_msg, false }

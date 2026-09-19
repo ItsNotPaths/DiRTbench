@@ -468,8 +468,9 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 	}
 }
 
-// S and F drop the start and finish lines wherever the cursor is on the road.
-// Placing one again just moves it; there is only ever one of each. This is the
+// S and F drop the start and finish lines wherever the cursor is on the road,
+// U the setup pin. Placing one again just moves it; there is only ever one of
+// each. P appends a route pin, of which there may be any number. This is the
 // whole of a stage window's road input.
 place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	if ui_keys || nav {
@@ -482,7 +483,8 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	ctrl := gfx.IsKeyDown(.LEFT_CONTROL) || gfx.IsKeyDown(.RIGHT_CONTROL)
 	start := !ctrl && gfx.IsKeyPressed(.S)
 	pin := gfx.IsKeyPressed(.P)
-	line := start ? &route.start : gfx.IsKeyPressed(.F) ? &route.finish : nil
+	setup := gfx.IsKeyPressed(.U)
+	line := start ? &route.start : gfx.IsKeyPressed(.F) ? &route.finish : setup ? &route.setup : nil
 	if line == nil && !pin {
 		return
 	}
@@ -502,7 +504,8 @@ place_stage_markers :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_keys: bool) {
 	}
 	line^ = at
 	mark_edited(ed.doc)
-	set_status(&ed.status, start ? "start line placed" : "finish line placed", true)
+	set_status(&ed.status,
+		start ? "start line placed" : setup ? "setup pin placed" : "finish line placed", true)
 }
 
 // Shift + grabbing the gizmo extrudes: duplicate the selected point and drag

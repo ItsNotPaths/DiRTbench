@@ -216,6 +216,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		Route = route, Markers = markers, Collision = collision,
 		Profile = job.profile, Venue_Dir = job.venue_dir,
 		Route_Index = job.route_index, Ground_Cover = cover_cells > 0,
+		Service = d3_route_sample(job.setup),
 	}
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
@@ -276,6 +277,22 @@ cull_camera_props :: proc(
 	return out[:], len(placed) - len(out)
 }
 
+// One slice of road as the Dirt 3 writer wants it, across-vector and all. Used
+// for the setup pin, which is one slice rather than a whole ribbon.
+d3_route_sample :: proc(section: Maybe(geo.Cross_Section)) -> Maybe(d3.Route_Sample) {
+	cs, placed := section.?
+	if !placed {
+		return nil
+	}
+	half := cs.width/2
+	left, right := cs.pos+cs.right*half, cs.pos-cs.right*half
+	return d3.Route_Sample{
+		Centre = {cs.pos.x, cs.pos.y, cs.pos.z},
+		Left   = {left.x, left.y, left.z},
+		Right  = {right.x, right.y, right.z},
+	}
+}
+
 // The triangle soup, in material order, as a target-agnostic collision list.
 // Every Dirt 3 file that names geometry reads from this, at route or venue
 // scope alike.
@@ -333,6 +350,9 @@ Export_Job :: struct {
 	venue_dir:       string,
 	template_dir:    string,
 	donor_route_dir: string,
+	// Where the setup screen stands, from the stage's setup pin, resolved on
+	// the venue road. Unset leaves it to the target's own default.
+	setup:  Maybe(geo.Cross_Section),
 	notes:  []geo.Pace_Note,     // pace notes at their arc stations
 	pace:   geo.Pace_Params,     // what `notes` was generated from, for a target that
 	                         // writes notes rather than baked audio
@@ -621,6 +641,21 @@ export_venue_dirs :: proc(doc: ^Venue_Doc, out: string, installing: bool) -> (ve
 	return
 }
 
+// The stage's setup pin as a slice of road, or nothing when it has none or the
+// road it named is gone. The venue graph, not the compiled stage: the setup
+// screen is somewhere to stand, and nothing says it has to be on the stage.
+route_setup_section :: proc(doc: ^Venue_Doc, stage_id: string) -> Maybe(geo.Cross_Section) {
+	i := route_index(doc.routes[:], stage_id)
+	if i < 0 {
+		return nil
+	}
+	at, on_road := geo.marker_resolve(doc.spline, doc.routes[i].setup)
+	if !on_road {
+		return nil
+	}
+	return geo.sample_edge(doc.spline, at.from, at.to, clamp(at.t, 0, 1))
+}
+
 // The `n` of a `route_n` id.
 route_number :: proc(stage_id: string) -> int {
 	digits := strings.trim_prefix(stage_id, "route_")
@@ -654,6 +689,7 @@ export_stage :: proc(
 	}
 	job.out, job.installing = dest, installing
 	job.route_index = route_number(stage_id)
+	job.setup = route_setup_section(doc, stage_id)
 	job.venue_dir, job.template_dir, job.donor_route_dir = export_venue_dirs(doc, dest, installing)
 	had_orig := false
 	if installing {
