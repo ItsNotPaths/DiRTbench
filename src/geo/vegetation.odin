@@ -285,21 +285,35 @@ veg_field_make :: proc(
 // outside it. With the terrain off the test still runs; only Y falls back to the
 // caller's own.
 veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
+	y, _, inside = veg_field_ground(vf, p, VEG_CLEAR)
+	return
+}
+
+// The same answer with the caller's own clearance, and `su` alongside it.
+// Ground cover grows much closer in than a tree may stand — a tree needs room
+// for its trunk and its canopy, grass needs the verge — so the clearance is
+// the caller's to pick rather than one constant for both.
+veg_field_ground :: proc(
+	vf: ^Veg_Field, p: [2]f32, clear: f32,
+) -> (
+	y, su: f32, inside: bool,
+) {
 	if !vf.ok {
-		return 0, true
+		return 0, 0, true
 	}
 	pr := field_probe(vf.hash, vf.fs, vf.near_other, p, vf.limit)
-	if !pr.ok || pr.su <= VEG_CLEAR || pr.su > vf.reach {
-		return 0, false
+	su = pr.su
+	if !pr.ok || pr.su <= clear || pr.su > vf.reach {
+		return 0, su, false
 	}
 	// A pad that clears its own foliage is off the terrain as far as the scatter
 	// is concerned, which is the same answer as the road corridor gets. Tested
 	// before the height work below, so a rejected candidate costs less, not more.
 	if terrain_floor_clears_veg(vf.t, p) {
-		return 0, false
+		return 0, su, false
 	}
 	if !vf.heights {
-		return 0, true
+		return 0, su, true
 	}
 	legs, n := field_legs(vf.hash, vf.fs, vf.near_other, p, vf.limit)
 	y = terrain_world_height(vf.t, p, legs, n)
@@ -309,7 +323,7 @@ veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
 	if level, _, ok := terrain_floor_level(vf.t, p, y); ok && level < y {
 		y = level
 	}
-	return y, true
+	return y, su, true
 }
 
 // How far out a world point lies, in the same measure `reach` is in: distance
