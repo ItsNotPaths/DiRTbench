@@ -31,7 +31,9 @@ import "core:sync"
 import "core:thread"
 import "../net"
 
-UPLOAD_SITE :: "https://dirtbench.paths.place"
+UPLOAD_HOST :: "dirtbench.paths.place"
+
+UPLOAD_SITE :: "https://" + UPLOAD_HOST
 
 UPLOAD_API :: UPLOAD_SITE + "/api/upload.php"
 

@@ -55,6 +55,9 @@ IM_SLIDER_NONE :: Im_Slider_Flags(0)
 Im_Input_Text_Flags :: distinct c.int
 IM_INPUT_TEXT_NONE :: Im_Input_Text_Flags(0)
 IM_INPUT_TEXT_CHARS_NO_BLANK :: Im_Input_Text_Flags(1 << 4)
+// The field reports true on the frame Enter is pressed in it, and not on every
+// keystroke, which is what a field that spends a request wants.
+IM_INPUT_TEXT_ENTER_RETURNS_TRUE :: Im_Input_Text_Flags(1 << 6)
 IM_INPUT_TEXT_PASSWORD :: Im_Input_Text_Flags(1 << 10)
 
 Im_Tree_Node_Flags :: distinct c.int

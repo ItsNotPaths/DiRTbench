@@ -55,6 +55,8 @@ Venues_Screen :: struct {
 	stages_open:  string, // the one venue showing its stage list, "" for none
 	upload_open:  string, // the one venue showing its upload panel, "" for none
 	upload:       Upload_Form,
+	browse_open:  bool,   // whether the browse window is up
+	browse:       Browse_Form,
 	rows:         [dynamic]Stage_Row,
 	// Re-read `venues` between frames. Reloading mid-frame frees the array the
 	// row loop is walking.
@@ -149,6 +151,13 @@ draw_venues_screen :: proc(app: ^App) {
 		ps.adding = !ps.adding
 		delete(ps.error)
 		ps.error = ""
+	}
+	ui.im_same_line()
+	if ui.im_button(ps.browse_open ? "Hide browse" : "Browse...") {
+		ps.browse_open = !ps.browse_open
+		if ps.browse_open {
+			browse_opened(app)
+		}
 	}
 
 	if ps.adding {
@@ -860,6 +869,7 @@ draw_venues_frame :: proc(app: ^App) {
 		venues_screen_reload(&app.screen)
 		app.screen.reload_pending = false
 	}
+	app_service_browse(app)
 	// A finished upload is claimed here, not in the panel: what it decides —
 	// which listing this venue now belongs to — outlives whichever panel is open.
 	if upload_tick(&app.uploader) {
@@ -879,6 +889,7 @@ draw_venues_frame :: proc(app: ^App) {
 	// After the manager's own window has been ended, so the upload window is a
 	// window beside it rather than a block inside it.
 	draw_upload_window(app)
+	draw_browse_window(app)
 	if app.show_demo {
 		ui.igShowDemoWindow(&app.show_demo)
 	}
