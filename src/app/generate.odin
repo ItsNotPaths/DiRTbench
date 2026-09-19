@@ -10,8 +10,9 @@ package main
 //
 // The road frame at each control point is built the same way spline.odin does
 // it (quat_from_frame): local +Z is travel, +Y is the surface normal. Positive
-// yaw turns right, so a positive bank angle rolls the road *into* a right-hand
-// turn — turn and bank always share a sign.
+// yaw turns right, and a positive bank rolls the road *into* a right-hand turn,
+// so turn and bank always share a sign. See gen_push_sample for the axis flip
+// that makes that true.
 
 import "core:c"
 import "core:fmt"
@@ -34,6 +35,29 @@ GEN_YAW_SOFT :: 60.0
 GEN_YAW_HARD :: 90.0
 GEN_YAW_MAX :: 190.0
 
+// Camber is a cross-fall in metres, not an angle: a drop of half a metre reads
+// the same on a wide road as on a narrow one, and a rally road barely cambers.
+// CAMBER_TURN is the corner that earns the whole drop; anything sharper gets
+// the same.
+GEN_CAMBER_M :: 0.9
+GEN_CAMBER_TURN :: 90.0
+
+// Short-wavelength wander laid over the finished segments. Without it a segment
+// is a dead-straight, dead-flat run, and a stage reads as a chain of arcs.
+// Amplitudes are metres of offset at a knob of 1.
+//
+// The wavelengths are floored well above twice `spacing_m`. Anything shorter
+// aliases when the centreline is resampled into control points, and a wave the
+// points cannot carry comes out as a zigzag rather than a wiggle. Measured
+// against a hand-driven stage, the humps that read as "short" are 4 to 8 points
+// long, which is this band.
+GEN_WIGGLE_WAVES :: 3
+GEN_WIGGLE_M :: 7.0
+GEN_WIGGLE_LAM :: [2]f32{100, 240}
+GEN_BUMP_M :: 2.1
+GEN_BUMP_LAM :: [2]f32{80, 190}
+GEN_CALM_M :: 100.0 // the opening and closing straights stay flat and straight
+
 Gen_Params :: struct {
 	seed:      c.int,
 	length_m:  f32, // target stage length
@@ -50,12 +74,12 @@ GEN_DEFAULTS :: Gen_Params {
 	seed      = 1337,
 	length_m  = 3200,
 	spacing_m = 24,
-	curviness = 0.65,
+	curviness = 0.85,
 	hilliness = 0.5,
 	bank      = 0.7,
 	hairpins  = 0.3,
-	width_min = 6.5,
-	width_max = 10.0,
+	width_min = 7.5,
+	width_max = 11.0,
 }
 
 // --- route segments ---------------------------------------------------------
@@ -68,9 +92,11 @@ Gen_Seg :: struct {
 	width:     f32,
 }
 
-// Bank follows the turn: a 90-degree corner leans about 8 degrees at bank=1.
-seg_bank :: proc(turn_deg, bank: f32) -> f32 {
-	return clamp(turn_deg * 0.09 * bank, -12, 12)
+// Camber follows the turn and stays tiny: a 90-degree corner drops one side of
+// the road GEN_CAMBER_M at bank=1, which is under a metre however wide it is.
+seg_bank :: proc(turn_deg, bank, width: f32) -> f32 {
+	drop := clamp(turn_deg / GEN_CAMBER_TURN, -1, 1) * GEN_CAMBER_M * bank
+	return math.to_degrees(math.atan2(drop, max(width, 1)))
 }
 
 // The single hard ceiling. All turns, hairpins included, obey it so heading can
@@ -144,7 +170,7 @@ gen_segments :: proc(p: Gen_Params, r: ^geo.Rng, allocator := context.temp_alloc
 			length    = length,
 			turn_deg  = turn_deg,
 			grade_pct = grade_pct,
-			bank_deg  = seg_bank(turn_deg, bank),
+			bank_deg  = seg_bank(turn_deg, bank, width),
 			width     = width,
 		})
 		total^ += length
@@ -233,6 +259,40 @@ box_filter :: proc(xs: []f32, width_m: f32) {
 	}
 }
 
+// A band-limited wiggle: a few sines of random wavelength and phase. `amp` is
+// metres of *offset*, so one wave set reads as a lateral wander or a vertical
+// bump depending on which derivative the caller asks for.
+Gen_Wave :: struct {
+	k, phase, amp: f32,
+}
+
+gen_waves :: proc(r: ^geo.Rng, amp_m: f32, lam: [2]f32) -> (ws: [GEN_WIGGLE_WAVES]Gen_Wave) {
+	for i in 0 ..< GEN_WIGGLE_WAVES {
+		ws[i] = Gen_Wave {
+			k     = math.TAU / geo.rng_range(r, lam[0], lam[1]),
+			phase = geo.rng_range(r, 0, math.TAU),
+			amp   = amp_m / GEN_WIGGLE_WAVES,
+		}
+	}
+	return
+}
+
+// d/ds of the offset: what a vertical wiggle adds to grade.
+gen_wave_slope :: proc(ws: [GEN_WIGGLE_WAVES]Gen_Wave, s: f32) -> (v: f32) {
+	for w in ws {
+		v += w.amp * w.k * math.cos(w.k * s + w.phase)
+	}
+	return
+}
+
+// d2/ds2 of the offset: what a lateral wiggle adds to curvature.
+gen_wave_curv :: proc(ws: [GEN_WIGGLE_WAVES]Gen_Wave, s: f32) -> (v: f32) {
+	for w in ws {
+		v -= w.amp * w.k * w.k * math.sin(w.k * s + w.phase)
+	}
+	return
+}
+
 Gen_Sample :: struct {
 	pos:   gfx.Vector3,
 	yaw:   f32,
@@ -242,7 +302,12 @@ Gen_Sample :: struct {
 }
 
 // Rasterise the segments to one sample per GEN_DS, smooth, and walk the result.
-gen_centreline :: proc(segs: []Gen_Seg, allocator := context.temp_allocator) -> []Gen_Sample {
+gen_centreline :: proc(
+	segs: []Gen_Seg,
+	p: Gen_Params,
+	r: ^geo.Rng,
+	allocator := context.temp_allocator,
+) -> []Gen_Sample {
 	steps := 0
 	for s in segs {
 		steps += max(1, int(math.round(s.length / GEN_DS)))
@@ -270,6 +335,22 @@ gen_centreline :: proc(segs: []Gen_Seg, allocator := context.temp_allocator) -> 
 		box_filter(arr, GEN_SMOOTH_M)
 	}
 
+	// The wiggle goes on *after* the box filter, which is wider than the
+	// shortest wave and would otherwise flatten it back out. Both bands are
+	// zero-mean, so neither walks the heading or the height anywhere.
+	wig := gen_waves(r, GEN_WIGGLE_M * p.curviness, GEN_WIGGLE_LAM)
+	bump := gen_waves(r, GEN_BUMP_M * p.hilliness, GEN_BUMP_LAM)
+	run := f32(steps) * GEN_DS
+	for j in 0 ..< steps {
+		s := f32(j) * GEN_DS
+		calm := min(
+			math.smoothstep(f32(0), GEN_CALM_M, s),
+			math.smoothstep(f32(0), GEN_CALM_M, run - s),
+		)
+		curv[j] += gen_wave_curv(wig, s) * calm
+		grade[j] += gen_wave_slope(bump, s) * calm
+	}
+
 	out := make([]Gen_Sample, steps, allocator)
 	pos := gfx.Vector3{}
 	yaw: f32 = 0
@@ -283,11 +364,23 @@ gen_centreline :: proc(segs: []Gen_Seg, allocator := context.temp_allocator) -> 
 
 // --- the generator -----------------------------------------------------------
 
+// One sample as a control point, frame and all.
+gen_push_sample :: proc(sp: ^geo.Spline, s: Gen_Sample, lift: f32) {
+	fwd := gfx.Vector3Normalize({math.sin(s.yaw), s.grade, math.cos(s.yaw)})
+	// Bank rolls the surface normal about the travel direction. Rotating +Y
+	// about +Z by a positive angle tilts the normal toward -X, so the sign flips
+	// here: a right-hand turn (+yaw, +bank) has to lean the normal to +X, into
+	// the corner, not out of it.
+	up := gfx.Vector3RotateByAxisAngle({0, 1, 0}, fwd, -s.bank)
+	pos := s.pos + {0, lift, 0}
+	geo.spline_push(sp, geo.make_point(pos, geo.quat_from_frame(fwd, up), s.width, parent = len(sp.points) - 1))
+}
+
 // Replace `sp`'s points with a freshly generated stage. Returns a status line.
 generate_stage :: proc(sp: ^geo.Spline, p: Gen_Params) -> (msg: string, ok: bool) {
 	r := geo.rng_init(p.seed)
 	segs := gen_segments(p, &r)
-	line := gen_centreline(segs)
+	line := gen_centreline(segs, p, &r)
 	if len(line) < 2 {
 		return "generator produced nothing", false
 	}
@@ -302,19 +395,12 @@ generate_stage :: proc(sp: ^geo.Spline, p: Gen_Params) -> (msg: string, ok: bool
 	lift := GEN_GROUND_CLEAR - lowest
 
 	clear(&sp.points)
-	add_sample :: proc(sp: ^geo.Spline, s: Gen_Sample, lift: f32) {
-		fwd := gfx.Vector3Normalize({math.sin(s.yaw), s.grade, math.cos(s.yaw)})
-		// Bank rolls the surface normal about the travel direction.
-		up := gfx.Vector3RotateByAxisAngle({0, 1, 0}, fwd, s.bank)
-		pos := s.pos + {0, lift, 0}
-		geo.spline_push(sp, geo.make_point(pos, geo.quat_from_frame(fwd, up), s.width, parent = len(sp.points) - 1))
-	}
 	for j := 0; j < len(line); j += stride {
-		add_sample(sp, line[j], lift)
+		gen_push_sample(sp, line[j], lift)
 	}
 	// Always finish on the true end of the route, not a stride short of it.
 	if (len(line) - 1) % stride != 0 {
-		add_sample(sp, line[len(line) - 1], lift)
+		gen_push_sample(sp, line[len(line) - 1], lift)
 	}
 
 	length := f32(len(line)) * GEN_DS
