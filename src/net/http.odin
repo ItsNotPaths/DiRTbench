@@ -1,13 +1,13 @@
 package net
 
-// One HTTP request shape: a multipart POST, which is all dirtbench asks of the
-// network.
+// The two request shapes dirtbench asks of the network: a multipart POST, which
+// publishes a venue, and a GET, which browses and downloads one.
 //
 // libcurl is opened at runtime rather than linked. The binary depends on libc
 // and libm and nothing else, and `-lcurl` would add libcurl.so.4 plus the ssl,
 // crypto, nghttp2, zstd and brotli it drags behind it. Opening it instead keeps
 // that list empty and makes the dependency optional: a machine without libcurl
-// loses upload and keeps the tool.
+// loses upload and browsing, and keeps the tool.
 //
 // Nothing here knows what dirtbench.paths.place wants. The form is the caller's.
 
@@ -31,6 +31,11 @@ Form_Field :: struct {
 Response :: struct {
 	status: int,
 	body:   string, // whatever the server wrote, 2xx or not
+	// The server's ETag, verbatim, or "". Opaque: hand it back on the next
+	// request for this URL and never take it apart. mod_deflate rewrites
+	// `"abc"` into `W/"abc-gzip"` when it compresses, so the tag that arrives
+	// is not the one the server generated and only the server can compare them.
+	etag:   string,
 }
 
 Error :: enum {
@@ -53,7 +58,15 @@ OPT_FOLLOWLOCATION :: 52
 OPT_CONNECTTIMEOUT :: 78
 OPT_NOSIGNAL      :: 99
 OPT_MIMEPOST      :: 10269
+OPT_HTTPHEADER    :: 10023
+OPT_HEADERFUNCTION :: 20079
+OPT_HEADERDATA    :: 10029
 INFO_RESPONSE_CODE :: 2097154
+
+// What the tool calls itself on the wire. Cloudflare's Browser Integrity Check
+// refuses known scripting-library agents with error 1010 before the request
+// reaches the origin, so this names the tool, not the client underneath it.
+USER_AGENT :: "DiRTbench/1.0 (+https://github.com/ItsNotPaths/DiRTbench)"
 
 GLOBAL_DEFAULT :: 3
 
@@ -82,6 +95,9 @@ Curl :: struct {
 	mime_filedata: proc "c" (part: rawptr, path: cstring) -> c.int,
 	mime_filename: proc "c" (part: rawptr, name: cstring) -> c.int,
 	mime_type:     proc "c" (part: rawptr, mime: cstring) -> c.int,
+
+	slist_append:    proc "c" (list: rawptr, line: cstring) -> rawptr,
+	slist_free_all:  proc "c" (list: rawptr),
 }
 
 // The sonames to try, in order. One per platform; the others simply do not open.
@@ -132,7 +148,9 @@ curl_load :: proc() {
 			bind(&curl.mime_data, "curl_mime_data") &&
 			bind(&curl.mime_filedata, "curl_mime_filedata") &&
 			bind(&curl.mime_filename, "curl_mime_filename") &&
-			bind(&curl.mime_type, "curl_mime_type")
+			bind(&curl.mime_type, "curl_mime_type") &&
+			bind(&curl.slist_append, "curl_slist_append") &&
+			bind(&curl.slist_free_all, "curl_slist_free_all")
 		if !all {
 			curl.lib = nil
 			return
@@ -159,6 +177,23 @@ write_cb :: proc "c" (ptr: rawptr, size, nmemb: c.size_t, user: rawptr) -> c.siz
 	return c.size_t(n)
 }
 
+// The ETag off the response, kept whole. A redirect chain sends one header
+// block per hop, so the last one wins: the tag has to belong to the body that
+// came back with it.
+@(private)
+header_cb :: proc "c" (ptr: rawptr, size, nmemb: c.size_t, user: rawptr) -> c.size_t {
+	context = runtime.default_context()
+	n := int(size) * int(nmemb)
+	line := string((([^]u8)(ptr))[:n])
+	ETAG :: "etag:"
+	if len(line) > len(ETAG) && strings.equal_fold(line[:len(ETAG)], ETAG) {
+		tag := (^[dynamic]u8)(user)
+		clear(tag)
+		append(tag, ..transmute([]u8)strings.trim_space(line[len(ETAG):]))
+	}
+	return c.size_t(n)
+}
+
 // POST `fields` to `url` as multipart/form-data, and give back whatever came
 // out. A 4xx is not an error here: the body carries the server's reason and the
 // caller wants to show it.
@@ -167,6 +202,42 @@ post_form :: proc(
 	fields: []Form_Field,
 	timeout_s := 60,
 	allocator := context.allocator,
+) -> (
+	res: Response,
+	msg: string,
+	err: Error,
+) {
+	return request(url, fields, timeout_s, allocator)
+}
+
+// GET `url`. Same rules as post_form: the body comes back whatever the status
+// was, because the status alone never says why.
+//
+// `etag` is a tag a previous answer to this same URL carried. Sending it back
+// asks the server whether anything moved, and an unchanged resource answers 304
+// with no body, which is what makes asking again cheap.
+get :: proc(
+	url: string,
+	etag := "",
+	timeout_s := 60,
+	allocator := context.allocator,
+) -> (
+	res: Response,
+	msg: string,
+	err: Error,
+) {
+	return request(url, nil, timeout_s, allocator, etag)
+}
+
+// The one request. `fields` nil is a GET, and anything else a multipart POST:
+// everything either shape needs of libcurl is the same but the body.
+@(private)
+request :: proc(
+	url: string,
+	fields: []Form_Field,
+	timeout_s: int,
+	allocator: runtime.Allocator,
+	etag := "",
 ) -> (
 	res: Response,
 	msg: string,
@@ -182,8 +253,15 @@ post_form :: proc(
 	}
 	defer curl.easy_cleanup(handle)
 
-	mime := curl.mime_init(handle)
-	defer curl.mime_free(mime)
+	// A GET builds no body at all: an empty mime is still a POST of nothing.
+	mime: rawptr
+	defer if mime != nil {
+		curl.mime_free(mime)
+	}
+	if fields != nil {
+		mime = curl.mime_init(handle)
+		curl.setopt_ptr(handle, OPT_MIMEPOST, mime)
+	}
 	for f in fields {
 		part := curl.mime_addpart(mime)
 		curl.mime_name(part, strings.clone_to_cstring(f.name, context.temp_allocator))
@@ -200,12 +278,25 @@ post_form :: proc(
 		}
 	}
 
+	headers: rawptr
+	defer if headers != nil {
+		curl.slist_free_all(headers)
+	}
+	if etag != "" {
+		line := strings.concatenate({"If-None-Match: ", etag}, context.temp_allocator)
+		headers = curl.slist_append(nil, strings.clone_to_cstring(line, context.temp_allocator))
+		curl.setopt_ptr(handle, OPT_HTTPHEADER, headers)
+	}
+
 	body := make([dynamic]u8, 0, 4096, allocator)
+	tag := make([dynamic]u8, 0, 64, allocator)
+	defer delete(tag)
 	curl.setopt_str(handle, OPT_URL, strings.clone_to_cstring(url, context.temp_allocator))
-	curl.setopt_str(handle, OPT_USERAGENT, "dirtbench")
-	curl.setopt_ptr(handle, OPT_MIMEPOST, mime)
+	curl.setopt_str(handle, OPT_USERAGENT, USER_AGENT)
 	curl.setopt_ptr(handle, OPT_WRITEFUNCTION, rawptr(write_cb))
 	curl.setopt_ptr(handle, OPT_WRITEDATA, &body)
+	curl.setopt_ptr(handle, OPT_HEADERFUNCTION, rawptr(header_cb))
+	curl.setopt_ptr(handle, OPT_HEADERDATA, &tag)
 	curl.setopt_long(handle, OPT_FOLLOWLOCATION, 1)
 	curl.setopt_long(handle, OPT_TIMEOUT, c.long(timeout_s))
 	curl.setopt_long(handle, OPT_CONNECTTIMEOUT, 15)
@@ -219,7 +310,35 @@ post_form :: proc(
 	}
 	status: c.long
 	curl.getinfo_long(handle, INFO_RESPONSE_CODE, &status)
-	// Cloned rather than handed over: the buffer grew to a capacity the caller
+	// Cloned rather than handed over: the buffers grew to a capacity the caller
 	// would not be freeing.
-	return Response{status = int(status), body = strings.clone(string(body[:]), allocator)}, "", .None
+	return Response{
+		status = int(status),
+		body   = strings.clone(string(body[:]), allocator),
+		etag   = strings.clone(string(tag[:]), allocator),
+	}, "", .None
+}
+
+// --- urls ----------------------------------------------------------------------
+
+// Percent-encode one query-string value. Everything but the RFC 3986 unreserved
+// set goes out as %XX, so a search for `rally*` or a name with a space cannot
+// change the shape of the URL it is put into.
+query_escape :: proc(s: string, allocator := context.temp_allocator) -> string {
+	hex := "0123456789ABCDEF"
+	b := strings.builder_make(allocator)
+	strings.builder_grow(&b, len(s))
+	for i in 0 ..< len(s) {
+		ch := s[i]
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9',
+		     ch == '-', ch == '_', ch == '.', ch == '~':
+			strings.write_byte(&b, ch)
+		case:
+			strings.write_byte(&b, '%')
+			strings.write_byte(&b, hex[ch >> 4])
+			strings.write_byte(&b, hex[ch & 0xF])
+		}
+	}
+	return strings.to_string(b)
 }
