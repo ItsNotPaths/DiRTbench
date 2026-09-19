@@ -40,14 +40,14 @@ GLTF_TRIANGLES :: 4 // primitive mode
 
 // Base colour per material, straight off the viewport palette so an import looks
 // like the editor. Alpha is always 1: the soup's own alpha is a preview device.
-gltf_material_colour :: proc(m: geo.Mat_Id) -> gfx.Color {
+gltf_material_colour :: proc(m: geo.Mat_Id, look: geo.Look) -> gfx.Color {
 	switch m {
-	case .Road:     return geo.ROAD_COL
-	case .RoadSand: return geo.ROAD_COL_SAND
-	case .Cliff:    return geo.CLIFF_TOP
-	case .Terrain:  return geo.TERRAIN_FLAT
+	case .Road:       return look.road
+	case .Road_Paved: return look.road_paved
+	case .Cliff:      return look.cliff_top
+	case .Terrain:    return look.terrain
 	}
-	return geo.ROAD_COL
+	return look.road
 }
 
 // --- the binary buffer -------------------------------------------------------
@@ -236,7 +236,7 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		if i > 0 {
 			w(&b, ",\n")
 		}
-		c := gltf_material_colour(mat)
+		c := gltf_material_colour(mat, job.look)
 		w(&b, "{\"name\":")
 		w_str(&b, fmt.tprintf("%v", mat))
 		w(&b, ",\"doubleSided\":false,\"pbrMetallicRoughness\":{\"baseColorFactor\":")

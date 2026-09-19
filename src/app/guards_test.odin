@@ -269,7 +269,7 @@ guards_stack_outward_in_one_profile :: proc(t: ^testing.T) {
 an_absent_guard_costs_no_triangles :: proc(t: ^testing.T) {
 	tris :: proc(sp: geo.Spline) -> int {
 		ribbon := geo.build_ribbon(sp, 14, context.temp_allocator)
-		return geo.tri_count(geo.build_tri_mesh(ribbon, 0, context.temp_allocator))
+		return geo.tri_count(geo.build_tri_mesh(ribbon, 0, geo.DEFAULT_LOOK, context.temp_allocator))
 	}
 
 	sp: geo.Spline

@@ -156,10 +156,18 @@ content_pack_profile :: proc(
 	ok: bool,
 ) {
 	dir := content_pack_dir(id, context.temp_allocator)
-	if profile, _, ok = d3.Profile_Load(dir, allocator); ok && profile.pack == d3.Pack_Stamp {
+	pack := pack_manifest(id)
+	palette := palette_for(pack.base, id, context.temp_allocator)
+
+	// Two things make a pack on disk stale. The stamp covers a change to this
+	// tool. The paving texture covers a change to the palette, because that one
+	// is cloned into a material inside materials.pssg rather than named in a row
+	// — so laying the palette over the profile could not fix it.
+	if profile, _, ok = d3.Profile_Load(dir, allocator); ok &&
+	   profile.pack == d3.Pack_Stamp && profile.paved_texture == palette.paved_texture {
+		palette_over_profile(palette, &profile)
 		return profile, "", true
 	}
-	pack := pack_manifest(id)
 	base_dir := base_venue_dir(vs, pack.base)
 	if base_dir == "" {
 		return profile, fmt.tprintf(
@@ -167,7 +175,7 @@ content_pack_profile :: proc(
 		), false
 	}
 	_, base_id, _ := base_split(pack.base)
-	if detail, installed := d3.Pack_Install(base_dir, dir, base_id); !installed {
+	if detail, installed := d3.Pack_Install(base_dir, dir, base_id, palette_art(palette)); !installed {
 		return profile, fmt.tprintf("could not read the shaders of %s: %s", pack.base, detail), false
 	}
 	// The manifest goes down with the shaders, so a pack on disk always says
@@ -175,5 +183,7 @@ content_pack_profile :: proc(
 	if write_msg, written := pack_write(pack); !written {
 		return profile, write_msg, false
 	}
-	return d3.Profile_Load(dir, allocator)
+	profile, msg, ok = d3.Profile_Load(dir, allocator)
+	if ok { palette_over_profile(palette, &profile) }
+	return profile, msg, ok
 }

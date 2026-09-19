@@ -1,0 +1,16 @@
+# Norway Rally. A snow venue: no tarmac anywhere in it, and physics_surfaces.txt
+# names no T code. Concrete is the hard surface it does have.
+#
+# No paved texture: nothing here reads as paving, and the loose road's own art is
+# a better answer than a wrong guess. The paved surface still drives as concrete.
+paved.collision = CON*
+# Snow. Bright ground, a road only slightly darker than what it runs through,
+# and banks that are the brightest thing on screen because they are heaped snow.
+colour.road          = b4bcc6
+colour.road_paved    = 6a6e74
+colour.terrain       = dde3ea
+colour.terrain_steep = aab2bc
+colour.cliff_top     = 9aa2ac
+colour.cliff_bot     = 5e646c
+colour.bank          = eef2f7
+colour.gutter        = 8a9099

@@ -252,8 +252,8 @@ terrain_outward :: proc(cs: Cross_Section, side: int) -> gfx.Vector3 {
 	return side == 0 ? g : -g
 }
 
-terrain_tri_colour :: proc(n: gfx.Vector3) -> gfx.Color {
-	return lerp_col(TERRAIN_FLAT, TERRAIN_STEEP, clamp((1 - abs(n.y)) * 2, 0, 1))
+terrain_tri_colour :: proc(n: gfx.Vector3, look: Look) -> gfx.Color {
+	return lerp_col(look.terrain, look.terrain_steep, clamp((1 - abs(n.y)) * 2, 0, 1))
 }
 
 // --- the field ---------------------------------------------------------------
@@ -1173,6 +1173,7 @@ build_terrain_skirt :: proc(
 	f: ^Terrain_Field,
 	ribbon: []Cross_Section,
 	roughness: f32,
+	look: Look,
 ) {
 	n := len(ribbon)
 	if n < 2 {
@@ -1240,7 +1241,7 @@ build_terrain_skirt :: proc(
 			add_quad(
 				m, p0, p1, p2, p3,
 				{ua, 0}, {ub, 0}, {ub, drop}, {ua, drop},
-				lerp_col(CLIFF_BOT, CLIFF_TOP, 0.5), .Cliff,
+				lerp_col(look.cliff_bot, look.cliff_top, 0.5), .Cliff,
 			)
 		}
 	}
@@ -1252,6 +1253,7 @@ build_terrain_mesh :: proc(
 	f: ^Terrain_Field,
 	ribbon: []Cross_Section,
 	roughness: f32,
+	look := DEFAULT_LOOK,
 ) {
 	// Heights for the whole point set at once: a floor's divot pass needs its
 	// neighbours (floor.odin), and a vertex is shared by about six triangles.
@@ -1282,9 +1284,9 @@ build_terrain_mesh :: proc(
 		uv :: proc(v: gfx.Vector3) -> [2]f32 {
 			return {v.x / UV_TILE_M, v.z / UV_TILE_M}
 		}
-		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), terrain_tri_colour(nrm), .Terrain)
+		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), terrain_tri_colour(nrm, look), .Terrain)
 	}
-	build_terrain_skirt(m, t, f, ribbon, roughness)
+	build_terrain_skirt(m, t, f, ribbon, roughness, look)
 }
 
 // --- world-space sculpt controls --------------------------------------------

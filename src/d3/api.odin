@@ -10,12 +10,16 @@ Collision_Material :: enum u8 {
 	Road,
 	Cliff,
 	Terrain,
-	Road_Sand,
+	Road_Paved,
 }
 
 Collision_Triangle :: struct {
 	Points:   [3][3]f32,
 	Material: Collision_Material,
+	// Per corner, in the same order as `Points`: how far that corner leans
+	// toward the material's second ground texture, 0..1. See geo.Tri_Mesh.blend.
+	// Collision ignores it; only the drawn surface reads it.
+	Blend:    [3]f32,
 }
 
 Progress_Marker_Kind :: enum u8 {
@@ -111,5 +115,6 @@ Backup_Once :: d3_backup_once
 Venue_Profile :: D3_Venue_Profile
 Profile_Load :: d3_profile_load
 Pack_Stamp :: D3_PACK_STAMP
+Pack_Art :: D3_Pack_Art
 Pack_Install :: d3_pack_install
 Pack_Profile :: d3_pack_profile

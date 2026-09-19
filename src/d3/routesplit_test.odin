@@ -7,8 +7,12 @@ import "core:testing"
 // A flat grid of quads over 800 x 400 m, materials alternating by quad parity.
 // With the built-in 8 x 4 tile grid every tile holds four quads of both
 // materials, and the mesh is flat in Y so the bounding-box padding is exercised.
+//
+// The texture mix ramps with x and reaches both ends exactly, so a build over
+// this mesh exercises every value the vertex colour can take.
 d3_test_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
 	QX :: 16; QZ :: 8
+	mix :: proc(x: f32) -> f32 { return x/800 }
 	out := make([]Collision_Triangle, QX*QZ*2, allocator)
 	for qz in 0..<QZ {
 		for qx in 0..<QX {
@@ -16,8 +20,38 @@ d3_test_mesh :: proc(allocator := context.allocator) -> []Collision_Triangle {
 			z0 := f32(qz)*50; z1 := z0+50
 			material: Collision_Material = (qx+qz)%2 == 0 ? .Road : .Terrain
 			at := (qz*QX+qx)*2
-			out[at] = {Points={{x0,0,z0},{x0,0,z1},{x1,0,z0}}, Material=material}
-			out[at+1] = {Points={{x1,0,z0},{x0,0,z1},{x1,0,z1}}, Material=material}
+			out[at] = {
+				Points={{x0,0,z0},{x0,0,z1},{x1,0,z0}}, Material=material,
+				Blend={mix(x0),mix(x0),mix(x1)},
+			}
+			out[at+1] = {
+				Points={{x1,0,z0},{x0,0,z1},{x1,0,z1}}, Material=material,
+				Blend={mix(x1),mix(x0),mix(x1)},
+			}
+		}
+	}
+	return out
+}
+
+// Every distinct vertex colour a built routesplit writes, with its population.
+// Only stride 28 carries the stream; the batch and LOD layers have no room for
+// it, so this sees the surface layer alone.
+d3_test_vertex_colours :: proc(
+	file: ^Pssg_File, nodes: []^Pssg_Node, allocator := context.temp_allocator,
+) -> map[[4]u8]int {
+	out := make(map[[4]u8]int, allocator)
+	for node in nodes {
+		if node.name != "DATABLOCK" { continue }
+		stream := pssg_walk_first(node, "DATABLOCKSTREAM")
+		payload := pssg_walk_first(node, "DATABLOCKDATA")
+		if stream == nil || payload == nil { continue }
+		stride, _ := pssg_attr_u32(file, stream, "stride")
+		layout, known := d3_vertex_layout(stride)
+		if !known || layout.colour < 0 { continue }
+		count, _ := pssg_attr_u32(file, node, "elementCount")
+		for i in 0..<int(count) {
+			at := i*layout.stride + layout.colour
+			out[[4]u8{payload.data[at], payload.data[at+1], payload.data[at+2], payload.data[at+3]}] += 1
 		}
 	}
 	return out
@@ -353,5 +387,127 @@ st_holds_its_density_on_a_wall :: proc(t: ^testing.T) {
 		testing.expectf(t, abs(moved*m.side - want) < 0.01,
 			"normal %v climbed %.1f m: ST moved %.2f m, the face travelled %.2f m further than flat",
 			normal, f32(step), moved*m.side, want)
+	}
+}
+
+// The mix is off by default in the sense that matters: a material whose two ends
+// are the same colour writes that colour at every vertex, whatever the mesh
+// paints. Without this, adding the channel would have quietly reshaded every
+// venue already on disk.
+@(test)
+an_equal_pair_writes_one_flat_colour :: proc(t: ^testing.T) {
+	profile := d3_test_profile()^
+	profile.colour_b = profile.colour
+	tris := d3_test_mesh(context.temp_allocator)
+	raw, msg, built := d3_routesplit_build(tris, &profile, context.allocator)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	file, parse_msg, parsed := pssg_read(raw, context.allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	defer pssg_delete(&file)
+
+	nodes := make([dynamic]^Pssg_Node, context.temp_allocator)
+	d3_test_walk(file.root, &nodes)
+	seen := d3_test_vertex_colours(&file, nodes[:])
+	testing.expect(t, seen[profile.colour[.Road]] > 0, "the road keeps its own colour")
+	testing.expect(t, seen[profile.colour[.Terrain]] > 0, "the terrain keeps its own colour")
+	testing.expectf(t, len(seen) == 2,
+		"two materials with equal ends must write two colours, got %d", len(seen))
+}
+
+// And the other direction: a material with two ends walks between them. The mesh
+// paints 0 and 1 exactly, so both ends must land, and the values in between must
+// really be in between rather than a flip at the halfway mark.
+@(test)
+the_mix_walks_from_one_end_to_the_other :: proc(t: ^testing.T) {
+	profile := d3_test_profile()^
+	profile.colour_b = profile.colour
+	far := [4]u8{0x00, 0x11, 0x22, 0x33}
+	profile.colour_b[.Road] = far
+	tris := d3_test_mesh(context.temp_allocator)
+	raw, msg, built := d3_routesplit_build(tris, &profile, context.allocator)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	file, parse_msg, parsed := pssg_read(raw, context.allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	defer pssg_delete(&file)
+
+	nodes := make([dynamic]^Pssg_Node, context.temp_allocator)
+	d3_test_walk(file.root, &nodes)
+	seen := d3_test_vertex_colours(&file, nodes[:])
+	near := profile.colour[.Road]
+	testing.expect(t, seen[near] > 0, "the unmixed end of the road must appear")
+	testing.expect(t, seen[far] > 0, "the far end of the road must appear")
+	testing.expect(t, seen[profile.colour[.Terrain]] > 0, "the terrain must be left alone")
+
+	// Every road colour has to sit on the segment between the two ends, and at
+	// least one has to sit strictly inside it.
+	inside := 0
+	for colour in seen {
+		if colour == profile.colour[.Terrain] { continue }
+		for k in 0..<4 {
+			lo := min(near[k], far[k]); hi := max(near[k], far[k])
+			testing.expectf(t, colour[k] >= lo && colour[k] <= hi,
+				"colour %v leaves the segment %v..%v in channel %d", colour, near, far, k)
+		}
+		if colour != near && colour != far { inside += 1 }
+	}
+	testing.expectf(t, inside > 0, "the mix must land between its ends, not flip: saw %v", seen)
+}
+
+// A route names its shaders by id, and a name the file does not answer to draws
+// nothing and reports nothing. So a scene built at venue scope has to end up
+// holding every material the profile names, including the ones we make.
+//
+// This is the general form of a bug shipped once: the paved road was named by
+// the routes and made only in the pack, so the venue tracksplit had no instance
+// under the name and a whole surface went invisible.
+//
+// The venue template here is the pack with its made materials stripped out,
+// which is exactly what a base venue's own tracksplit is: the art, and none of
+// our additions.
+@(test)
+a_venue_scene_makes_every_material_it_names :: proc(t: ^testing.T) {
+	art := D3_Pack_Art{paved_texture = "any_texture_d.tga"}
+	pack, profile_text, pack_msg, packed := d3_pack_build(
+		transmute([]u8)D3_FIXTURE_MATERIALS, "somevenue", art, context.temp_allocator,
+	)
+	testing.expect(t, packed, pack_msg); if !packed { return }
+	profile, parse_msg, parsed := d3_profile_parse(profile_text, pack, context.temp_allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	testing.expect_value(t, profile.visual[.Road_Paved], D3_PAVED_MATERIAL)
+
+	stripped, strip_msg, stripped_ok := pssg_read(pack, context.temp_allocator)
+	testing.expect(t, stripped_ok, strip_msg); if !stripped_ok { return }
+	instances := d3_library(&stripped, "SHADERINSTANCE")
+	kept := make([dynamic]^Pssg_Node, context.temp_allocator)
+	for child in instances.children {
+		if pssg_attr_string(&stripped, child, "id") != D3_PAVED_MATERIAL { append(&kept, child) }
+	}
+	testing.expect(t, len(kept) < len(instances.children), "the made material must be there to strip")
+	clear(&instances.children)
+	append(&instances.children, ..kept[:])
+	template, encoded := pssg_write(&stripped, context.temp_allocator)
+	testing.expect(t, encoded, "could not encode the stripped template"); if !encoded { return }
+
+	tris := d3_test_mesh(context.temp_allocator)
+	raw, msg, built := d3_routesplit_build_with_template(
+		tris, &profile, template, .Venue, context.allocator,
+	)
+	testing.expect(t, built, msg); if !built { return }
+	defer delete(raw)
+	file, read_msg, read_ok := pssg_read(raw, context.allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+	defer pssg_delete(&file)
+
+	nodes := make([dynamic]^Pssg_Node, context.temp_allocator)
+	d3_test_walk(file.root, &nodes)
+	named := make(map[string]bool, context.temp_allocator)
+	for node in nodes {
+		if node.name == "SHADERINSTANCE" { named[pssg_attr_string(&file, node, "id")] = true }
+	}
+	for material in Collision_Material {
+		testing.expectf(t, named[profile.visual[material]],
+			"no instance named %q, so %v draws nothing", profile.visual[material], material)
 	}
 }

@@ -1,0 +1,16 @@
+# Finland Rally. See src/app/palette.odin for the grammar.
+#
+# fin_tra_bas_13..18 are the venue's tarmac set; 01..12 are its gravel. Nothing
+# in the names says so — route_0's own tarmac materials are what identify them.
+paved.texture   = fin_tra_bas_13_d.tga
+paved.collision = TSD*
+# Brown gravel through green forest, tarmac a dark neutral grey against it.
+# These are the defaults, so this file is also the worked example.
+colour.road          = 8a7254
+colour.road_paved    = 4a4c52
+colour.terrain       = 567044
+colour.terrain_steep = 70685c
+colour.cliff_top     = 8c8070
+colour.cliff_bot     = 56504a
+colour.bank          = c6cad2
+colour.gutter        = 585246

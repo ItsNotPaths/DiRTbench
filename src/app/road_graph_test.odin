@@ -575,7 +575,7 @@ cliff_roughness_moves_the_face_and_the_road_knob_does_not :: proc(t: ^testing.T)
 @(private = "file")
 road_mesh :: proc(sp: ^geo.Spline) -> geo.Tri_Mesh {
 	ribbon := geo.build_ribbon(sp^, 14, context.temp_allocator)
-	return geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+	return geo.build_tri_mesh(ribbon, 0, geo.DEFAULT_LOOK, context.temp_allocator)
 }
 
 // Mean metres each material's vertices moved between two builds of one road.
@@ -590,7 +590,7 @@ mesh_deviation :: proc(a, b: geo.Tri_Mesh) -> (cliff, road: f32) {
 			d := gfx.Vector3Length(b.pos[i] - a.pos[i])
 			switch mat {
 			case .Cliff:           cliff += d; cliff_n += 1
-			case .Road, .RoadSand: road += d;  road_n += 1
+			case .Road, .Road_Paved: road += d;  road_n += 1
 			case .Terrain:
 			}
 		}
@@ -638,7 +638,7 @@ rough_cliff_holds :: proc(t: ^testing.T, spacing: f32) {
 	// And the face itself stays the right way out. The cliff stands on -x and is
 	// the wall you drive past, so every triangle on it looks back at the road,
 	// which a folded one would not.
-	mesh := geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+	mesh := geo.build_tri_mesh(ribbon, 0, geo.DEFAULT_LOOK, context.temp_allocator)
 	faces := 0
 	for mat, tri in mesh.mat {
 		if mat != .Cliff { continue }
@@ -694,7 +694,7 @@ rock_stands_off_the_face_and_never_over_the_road :: proc(t: ^testing.T) {
 	}
 	guard_everywhere(&bend, .Cliff, 0, geo.CLIFF_HEIGHT_MAX, 1)
 	ribbon := geo.build_ribbon(bend, 14, context.temp_allocator)
-	mesh := geo.build_tri_mesh(ribbon, 0, context.temp_allocator)
+	mesh := geo.build_tri_mesh(ribbon, 0, geo.DEFAULT_LOOK, context.temp_allocator)
 	bend_faces := 0
 	for mat, tri in mesh.mat {
 		if mat != .Cliff { continue }
@@ -831,7 +831,7 @@ the_cliff_texture_keeps_its_density :: proc(t: ^testing.T) {
 	defer geo.spline_free(&sp)
 	straight_road(&sp, 6, 24)
 	cliffs_along(&sp, 1, geo.CLIFF_HEIGHT_MAX, 1, 45)
-	mesh := geo.build_tri_mesh(geo.build_ribbon(sp, 14, context.temp_allocator), 0, context.temp_allocator)
+	mesh := geo.build_tri_mesh(geo.build_ribbon(sp, 14, context.temp_allocator), 0, geo.DEFAULT_LOOK, context.temp_allocator)
 
 	worst, sum, n := f32(0), f32(0), f32(0)
 	for mat, tri in mesh.mat {

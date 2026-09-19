@@ -944,7 +944,9 @@ pack_headless :: proc(only: string) -> bool {
 			continue
 		}
 		seen += 1
-		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, context.temp_allocator)
+		base := fmt.tprintf("%s/%s", venue.location, venue.id)
+		art := palette_art(palette_for(base, base, context.temp_allocator))
+		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, art, context.temp_allocator)
 		if ok {
 			fmt.printfln(
 				"%-18s %6d bytes  road=%-26s terrain=%-26s cliff=%-26s lod=%-24s batch=%s",
@@ -1025,6 +1027,7 @@ venue_tracksplit_collision :: proc(
 ) {
 	doc := Venue_Doc{
 		roughness = 0,
+		look      = geo.DEFAULT_LOOK,
 		terrain   = geo.TERRAIN_DEFAULTS,
 	}
 	defer geo.terrain_delete(&doc.terrain)

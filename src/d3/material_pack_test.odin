@@ -22,6 +22,7 @@ profile_survives_a_round_trip_through_its_own_text :: proc(t: ^testing.T) {
 		testing.expect_value(t, got.visual[material], want.visual[material])
 		testing.expect_value(t, got.collision[material], want.collision[material])
 		testing.expect_value(t, got.colour[material], want.colour[material])
+		testing.expect_value(t, got.colour_b[material], want.colour_b[material])
 	}
 }
 
@@ -30,7 +31,7 @@ profile_survives_a_round_trip_through_its_own_text :: proc(t: ^testing.T) {
 @(test)
 pack_extract_yields_a_template_the_exporter_can_build_from :: proc(t: ^testing.T) {
 	source := transmute([]u8)D3_FIXTURE_MATERIALS
-	pack, profile_text, msg, ok := d3_pack_build(source, "somevenue", context.temp_allocator)
+	pack, profile_text, msg, ok := d3_pack_build(source, "somevenue", D3_Pack_Art{}, context.temp_allocator)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect(t, len(pack) <= len(source), "a pack must never be larger than the file it came from")
 
@@ -86,7 +87,7 @@ pack_extract_yields_a_template_the_exporter_can_build_from :: proc(t: ^testing.T
 
 @(test)
 pack_refuses_a_source_without_the_shader_groups_it_needs :: proc(t: ^testing.T) {
-	_, _, msg, ok := d3_pack_build([]u8{'P', 'S', 'S', 'G'}, "somevenue", context.temp_allocator)
+	_, _, msg, ok := d3_pack_build([]u8{'P', 'S', 'S', 'G'}, "somevenue", D3_Pack_Art{}, context.temp_allocator)
 	testing.expect(t, !ok, "a truncated PSSG must not produce a pack")
 	testing.expect(t, msg != "")
 }

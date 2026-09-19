@@ -78,6 +78,10 @@ Venue_Doc :: struct {
 	// Baseline road/cliff jitter, 0..1. Held at zero: the game roughens each
 	// surface itself. Per-point offsets are the only way to add any.
 	roughness:     f32,
+	// What the editor paints this venue's ground with, from the base venue's
+	// palette. Viewport and glTF only — no game file reads it. Set by
+	// doc_set_base, so a venue whose base changes repaints.
+	look:          geo.Look,
 
 	// How the co-driver calls a corner. The knobs are the venue's, because they
 	// describe the calling and not the stage being called; the notes themselves
@@ -208,7 +212,7 @@ rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved:
 		delete(doc.ribbon)
 		doc.ribbon = geo.build_ribbon(doc.spline, allocator = context.allocator)
 		doc.ribbon_gen += 1
-		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.roughness)
+		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.roughness, doc.look)
 		doc.dirty_road = false
 	}
 	if doc.dirty_terrain && !dragging {
@@ -265,6 +269,7 @@ doc_set_base :: proc(doc: ^Venue_Doc, base: string) {
 	delete(doc.base)
 	doc.base = strings.clone(base)
 	doc.veg.preset = geo.veg_preset_for_base(base)
+	doc.look = palette_for(base, base, context.temp_allocator).look
 }
 
 // Grow the road at `g`. With a point selected the new node is its child, which
@@ -330,6 +335,9 @@ doc_defaults :: proc() -> Venue_Doc {
 		// geometrically smooth, so the baseline is flat. Per-point offsets still
 		// add on top (see geo: eff = global + cs.roughness).
 		roughness = 0,
+		// Until doc_set_base names a venue. A zero Look is a black road, not a
+		// missing one, so it must never be what a rebuild reads.
+		look = geo.DEFAULT_LOOK,
 		terrain = geo.TERRAIN_DEFAULTS,
 		pace = geo.PACE_DEFAULTS,
 		timing = TIMING_DEFAULTS,

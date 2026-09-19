@@ -361,6 +361,7 @@ prop_tri_mesh :: proc(
 		append(&m.uv, [2]f32{}, [2]f32{}, [2]f32{})
 		append(&m.col, col, col, col)
 		append(&m.mat, geo.Mat_Id.Terrain)
+		append(&m.blend, 0, 0, 0)
 	}
 	return m
 }

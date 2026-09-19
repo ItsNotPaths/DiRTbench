@@ -121,6 +121,10 @@ D3_Weld :: struct {
 	index:  map[[3]f32]u16,
 	points: [dynamic][3]f32,
 	normal: [dynamic][3]f32,
+	// Per welded vertex, from the first corner that landed there. Unlike the
+	// normal this is not summed: the mix is a function of position, so two
+	// corners at one position already agree, and averaging would only round.
+	blend:  [dynamic]f32,
 	tris:   [dynamic][3]u16,
 }
 
@@ -129,6 +133,7 @@ d3_weld :: proc(allocator: mem.Allocator) -> D3_Weld {
 		index = make(map[[3]f32]u16, allocator),
 		points = make([dynamic][3]f32, allocator),
 		normal = make([dynamic][3]f32, allocator),
+		blend = make([dynamic]f32, allocator),
 		tris = make([dynamic][3]u16, allocator),
 	}
 }
@@ -143,6 +148,7 @@ d3_weld_add :: proc(w: ^D3_Weld, tri: Collision_Triangle) {
 			w.index[p] = index
 			append(&w.points, p)
 			append(&w.normal, [3]f32{})
+			append(&w.blend, tri.Blend[k])
 		}
 		w.normal[index] += face
 		corner[k] = index
@@ -211,15 +217,17 @@ d3_pack_vertices :: proc(
 	w: ^D3_Weld,
 	layout: D3_Vertex_Layout,
 	st: D3_St_Map,
-	colour: [4]u8,
+	colour, colour_b: [4]u8,
 	allocator: mem.Allocator,
 ) -> []u8 {
 	data := make([]u8, len(w.points)*layout.stride, allocator)
-	rgba := colour
 	for p, i in w.points {
 		base := i*layout.stride
 		for k in 0..<3 { binary_store_f32(data, base+k*4, p[k], .Big) }
-		if layout.colour >= 0 { copy(data[base+layout.colour:][:4], rgba[:]) }
+		if layout.colour >= 0 {
+			rgba := d3_colour_mix(colour, colour_b, w.blend[i])
+			copy(data[base+layout.colour:][:4], rgba[:])
+		}
 		// The welded normal, which ST needs as much as the normal attribute does:
 		// it is what says how steep this vertex's surface stands.
 		n := w.normal[i]
@@ -287,9 +295,19 @@ D3_Cell :: struct {
 }
 
 D3_Group :: struct {
-	picks:  []int,
-	shader: string,
-	colour: [4]u8,
+	picks:    []int,
+	shader:   string,
+	colour:   [4]u8,
+	colour_b: [4]u8,
+}
+
+// A vertex colour between the material's two ends. The channels are shader
+// input, not a display colour, so this rounds rather than gamma-corrects: a
+// terrain shader reads them as blend weights between its two texture layers.
+d3_colour_mix :: proc(a, b: [4]u8, t: f32) -> (out: [4]u8) {
+	k := clamp(t, 0, 1)
+	for i in 0..<4 { out[i] = u8(f32(a[i]) + (f32(b[i]) - f32(a[i]))*k + 0.5) }
+	return
 }
 
 // A HIGH node carries one draw call for each material present in the tile, the
@@ -300,10 +318,17 @@ d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_G
 	case .Surface:
 		for material in Collision_Material {
 			if len(cell.picks[material]) == 0 { continue }
-			append(&groups, D3_Group{cell.picks[material][:], b.profile.visual[material], b.profile.colour[material]})
+			append(&groups, D3_Group{
+				cell.picks[material][:],
+				b.profile.visual[material],
+				b.profile.colour[material],
+				b.profile.colour_b[material],
+			})
 		}
-	case .Batch: append(&groups, D3_Group{cell.all[:], b.profile.batch, {}})
-	case .Lod:   append(&groups, D3_Group{cell.all[:], b.profile.lod, {}})
+	// Neither layer carries a colour stream at its stride, so the mix cannot
+	// reach them: the ground reads one flat texture past the LOD switch.
+	case .Batch: append(&groups, D3_Group{cell.all[:], b.profile.batch, {}, {}})
+	case .Lod:   append(&groups, D3_Group{cell.all[:], b.profile.lod, {}, {}})
 	}
 	return groups[:]
 }
@@ -333,7 +358,7 @@ d3_draw_call :: proc(
 			{"stride", u32(layout.stride)},
 		}))
 	}
-	payload := d3_pack_vertices(w, layout, b.st, group.colour, b.allocator)
+	payload := d3_pack_vertices(w, layout, b.st, group.colour, group.colour_b, b.allocator)
 	size := u32(len(payload))
 	append(&block_kids, d3_node(b, "DATABLOCKDATA", nil, nil, payload))
 	append(&b.blocks, d3_node(b, "DATABLOCK", []Pssg_Set{
@@ -615,6 +640,31 @@ d3_scene_replace_libraries :: proc(
 
 // Stock files list tiles by descending z index, then descending x, and tile z
 // index 0 is the high-z end.
+// The materials we make rather than find, made again here.
+//
+// At venue scope the template is the base venue's own tracksplit, which knows
+// nothing of them, while every route names them. A route that names a shader
+// the venue does not hold **draws nothing and says nothing**, so this is not an
+// optimisation — leaving one out loses a whole surface in silence. See
+// d3_surface_material for why DiRT 3 gives us no shader to find instead.
+d3_make_materials :: proc(
+	file: ^Pssg_File,
+	profile: ^D3_Venue_Profile,
+	allocator: mem.Allocator,
+) -> (msg: string, ok: bool) {
+	instances := d3_library(file, "SHADERINSTANCE")
+	road := profile.visual[.Road]
+	if profile.visual[.Cliff] == D3_CLIFF_MATERIAL &&
+	   d3_cliff_material(file, instances, road, allocator) == "" {
+		return "the base venue no longer holds the rock the cliff material draws with", false
+	}
+	if profile.visual[.Road_Paved] == D3_PAVED_MATERIAL &&
+	   d3_surface_material(file, instances, road, D3_PAVED_MATERIAL, profile.paved_texture, allocator) == "" {
+		return "the base venue no longer holds the texture the paved road draws with", false
+	}
+	return "", true
+}
+
 d3_routesplit_build_with_template :: proc(
 	collision: []Collision_Triangle,
 	profile: ^D3_Venue_Profile,
@@ -635,12 +685,10 @@ d3_routesplit_build_with_template :: proc(
 
 	file, read_msg, read_ok := pssg_read(template, scratch)
 	if !read_ok { return nil, read_msg, false }
-	// At venue scope the template is the base venue's own tracksplit, which
-	// knows nothing of our cliff material. The routes name it, so it is made
-	// here too — see d3_cliff_material.
-	if scope == .Venue && profile.visual[.Cliff] == D3_CLIFF_MATERIAL {
-		made := d3_cliff_material(&file, d3_library(&file, "SHADERINSTANCE"), profile.visual[.Road], scratch)
-		if made == "" { return nil, "the base venue no longer holds the rock the cliff material draws with", false }
+	if scope == .Venue {
+		if made_msg, made := d3_make_materials(&file, profile, scratch); !made {
+			return nil, made_msg, false
+		}
 	}
 	types := pssg_types(&file, scratch)
 	ids := pssg_ids(&file, scratch)

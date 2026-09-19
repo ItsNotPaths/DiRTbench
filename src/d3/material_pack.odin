@@ -68,6 +68,24 @@ d3_shader_base :: proc(id: string) -> string {
 // draws nothing and says nothing.
 
 D3_CLIFF_MATERIAL :: "dirtbench_cliff"
+D3_PAVED_MATERIAL :: "dirtbench_paved"
+
+// What a base venue's own art cannot say for itself, and so comes from the
+// content pack's palette instead.
+//
+// A tarmac texture cannot be found by name. Codemasters number their road
+// textures rather than describing them, so `fin_tra_bas_13_d` (tarmac) reads
+// exactly like `fin_tra_bas_01_d` (gravel), and searching shader instance names
+// for "tarmac" finds nothing in finland_rally, norway, michigan or moosylvania —
+// Finland keeps its tarmac materials in a *route* file, not in the tracksplit
+// this reads. Rock got away with a name rule; paving does not.
+//
+// An empty texture is not a failure. The paved road then draws with the loose
+// road's material and differs only in its collision code, which is still a real
+// tarmac surface to drive on.
+D3_Pack_Art :: struct {
+	paved_texture: string,
+}
 
 // The two diffuse layers of `terrain_infield.fx`. A parameter id belongs to the
 // shader group, not to the venue, so these hold everywhere — measured over all
@@ -104,24 +122,28 @@ d3_rock_texture :: proc(file: ^Pssg_File, allocator: mem.Allocator) -> string {
 	return ""
 }
 
-// Clone `donor_id` under the cliff name, repoint its diffuse layers at rock,
+// Clone `donor_id` under `name`, repoint both its diffuse layers at `texture`,
 // and hang it in the shader instance library beside the material it came from.
-// Returns the name for the profile, or "" when this venue offers no rock.
-d3_cliff_material :: proc(
+// Returns the name for the profile, or "" when the clone could not be made.
+//
+// DiRT 3 ships no shader we can bind that draws rock or tarmac, so both are made
+// this way rather than found. Both layers take the same texture, which leaves the
+// blend map between them nothing to decide — see docs/dirt3-pssg.md for what the
+// two layers are and what mixes them.
+d3_surface_material :: proc(
 	file: ^Pssg_File,
 	instances: ^Pssg_Node,
-	donor_id: string,
+	donor_id, name, texture: string,
 	allocator: mem.Allocator,
 ) -> string {
 	donor := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", donor_id)
-	rock := d3_rock_texture(file, allocator)
-	if donor == nil || rock == "" { return "" }
+	if donor == nil || texture == "" { return "" }
 
 	clone := pssg_clone_node(donor, allocator)
-	if !pssg_set_attr_string(file, clone, "id", D3_CLIFF_MATERIAL, allocator) { return "" }
+	if !pssg_set_attr_string(file, clone, "id", name, allocator) { return "" }
 	// Local form, as a tracksplit names its own textures. The pack requalifies
 	// every reference it keeps, this one with the rest.
-	local := strings.concatenate({"#", rock}, allocator)
+	local := strings.concatenate({"#", texture}, allocator)
 	painted := 0
 	for input in clone.children {
 		id, known := pssg_attr_u32(file, input, "parameterID")
@@ -130,7 +152,17 @@ d3_cliff_material :: proc(
 	}
 	if painted != len(d3_infield_diffuse) { return "" }
 	append(&instances.children, clone)
-	return D3_CLIFF_MATERIAL
+	return name
+}
+
+d3_cliff_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	donor_id: string,
+	allocator: mem.Allocator,
+) -> string {
+	rock := d3_rock_texture(file, allocator)
+	return d3_surface_material(file, instances, donor_id, D3_CLIFF_MATERIAL, rock, allocator)
 }
 
 d3_pack_source_sizes :: proc(file: ^Pssg_File, node: ^Pssg_Node, out: ^map[string]u64) {
@@ -244,6 +276,7 @@ d3_pack_probe_mesh :: proc(allocator := context.temp_allocator) -> []Collision_T
 d3_pack_build :: proc(
 	tracksplit: []u8,
 	base_id: string,
+	art: D3_Pack_Art,
 	allocator := context.allocator,
 ) -> (
 	pack: []u8,
@@ -316,9 +349,16 @@ d3_pack_build :: proc(
 			if base != d3_shader_base(road) && base != d3_shader_base(ground) { cliff = pick.id; break }
 		}
 	}
+	// The paved road is made from the palette's texture. With none, it falls
+	// back to the loose road's material: right grip, wrong paint, still useful.
+	paved := d3_surface_material(&file, instances, road, D3_PAVED_MATERIAL, art.paved_texture, scratch)
+	if paved == "" { paved = road }
+
 	for material in Collision_Material { profile.visual[material] = road }
 	profile.visual[.Terrain] = ground
 	profile.visual[.Cliff] = cliff
+	profile.visual[.Road_Paved] = paved
+	profile.paved_texture = art.paved_texture
 
 	wanted := make(map[string]bool, scratch)
 	for material in Collision_Material { wanted[profile.visual[material]] = true }
@@ -428,6 +468,7 @@ d3_tracksplit_path :: proc(base_dir: string, allocator := context.temp_allocator
 // over a stock route draws with that venue's own shaders.
 d3_pack_profile :: proc(
 	base_dir, base_id: string,
+	art: D3_Pack_Art,
 	allocator := context.temp_allocator,
 ) -> (
 	profile: D3_Venue_Profile,
@@ -439,20 +480,20 @@ d3_pack_profile :: proc(
 	if read_err != nil {
 		return profile, fmt.tprintf("could not read %s: %v", source, read_err), false
 	}
-	pack, text, build_msg, built := d3_pack_build(tracksplit, base_id, allocator)
+	pack, text, build_msg, built := d3_pack_build(tracksplit, base_id, art, allocator)
 	if !built { return profile, build_msg, false }
 	return d3_profile_parse(text, pack, allocator)
 }
 
 // One call to build a content pack: read the base venue's tracksplit, extract
 // the pack, and write both files into `dir`.
-d3_pack_install :: proc(base_dir, dir, base_id: string) -> (msg: string, ok: bool) {
+d3_pack_install :: proc(base_dir, dir, base_id: string, art: D3_Pack_Art) -> (msg: string, ok: bool) {
 	source := d3_tracksplit_path(base_dir)
 	tracksplit, read_err := os.read_entire_file(source, context.temp_allocator)
 	if read_err != nil {
 		return fmt.tprintf("could not read %s: %v", source, read_err), false
 	}
-	pack, profile_text, build_msg, built := d3_pack_build(tracksplit, base_id, context.temp_allocator)
+	pack, profile_text, build_msg, built := d3_pack_build(tracksplit, base_id, art, context.temp_allocator)
 	if !built { return build_msg, false }
 	if save_msg, saved := d3_profile_save(dir, pack, profile_text); !saved { return save_msg, false }
 	return fmt.tprintf("%d byte material pack from %s", len(pack), source), true

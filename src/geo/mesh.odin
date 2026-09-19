@@ -184,18 +184,28 @@ UV_TILE_M :: 8.0
 // one material per *contiguous group* of triangles. Adding a value here means
 // adding a row to every target's material table.
 Mat_Id :: enum u8 {
-	Road,     // dirt look, Dirt grip
+	Road,       // the venue's own loose road: gravel, dirt, packed snow
 	Cliff,
 	Terrain,
-	// The road surface is a checkered mix of Road (Dirt grip) and RoadSand: both
-	// wear the same dirt texture, but RoadSand drives as the Sand penalty surface.
-	// ~1/3 of the road segments are RoadSand, so a car feels a mostly-dirt surface
-	// with a sand penalty scattered through it. See build_road_surface /
-	// road_surf_mat.
-	RoadSand, // dirt look, Sand penalty
+	Road_Paved, // its hard road: tarmac, or concrete where the venue has no tarmac
 }
 
-// `pos`, `nrm`, `uv` and `col` are per *vertex* (three per triangle,
+// What a run of road is made of. Deliberately venue-neutral: the same value is
+// gravel in Finland and packed snow in Norway, because the art and the collision
+// code behind it come from the venue's own palette. `None` is not a surface —
+// it means this control point states nothing and takes what reaches it from
+// upstream. See Point.surface.
+Road_Surface :: enum u8 {
+	None,
+	Loose,
+	Paved,
+}
+
+road_surface_mat :: proc(surface: Road_Surface) -> Mat_Id {
+	return surface == .Paved ? .Road_Paved : .Road
+}
+
+// `pos`, `nrm`, `uv`, `col` and `blend` are per *vertex* (three per triangle,
 // flat-shaded); `mat` is per *triangle*, so `mat[i]` describes
 // `pos[i*3 .. i*3+2]`.
 Tri_Mesh :: struct {
@@ -204,6 +214,14 @@ Tri_Mesh :: struct {
 	uv:  [dynamic][2]f32,
 	col: [dynamic]gfx.Color,
 	mat: [dynamic]Mat_Id,
+	// How far this vertex leans toward the material's *second* ground texture,
+	// 0..1. A DiRT 3 ground shader carries two diffuse layers and mixes them by
+	// the vertex colour, so one material can fade between two looks instead of
+	// meeting the next one at a hard edge. The target interpolates the
+	// material's two vertex colours by this; see D3_Venue_Profile.colour_b. A
+	// target with one texture per material ignores it. 0 everywhere reproduces
+	// the single-texture look exactly.
+	blend: [dynamic]f32,
 }
 
 tri_mesh_make :: proc(allocator := context.allocator) -> Tri_Mesh {
@@ -213,6 +231,7 @@ tri_mesh_make :: proc(allocator := context.allocator) -> Tri_Mesh {
 		uv = make([dynamic][2]f32, allocator),
 		col = make([dynamic]gfx.Color, allocator),
 		mat = make([dynamic]Mat_Id, allocator),
+		blend = make([dynamic]f32, allocator),
 	}
 }
 
@@ -222,6 +241,7 @@ tri_mesh_delete :: proc(m: ^Tri_Mesh) {
 	delete(m.uv)
 	delete(m.col)
 	delete(m.mat)
+	delete(m.blend)
 }
 
 tri_count :: proc(m: Tri_Mesh) -> int {
@@ -237,8 +257,16 @@ shade :: proc(col: gfx.Color, n: gfx.Vector3) -> gfx.Color {
 
 // Winding is counter-clockwise seen from the front, so the face normal is
 // cross(b-a, c-a). Callers must order their vertices accordingly.
-// `ua`/`ub`/`uc` are the corners' UVs, in the same order as the positions.
-add_tri :: proc(m: ^Tri_Mesh, a, b, c: gfx.Vector3, ua, ub, uc: [2]f32, col: gfx.Color, mat: Mat_Id) {
+// `ua`/`ub`/`uc` are the corners' UVs, in the same order as the positions, and
+// `blend` their texture mix (see Tri_Mesh.blend).
+add_tri :: proc(
+	m: ^Tri_Mesh,
+	a, b, c: gfx.Vector3,
+	ua, ub, uc: [2]f32,
+	col: gfx.Color,
+	mat: Mat_Id,
+	blend: [3]f32 = {},
+) {
 	n := gfx.Vector3CrossProduct(b - a, c - a)
 	if gfx.Vector3Length(n) < 1e-9 {
 		return // degenerate, e.g. a cliff of zero height
@@ -251,6 +279,7 @@ add_tri :: proc(m: ^Tri_Mesh, a, b, c: gfx.Vector3, ua, ub, uc: [2]f32, col: gfx
 		append(&m.nrm, n)
 		append(&m.uv, uvs[i])
 		append(&m.col, sc)
+		append(&m.blend, blend[i])
 	}
 	// After the degenerate bail, so `mat` stays one entry per emitted triangle.
 	append(&m.mat, mat)
@@ -262,9 +291,10 @@ add_quad :: proc(
 	ua, ub, uc, ud: [2]f32,
 	col: gfx.Color,
 	mat: Mat_Id,
+	blend: [4]f32 = {},
 ) {
-	add_tri(m, a, b, c, ua, ub, uc, col, mat)
-	add_tri(m, a, c, d, ua, uc, ud, col, mat)
+	add_tri(m, a, b, c, ua, ub, uc, col, mat, {blend[0], blend[1], blend[2]})
+	add_tri(m, a, c, d, ua, uc, ud, col, mat, {blend[0], blend[2], blend[3]})
 }
 
 // --- verge geometry ---------------------------------------------------------
@@ -555,26 +585,54 @@ verge_seam :: proc(cs: Cross_Section, side: int, roughness: f32) -> gfx.Vector3 
 
 // --- building ---------------------------------------------------------------
 
-ROAD_COL :: gfx.Color{104, 108, 120, 255}      // Dirt-grip segments (editor tint)
-ROAD_COL_SAND :: gfx.Color{150, 138, 120, 255} // Sand-penalty segments (editor tint)
-CLIFF_TOP :: gfx.Color{140, 128, 112, 255}
-CLIFF_BOT :: gfx.Color{86, 80, 74, 255}
-BANK_COL :: gfx.Color{198, 202, 210, 255}  // heaped snow or spoil, pale
-GUTTER_COL :: gfx.Color{88, 82, 70, 255}   // a wet cut, darker than the road
+// What the editor paints a venue's ground with.
+//
+// Viewport only. The game reads materials and surface codes instead (see
+// Mat_Id), so nothing here reaches it and nothing here can break an export.
+// It exists because a venue's ground is not one ground: Finland is green over
+// brown, Kenya is orange, Norway is white. Drawing them all in Finland's
+// colours makes a snow stage look like a summer one while you build it.
+//
+// Loaded per base venue from the content pack's palette. `DEFAULT_LOOK` is
+// Finland's, and it is what a venue with no palette gets.
+Look :: struct {
+	road:          gfx.Color,
+	road_paved:    gfx.Color,
+	terrain:       gfx.Color, // flat ground
+	terrain_steep: gfx.Color, // the same ground stood on end
+	cliff_top:     gfx.Color,
+	cliff_bot:     gfx.Color,
+	bank:          gfx.Color, // heaped snow or spoil
+	gutter:        gfx.Color, // a wet cut, darker than the road
+}
+
+DEFAULT_LOOK :: Look {
+	// Loose is brown and paved is a dark neutral grey, far enough apart to tell
+	// at a glance across a whole stage. They used to sit 20 levels apart in the
+	// same grey, which read as one colour and made the surface invisible.
+	road          = {138, 114, 84, 255},
+	road_paved    = {74, 76, 82, 255},
+	terrain       = {86, 112, 68, 255},
+	terrain_steep = {112, 104, 92, 255},
+	cliff_top     = {140, 128, 112, 255},
+	cliff_bot     = {86, 80, 74, 255},
+	bank          = {198, 202, 210, 255},
+	gutter        = {88, 82, 70, 255},
+}
 
 lerp_col :: proc(a, b: gfx.Color, t: f32) -> gfx.Color {
 	m :: proc(x, y: u8, t: f32) -> u8 {return u8(f32(x) + (f32(y) - f32(x)) * t)}
 	return gfx.Color{m(a.r, b.r, t), m(a.g, b.g, t), m(a.b, b.b, t), 255}
 }
 
-// Which surface a road segment gets: ~2 in 3 keep Dirt grip, ~1 in 3 are the
-// Sand penalty. Hashed on the segment index so it is deterministic and scattered
-// along the road rather than clumping or striping. A whole segment (all its width
-// columns) takes one surface, so with short segments the car switches
-// surface every few centimetres of travel — fast enough to feel like one blended
-// surface that reads as mostly dirt.
-road_surf_mat :: proc(seg: int) -> Mat_Id {
-	return hash_u32(u32(seg) * 73856093) % 3 == 0 ? .RoadSand : .Road
+// Where a road column sits between the material's two ground textures: 0 down
+// the middle, 1 at either edge. Stock DiRT 3 paints the same polarity on its
+// road shader — the first texture is strongest along the racing line and fades
+// out toward the verge — measured as mean R falling from 138 on the line to 74
+// past 64 m. So the road wears its worn look in the tracks and its coarser one
+// at the edges, out of one material. See Tri_Mesh.blend.
+road_blend :: proc(col, cols: int) -> f32 {
+	return abs(2 * f32(col) / f32(cols) - 1)
 }
 
 // One road-surface vertex: ribbon sample `s`, column `col` of `cols` across the
@@ -628,23 +686,28 @@ road_vertex :: proc(
 // `u` runs to the hundreds and the road renders fine, so a `BaseMaterial` UV has
 // no [0,1] constraint. The across-road extent is *normalised*, not scaled by
 // UV_TILE_M, so the texture spans the road exactly once at any width.
-build_road_surface :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, roughness: f32) {
+build_road_surface :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, roughness: f32, look: Look) {
 	for i in 0 ..< len(ribbon) - 1 {
 		if ribbon[i + 1].break_before { continue }
 		// `xsec_ends` returns the +right end first, so that end takes v = 0.
 		ua := arc[i] / UV_TILE_M
 		ub := arc[i + 1] / UV_TILE_M
-		mat := road_surf_mat(i)
-		// Editor-only tint so the hidden penalty mix is visible: Dirt grip keeps the
-		// road grey, Sand penalty runs a touch warmer. No target writes vertex
-		// colour, so in game both read as plain dirt.
-		col := mat == .Road ? ROAD_COL : ROAD_COL_SAND
+		// The segment takes the surface of the slice it leaves, so a change lands
+		// on a control point rather than smearing across the span into it.
+		mat := road_surface_mat(ribbon[i].surface)
+		col := mat == .Road ? look.road : look.road_paved
 		for c in 0 ..< ROAD_COLS {
 			a0, va0 := road_vertex(ribbon[i], i, c, ROAD_COLS, roughness)
 			a1, va1 := road_vertex(ribbon[i], i, c + 1, ROAD_COLS, roughness)
 			b1, vb1 := road_vertex(ribbon[i + 1], i + 1, c + 1, ROAD_COLS, roughness)
 			b0, vb0 := road_vertex(ribbon[i + 1], i + 1, c, ROAD_COLS, roughness)
-			add_quad(m, a0, a1, b1, b0, {ua, va0}, {ua, va1}, {ub, vb1}, {ub, vb0}, col, mat)
+			w0 := road_blend(c, ROAD_COLS)
+			w1 := road_blend(c + 1, ROAD_COLS)
+			add_quad(
+				m, a0, a1, b1, b0,
+				{ua, va0}, {ua, va1}, {ub, vb1}, {ub, vb0},
+				col, mat, {w0, w1, w1, w0},
+			)
 		}
 	}
 }
@@ -666,17 +729,17 @@ sample_spacing :: proc(ribbon: []Cross_Section) -> []f32 {
 // edge so the first quad of a segment already reads as that segment. Only the
 // cliff is rock: a bank and a gutter are ground, and the export has one material
 // for ground (see Mat_Id).
-verge_quad_look :: proc(row: int) -> (col: gfx.Color, mat: Mat_Id) {
+verge_quad_look :: proc(row: int, look: Look) -> (col: gfx.Color, mat: Mat_Id) {
 	seg, t := verge_row_at(row)
 	switch seg {
 	case .Gutter_In, .Gutter_Out:
-		return GUTTER_COL, .Terrain
+		return look.gutter, .Terrain
 	case .Bank_In, .Bank_Out:
-		return BANK_COL, .Terrain
+		return look.bank, .Terrain
 	case .Cliff:
-		return lerp_col(CLIFF_BOT, CLIFF_TOP, t), .Cliff
+		return lerp_col(look.cliff_bot, look.cliff_top, t), .Cliff
 	}
-	return CLIFF_BOT, .Cliff
+	return look.cliff_bot, .Cliff
 }
 
 // Verge walls. Emitted only where a verge has a profile at all, so a stage with
@@ -686,7 +749,7 @@ verge_quad_look :: proc(row: int) -> (col: gfx.Color, mat: Mat_Id) {
 // quantity the rows are spaced by, so a taller cliff shows more texture rather
 // than a stretched one. The two neighbouring cross-sections have different
 // profile lengths, so `v` is computed per column, not per quad.
-build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, roughness: f32) {
+build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, roughness: f32, look: Look) {
 	for side in 0 ..< 2 {
 		// Metres along the rock, the same way `v` is metres up it. The road's own
 		// arc is the wrong ruler here: two neighbouring samples can stand a metre
@@ -732,7 +795,7 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, roughness: f32) {
 			for k in 0 ..< VERGE_ROWS {
 				a, b := ca.p[k], ca.p[k + 1]
 				c, d := cb.p[k + 1], cb.p[k]
-				col, mat := verge_quad_look(k + 1)
+				col, mat := verge_quad_look(k + 1, look)
 
 				uv_a := [2]f32{ua, ca.v[k] / UV_TILE_M}
 				uv_b := [2]f32{ua, ca.v[k + 1] / UV_TILE_M}
@@ -759,6 +822,7 @@ build_verges :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, roughness: f32) {
 build_tri_mesh :: proc(
 	ribbon: []Cross_Section,
 	roughness: f32,
+	look := DEFAULT_LOOK,
 	allocator := context.allocator,
 ) -> Tri_Mesh {
 	m := tri_mesh_make(allocator)
@@ -766,8 +830,8 @@ build_tri_mesh :: proc(
 		return m
 	}
 	arc := ribbon_arc(ribbon) // temp-allocated; the UVs are metres along it
-	build_road_surface(&m, ribbon, arc, roughness)
-	build_verges(&m, ribbon, roughness)
+	build_road_surface(&m, ribbon, arc, roughness, look)
+	build_verges(&m, ribbon, roughness, look)
 	return m
 }
 
@@ -803,9 +867,9 @@ gpu_mesh_upload :: proc(m: Tri_Mesh) -> Gpu_Mesh {
 
 // Rebuild the whole thing from the ribbon. The old GPU buffers are released
 // first, so callers may call this every frame while a gizmo is dragged.
-road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, roughness: f32) {
+road_mesh_rebuild :: proc(rm: ^Gpu_Mesh, ribbon: []Cross_Section, roughness: f32, look := DEFAULT_LOOK) {
 	gpu_mesh_unload(rm)
-	m := build_tri_mesh(ribbon, roughness, context.temp_allocator)
+	m := build_tri_mesh(ribbon, roughness, look, context.temp_allocator)
 	rm^ = gpu_mesh_upload(m)
 }
 

@@ -68,6 +68,7 @@ Rebuild_Job :: struct {
 	terrain:    geo.Terrain,         // copy; the worker may renumber its controls
 	veg_params: geo.Veg_Params,
 	roughness:  f32,
+	look:       geo.Look, // the venue's editor colours; see Venue_Doc.look
 	ribbon_gen: u64,                 // what the rebuilt ribbon is numbered
 	held:       []geo.Cross_Section, // the document's ribbon, borrowed when the road is not rebuilt
 	do_road:    bool,
@@ -170,6 +171,7 @@ rebuild_dispatch :: proc(doc: ^Venue_Doc, dragging, point_drag: bool) {
 		veg_params = doc.veg,
 		card_kinds = venue_art_card_kinds(doc),
 		roughness  = doc.roughness,
+		look       = doc.look,
 		ribbon_gen = doc.ribbon_gen + (doc.dirty_road ? 1 : 0),
 		held       = doc.ribbon,
 		do_road    = doc.dirty_road,
@@ -330,7 +332,7 @@ rebuild_job_run :: proc(j: ^Rebuild_Job) {
 	if j.do_road {
 		j.ribbon = geo.build_ribbon(j.spline, allocator = context.allocator)
 		ribbon = j.ribbon
-		j.road_mesh = geo.build_tri_mesh(ribbon, j.roughness, context.allocator)
+		j.road_mesh = geo.build_tri_mesh(ribbon, j.roughness, j.look, context.allocator)
 	}
 	if j.do_ground {
 		j.ground_mesh = geo.tri_mesh_make(context.allocator)
@@ -367,5 +369,5 @@ rebuild_job_ground :: proc(j: ^Rebuild_Job, ribbon: []geo.Cross_Section) {
 		&j.field, &j.terrain, ribbon, arc, ds, j.roughness, j.ribbon_gen,
 		cell_scale = j.preview ? PREVIEW_CELL : 1,
 	)
-	geo.build_terrain_mesh(&j.ground_mesh, &j.terrain, &j.field, ribbon, j.roughness)
+	geo.build_terrain_mesh(&j.ground_mesh, &j.terrain, &j.field, ribbon, j.roughness, j.look)
 }

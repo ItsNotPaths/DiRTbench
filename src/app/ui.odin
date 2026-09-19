@@ -784,6 +784,40 @@ draw_floor_selection :: proc(ed: ^Editor) {
 	}
 }
 
+// What the road is made of from this point forward.
+//
+// Three buttons rather than a slider, because a surface is not a quantity, and
+// **inherit** is the useful default: a hint carries into every node downstream
+// of it, so most points should state nothing and one edit should move a whole
+// run. That is also why the resolved surface is spelled out under the buttons —
+// on an inheriting point there is otherwise nothing on screen saying which
+// surface you are actually looking at.
+SURFACE_LABEL := [geo.Road_Surface]cstring {
+	.None  = "inherit",
+	.Loose = "loose",
+	.Paved = "paved",
+}
+
+draw_surface_control :: proc(ed: ^Editor, sel: int) {
+	p := &ed.doc.spline.points[sel]
+	ui.im_text("surface")
+	for surface in geo.Road_Surface {
+		ui.igSameLine(0, -1)
+		if ui.igRadioButton_Bool(SURFACE_LABEL[surface], p.surface == surface) && p.surface != surface {
+			p.surface = surface
+			mark_dirty(ed.doc)
+		}
+	}
+	if p.surface != .None {
+		ui.im_text_colored(DIM_COL, "and every point downstream, until one says otherwise")
+		return
+	}
+	resolved := geo.point_surfaces(ed.doc.spline, context.temp_allocator)
+	if sel < len(resolved) {
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("reads as %s from upstream", SURFACE_LABEL[resolved[sel]]))
+	}
+}
+
 // Everything that belongs to the one selected control point.
 draw_point_selection :: proc(ed: ^Editor) {
 	sel := selected_point(ed)
@@ -806,6 +840,7 @@ draw_point_selection :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("road roughness", &p.roughness, -1, 1, "%+.2f", ui.IM_SLIDER_NONE) {
 		mark_dirty(ed.doc)
 	}
+	draw_surface_control(ed, sel)
 
 	// Cliffs, banks and gutters are not here. They are their own objects, shared
 	// by every point they run past, and they have their own panel — see

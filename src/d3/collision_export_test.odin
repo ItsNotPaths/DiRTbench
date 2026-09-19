@@ -8,7 +8,7 @@ stage_collision_builds_an_archive_readable_by_our_decoder :: proc(t:^testing.T) 
 		{Points={{0,0,0},{10,0,0},{0,0,10}},Material=.Road},
 		{Points={{20,0,0},{30,0,0},{20,5,10}},Material=.Cliff},
 		{Points={{40,0,0},{50,0,0},{40,0,10}},Material=.Terrain},
-		{Points={{60,0,0},{70,0,0},{60,0,10}},Material=.Road_Sand},
+		{Points={{60,0,0},{70,0,0},{60,0,10}},Material=.Road_Paved},
 	}
 	raw,_,written:=d3_collision_build(collision,d3_test_profile(),context.allocator)
 	defer delete(raw)
@@ -25,7 +25,7 @@ stage_collision_builds_an_archive_readable_by_our_decoder :: proc(t:^testing.T) 
 	// A triangle straddling a partition seam is duplicated into every chunk it
 	// touches, so tally materials across every chunk rather than assuming one
 	// holds everything.
-	gravel,rock,grass:=0,0,0
+	gravel,rock,grass,tarmac:=0,0,0,0
 	for e in entries {
 		if e.name=="qt.info" { continue }
 		chunk,msg,decoded:=qt_read(e.data,context.allocator)
@@ -35,11 +35,15 @@ stage_collision_builds_an_archive_readable_by_our_decoder :: proc(t:^testing.T) 
 			case "GLD*": gravel+=1
 			case "ROK*": rock+=1
 			case "GRS*": grass+=1
+			case "TSD*": tarmac+=1
 			}
 		}
 		qt_chunk_delete(&chunk,context.allocator)
 	}
-	testing.expect(t,gravel>=2) // Road_Sand intentionally shares gravel physics.
+	testing.expect(t,gravel>=1)
 	testing.expect(t,rock>=1)
 	testing.expect(t,grass>=1)
+	// The paved road carries its own code, which is the whole point of the
+	// surface: same ribbon, different grip, dust and tyre note.
+	testing.expect(t,tarmac>=1)
 }

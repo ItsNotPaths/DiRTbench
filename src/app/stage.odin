@@ -38,6 +38,28 @@ Stage_Point :: struct {
 	rot:         [4]f32, // x, y, z, w
 	width:       f32,
 	roughness:   f32, // per-node offset from the global road roughness
+	// What the road is made of from here forward, or absent for "whatever
+	// reaches me from upstream". A name rather than the enum's number, for the
+	// same reason a guard kind is one: inserting a surface later must not
+	// renumber what is already written. A new key rather than a version bump,
+	// so a venue written before surfaces existed reads as all-loose, which is
+	// what it meant.
+	surface:     string,
+}
+
+// The file's names for geo.Road_Surface. `.None` writes nothing at all, so the
+// common case costs no bytes and an old file reads back as it was.
+SURFACE_KEY := [geo.Road_Surface]string {
+	.None  = "",
+	.Loose = "loose",
+	.Paved = "paved",
+}
+
+surface_of :: proc(key: string) -> geo.Road_Surface {
+	for name, surface in SURFACE_KEY {
+		if name == key && surface != .None { return surface }
+	}
+	return .None
 }
 
 // One side guard. Cliffs, banks and gutters are one thing on disk because they
@@ -208,6 +230,7 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 			rot         = quat_to_array(p.xform.rotation),
 			width       = p.width,
 			roughness   = p.roughness,
+			surface     = SURFACE_KEY[p.surface],
 		}
 	}
 	road.points = pts
@@ -359,6 +382,7 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		np := &sp.points[len(sp.points)-1]
 		np.weld = welds[i]
 		np.id = p.id
+		np.surface = surface_of(p.surface)
 		sp.next_id = max(sp.next_id, np.id + 1)
 	}
 

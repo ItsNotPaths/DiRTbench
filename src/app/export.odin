@@ -304,11 +304,12 @@ collision_from_mesh :: proc(mesh: geo.Tri_Mesh, order: []int, allocator := conte
 		case .Road:     material = .Road
 		case .Cliff:    material = .Cliff
 		case .Terrain:  material = .Terrain
-		case .RoadSand: material = .Road_Sand
+		case .Road_Paved: material = .Road_Paved
 		}
 		for corner in 0..<3 {
 			p := mesh.pos[triangle*3+corner]
 			collision[i].Points[corner] = {p.x,p.y,p.z}
+			collision[i].Blend[corner] = mesh.blend[triangle*3+corner]
 		}
 		collision[i].Material = material
 	}
@@ -338,6 +339,10 @@ Export_Job :: struct {
 	// (export_dirt3_billboards.odin), so it needs the knobs rather than a list.
 	veg:       geo.Veg_Params,
 	roughness: f32,
+	// The editor's colours for this venue's ground. Carried because the glTF
+	// target paints its materials with them, so an import looks like the editor
+	// it came out of. No game target reads it.
+	look:      geo.Look,
 	// Which shaders the stage draws with, resolved from the open venue or from
 	// the venue the selected route lives in. Only the Dirt 3 target needs it,
 	// so a failure to resolve one is carried rather than raised.
@@ -466,9 +471,9 @@ build_geometry :: proc(doc: ^Venue_Doc, spline: geo.Spline) -> (g: Export_Geomet
 		// A fresh field is always rebuilt, so the generation only gets stored.
 		geo.terrain_field_ensure(&g.field, &g.terrain, g.ribbon, arc, ds, doc.roughness, 1)
 	}
-	g.mesh = geo.build_tri_mesh(g.ribbon, doc.roughness, context.temp_allocator)
+	g.mesh = geo.build_tri_mesh(g.ribbon, doc.roughness, doc.look, context.temp_allocator)
 	if g.terrain.enabled && len(g.field.tris) > 0 {
-		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field, g.ribbon, doc.roughness)
+		geo.build_terrain_mesh(&g.mesh, &g.terrain, &g.field, g.ribbon, doc.roughness, doc.look)
 	}
 	g.order, g.counts = sort_faces_by_material(g.mesh)
 	if len(g.order) == 0 {
@@ -554,7 +559,7 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 		context.temp_allocator,
 	)
 	job.placed = doc.props[:]
-	job.veg, job.roughness = doc.veg, doc.roughness
+	job.veg, job.roughness, job.look = doc.veg, doc.roughness, doc.look
 
 	// The headless path leaves doc.pace zero-valued, which would read as "every
 	// knob at zero" rather than "unset".

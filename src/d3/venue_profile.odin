@@ -28,13 +28,13 @@ D3_MATERIALS_FILE :: "materials.pssg"
 // A pack is shared and outlives the build that wrote it, so it says which build
 // that was. Raise this whenever the extraction changes, and every pack already
 // on disk is rebuilt instead of silently reused.
-D3_PACK_STAMP :: 2
+D3_PACK_STAMP :: 4
 
 D3_MATERIAL_KEY := [Collision_Material]string {
 	.Road      = "road",
 	.Cliff     = "cliff",
 	.Terrain   = "terrain",
-	.Road_Sand = "road_sand",
+	.Road_Paved = "road_paved",
 }
 
 D3_Venue_Profile :: struct {
@@ -43,16 +43,27 @@ D3_Venue_Profile :: struct {
 	template:  []u8,
 	visual:    [Collision_Material]string,
 	colour:    [Collision_Material][4]u8,
+	// The far end of the material's texture mix. A drawn vertex gets
+	// `lerp(colour, colour_b, blend)`, so `colour_b == colour` switches the mix
+	// off and reproduces a single-texture surface byte for byte. See
+	// geo.Tri_Mesh.blend.
+	colour_b:  [Collision_Material][4]u8,
 	lod:       string,
 	batch:     string,
 	tiles_x:   int,
 	tiles_z:   int,
+	// The texture the paved material was built from, recorded so a palette edit
+	// can be spotted: the material lives inside materials.pssg, so changing the
+	// texture means rebuilding the pack, not rewriting a row. Empty means the
+	// venue offered none and the paved road draws with the loose road's art.
+	paved_texture: string,
 	collision: [Collision_Material]string,
 }
 
 D3_Profile_Field :: enum {
 	Visual,
 	Colour,
+	Colour_B,
 	Collision,
 }
 
@@ -72,6 +83,7 @@ d3_colour_parse :: proc(text: string) -> (out: [4]u8, ok: bool) {
 // `road`, `road_colour` and `road_collision` all address the Road material.
 d3_profile_field :: proc(key: string) -> (material: Collision_Material, field: D3_Profile_Field, ok: bool) {
 	name := key
+	if strings.has_suffix(key, "_colour_b")  { name = strings.trim_suffix(key, "_colour_b");  field = .Colour_B }
 	if strings.has_suffix(key, "_colour")    { name = strings.trim_suffix(key, "_colour");    field = .Colour }
 	if strings.has_suffix(key, "_collision") { name = strings.trim_suffix(key, "_collision"); field = .Collision }
 	for candidate in Collision_Material {
@@ -89,6 +101,9 @@ d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (
 		if !parsed { return fmt.tprintf("malformed pack stamp %s in Dirt 3 profile", value), false }
 		profile.pack = stamp
 		return "", true
+	case "paved_texture":
+		profile.paved_texture = value
+		return "", true
 	case "tiles_x", "tiles_z":
 		count, parsed := strconv.parse_int(value)
 		if !parsed || count < 1 { return fmt.tprintf("malformed tile count %s in Dirt 3 profile", field), false }
@@ -100,10 +115,10 @@ d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (
 	switch kind {
 	case .Visual:    profile.visual[material] = value
 	case .Collision: profile.collision[material] = value
-	case .Colour:
+	case .Colour, .Colour_B:
 		colour, parsed := d3_colour_parse(value)
 		if !parsed { return fmt.tprintf("malformed colour %s in Dirt 3 profile", field), false }
-		profile.colour[material] = colour
+		if kind == .Colour { profile.colour[material] = colour } else { profile.colour_b[material] = colour }
 	}
 	return "", true
 }
@@ -135,6 +150,12 @@ d3_profile_parse :: proc(
 	ok: bool,
 ) {
 	profile.template = template
+	// Colours seed from the defaults, so a profile written before a colour field
+	// existed reads as that default instead of as black. The stamp deliberately
+	// does not seed: a file with no stamp has to read as stale. See D3_PACK_STAMP.
+	defaults := d3_profile_defaults()
+	profile.colour = defaults.colour
+	profile.colour_b = defaults.colour_b
 	text := strings.clone(raw, allocator)
 	for raw_line in strings.split_lines_iterator(&text) {
 		line := strings.trim_space(raw_line)
@@ -169,14 +190,21 @@ d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_all
 	for material in Collision_Material {
 		key := D3_MATERIAL_KEY[material]
 		colour := profile.colour[material]
+		colour_b := profile.colour_b[material]
 		fmt.sbprintf(&b, "%s.%s = %s\n", profile.id, key, profile.visual[material])
 		fmt.sbprintf(
 			&b,
 			"%s.%s_colour = %02x%02x%02x%02x\n",
 			profile.id, key, colour[0], colour[1], colour[2], colour[3],
 		)
+		fmt.sbprintf(
+			&b,
+			"%s.%s_colour_b = %02x%02x%02x%02x\n",
+			profile.id, key, colour_b[0], colour_b[1], colour_b[2], colour_b[3],
+		)
 		fmt.sbprintf(&b, "%s.%s_collision = %s\n", profile.id, key, profile.collision[material])
 	}
+	fmt.sbprintf(&b, "%s.paved_texture = %s\n", profile.id, profile.paved_texture)
 	fmt.sbprintf(&b, "%s.tiles_x = %d\n", profile.id, profile.tiles_x)
 	fmt.sbprintf(&b, "%s.tiles_z = %d\n", profile.id, profile.tiles_z)
 	fmt.sbprintf(&b, "%s.lod = %s\n", profile.id, profile.lod)
@@ -198,6 +226,18 @@ d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
 	profile.colour[.Terrain] = {0x00, 0xff, 0x00, 0x00}
 	profile.collision[.Terrain] = "GRS*"
 	profile.collision[.Cliff] = "ROK*"
+	// Tarmac is in 18 of the 22 stock venues. The four without it are the snow
+	// ones, whose hard surface is concrete; their palette says so.
+	profile.collision[.Road_Paved] = "TSD*"
+	// A surface with nothing to fade into keeps one texture: colour_b == colour.
+	profile.colour_b = profile.colour
+	// The road edge takes the value stock gives its grass materials. Both bytes
+	// are measured off stock infield instances rather than invented, which is the
+	// rule for this channel — an invented value draws black or blown-out ground.
+	// Which channel the shader reads, and which way, is what the first drive on a
+	// painted road settles; see docs/dirt3-pssg.md.
+	profile.colour_b[.Road] = profile.colour[.Terrain]
+	profile.colour_b[.Road_Paved] = profile.colour[.Terrain]
 	return
 }
 

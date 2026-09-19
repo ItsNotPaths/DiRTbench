@@ -71,6 +71,17 @@ Point :: struct {
 	// Side guards are **not** here: they are their own objects (see Guard), so
 	// one cliff is one thing to edit however many control points it runs past.
 	roughness:   f32,
+
+	// What the road is made of **from here forward**, or `.None` for "whatever
+	// reaches me". Sparse on purpose: one hint covers every node downstream of
+	// it until another one says otherwise, so changing a whole run of road is
+	// one edit rather than twenty. A fork inherits into both branches, and a
+	// limited section is two hints — the second naming what comes after.
+	//
+	// There is no backward form. Something always precedes a run, so a
+	// direction field would only add ways to be wrong: two hints that do not
+	// face, overlapping pairs, a hint with no partner.
+	surface:     Road_Surface,
 }
 
 // What a guard is made of. Each kind is one shape swept along one road edge,
@@ -272,6 +283,10 @@ Cross_Section :: struct {
 	// the two control points, the way width is. Combined with the global slider
 	// and clamped where the road is displaced (build_road_surface).
 	roughness:   f32,
+	// What this slice is made of, resolved from the hints upstream of `e_from`.
+	// Never lerped — a surface changes at a control point, not across the span
+	// into one — so this is the edge's source node's surface and nothing else.
+	surface:     Road_Surface,
 }
 
 // One guard kind's shape at one road edge, after every guard that reaches this
@@ -531,6 +546,7 @@ build_ribbon :: proc(
 			}
 		}
 		resolve_guards(sp, out[:])
+		resolve_surfaces(sp, out[:])
 		return out[:]
 	}
 	for seg in 0 ..< nseg {
@@ -542,6 +558,7 @@ build_ribbon :: proc(
 	}
 	append(&out, sample_at(sp, nseg - 1, 1.0))
 	resolve_guards(sp, out[:])
+	resolve_surfaces(sp, out[:])
 	return out[:]
 }
 
@@ -659,6 +676,36 @@ resolve_guards :: proc(sp: Spline, ribbon: []Cross_Section) {
 				sh^ = {size = size, width = g.width, angle = g.angle, rough = g.rough}
 			}
 		}
+	}
+}
+
+// Every control point's surface, with each `.None` filled in from upstream.
+//
+// One forward pass is enough, and that is the whole reason hints are stored the
+// way they are: nodes are topologically ordered, so a parent is always resolved
+// before its children, and a hint reaches every branch below it without a walk
+// or any cycle check. A root that states nothing takes the venue's own road.
+point_surfaces :: proc(sp: Spline, allocator := context.temp_allocator) -> []Road_Surface {
+	out := make([]Road_Surface, len(sp.points), allocator)
+	for p, i in sp.points {
+		if p.surface != .None {
+			out[i] = p.surface
+			continue
+		}
+		// The bound is not paranoia about the invariant: a hand-edited file can
+		// name a parent above its child, and reading ahead would read a zero.
+		out[i] = p.parent >= 0 && p.parent < i ? out[p.parent] : .Loose
+	}
+	return out
+}
+
+// Stamp each slice with the surface of the node its edge leaves. Not lerped: a
+// road changes surface at a control point, and a blend across the span into one
+// would put the change in a different place for the mesh than for the collision.
+resolve_surfaces :: proc(sp: Spline, ribbon: []Cross_Section) {
+	surfaces := point_surfaces(sp, context.temp_allocator)
+	for &cs in ribbon {
+		if cs.e_from >= 0 && cs.e_from < len(surfaces) { cs.surface = surfaces[cs.e_from] }
 	}
 }
 
