@@ -12,6 +12,12 @@ package geo
 //         band and not a function of road bias: a scatter thick enough to be a
 //         forest takes this tier away by itself.
 //
+// A card is a flat sheet seen from the side, so one beside the road is worse than
+// no card at all — and 25 m off the verge that cast it is 3 m off another leg in a
+// hairpin. The near tier holds BILLBOARD_NEAR_IN off *every* leg
+// (billboard_road_clear); the wall's own distance comes free, because the void it
+// stands in starts a whole terrain reach out.
+//
 // Where the terrain ends is `su > reach` — distance from the *nearest* leg's
 // verge seam (veg_field_su). A fixed offset from the casting verge instead puts
 // wall cards inside another leg's terrain at every branch and hairpin.
@@ -321,19 +327,32 @@ billboard_place :: proc(
 	})
 }
 
-// Clear of every leg of the road, past its ends as well as beside it. The
-// terrain's own corridor test is not enough: straight off a dead end it reports the
-// along-road overshoot as clearance, which is right for ground and wrong for a card
-// two metres behind the finish gate.
-billboard_clear_of_road :: proc(vf: ^Veg_Field, p: [2]f32) -> bool {
+// How far a point stands clear of the road: metres out from the nearest leg's
+// seam, measured to the centre line itself rather than to its sample points, and
+// negative on the carriageway. Huge where no leg is within range.
+//
+// Not veg_field_su, which is the terrain's measure and reads a point a long way
+// past a run's end face as far out. A card is judged on plain distance: 25 m
+// behind the finish gate is 25 m of road in front of the driver, whatever the
+// ground does there.
+billboard_road_clear :: proc(vf: ^Veg_Field, p: [2]f32) -> f32 {
 	if !vf.ok {
-		return true
+		return max(f32)
 	}
 	i, d := hash_nearest(vf.hash, vf.fs, p, vf.limit)
 	if i < 0 {
-		return true
+		return max(f32)
 	}
-	return d > max(vf.fs[i].e[0], vf.fs[i].e[1]) + VEG_CLEAR
+	s := vf.fs[i]
+	// The nearest point of a polyline lies on a segment touching its nearest
+	// vertex, so the two either side of the sample are the whole answer.
+	d2 := d * d
+	for nb in s.nb {
+		if nb >= 0 {
+			d2 = min(d2, seg_dist2(s.p, vf.fs[nb].p, p))
+		}
+	}
+	return math.sqrt(d2) - max(s.e[0], s.e[1])
 }
 
 // The wall: rows across the void band, staggered along each ray so one row's gaps
@@ -452,6 +471,12 @@ billboard_near_cards :: proc(
 					seam.x + o.x * u + fwd.x * jf,
 					seam.z + o.z * u + fwd.z * jf,
 				}
+				// `near` is an offset off the *casting* verge, and on a fork or
+				// in a hairpin that offset lands beside another leg. What binds is
+				// the distance to the nearest leg of all of them.
+				if billboard_road_clear(vf, p) < near {
+					continue
+				}
 				// On the terrain and nowhere else: the probe says no in a road
 				// corridor, on a pad that clears its own foliage, and past the
 				// reach, which is where the wall takes over.
@@ -461,9 +486,6 @@ billboard_near_cards :: proc(
 				}
 				if !vf.heights {
 					y = seam.y
-				}
-				if !billboard_clear_of_road(vf, p) {
-					continue
 				}
 				pick := billboard_pick(kinds, rng)
 				if billboard_tree_here(trees, p, pick.w * 0.5) {

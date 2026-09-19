@@ -54,6 +54,23 @@ fork_road :: proc() -> (sp: geo.Spline) {
 	return
 }
 
+// One road, doubled back on itself 22 m away: closer than the near tier's own
+// inner limit, so the ground between the legs takes no card at all.
+@(private = "file")
+hairpin_road :: proc() -> (sp: geo.Spline) {
+	pts := [?]gfx.Vector3{
+		{0, 0, 0}, {0, 0, 70}, {6, 0, 100}, {22, 0, 106}, {22, 0, 70}, {22, 0, 0},
+	}
+	for pos, i in pts {
+		rot := gfx.Quaternion(1)
+		if i > 0 {
+			rot = geo.heading_quat(pts[i - 1], pos)
+		}
+		geo.spline_push(&sp, geo.make_point(pos, rot, geo.DEFAULT_WIDTH, parent = i - 1))
+	}
+	return
+}
+
 @(private = "file")
 Fixture :: struct {
 	sp:     geo.Spline,
@@ -260,23 +277,43 @@ near_cards_fill_in_for_missing_trees :: proc(t: ^testing.T) {
 // Nothing lands on a road, on any leg of one. A card is cast outward from one
 // verge, which on a branched route aims it at another leg's carriageway.
 @(test)
-no_card_lands_on_the_road :: proc(t: ^testing.T) {
-	f := fixture_of(fork_road())
-	defer fixture_delete(&f)
-	veg := geo.Veg_Params{enabled = true, billboards = true, density = 1, road_bias = 1, seed = 5}
-
-	trees := geo.veg_generate(f.ribbon, &f.terr, veg, 0)
-	defer delete(trees)
-	cards := geo.billboards_generate(f.ribbon, &f.terr, veg, 0, trees, NEAR_KINDS, FAR_KINDS)
-	defer delete(cards)
-	testing.expect(t, len(cards) > 0, "nothing to test")
-
-	for c in cards {
+every_card_keeps_its_distance_from_every_leg :: proc(t: ^testing.T) {
+	// How far a card stands from the nearest carriageway edge, measured against
+	// the ribbon itself rather than the field the generator uses. A leg the card
+	// was not cast from counts, and so does the ground past a dead end.
+	clearance :: proc(f: ^Fixture, c: geo.Billboard_Card) -> (out: f32) {
+		out = max(f32)
 		for cs in f.ribbon {
 			d := math.hypot(c.pos.x - cs.pos.x, c.pos.z - cs.pos.z)
-			testing.expectf(t, d > cs.width * 0.5,
-				"a %v card stands %.1f m from the centre of a %.1f m road", c.tier, d, cs.width)
+			out = min(out, d - cs.width * 0.5)
 		}
+		return
+	}
+
+	veg := geo.Veg_Params{enabled = true, billboards = true, density = 1, road_bias = 1, seed = 5}
+	for road, which in ([]geo.Spline{fork_road(), hairpin_road()}) {
+		f := fixture_of(road)
+		defer fixture_delete(&f)
+
+		trees := geo.veg_generate(f.ribbon, &f.terr, veg, 0)
+		defer delete(trees)
+		cards := geo.billboards_generate(f.ribbon, &f.terr, veg, 0, trees, NEAR_KINDS, FAR_KINDS)
+		defer delete(cards)
+
+		// The wall's own inner limit is where the terrain gives out, which on any
+		// terrain this wide is further out than the near tier's.
+		wall_in := min(geo.BILLBOARD_NEAR_IN, f.terr.reach_m - geo.BILLBOARD_RIM_IN)
+		near, far := 0, 0
+		for c in cards {
+			d := clearance(&f, c)
+			want := c.tier == .Near ? geo.BILLBOARD_NEAR_IN : wall_in
+			testing.expectf(t, d >= want,
+				"road %d: a %v card stands %.1f m off the road, inside its %.1f m limit",
+				which, c.tier, d, want)
+			if c.tier == .Near { near += 1 } else { far += 1 }
+		}
+		testing.expectf(t, near > 0 && far > 0,
+			"road %d: %d near and %d wall cards, a tier went missing", which, near, far)
 	}
 }
 
