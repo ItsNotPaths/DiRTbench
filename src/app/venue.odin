@@ -275,16 +275,38 @@ venue_load_path :: proc(
 	if rerr != nil {
 		return p, fmt.tprintf("could not read %s: %v", path, rerr), false
 	}
+	return venue_parse(data, path, allocator)
+}
+
+// One venue document out of bytes that are not a file yet. A download is
+// checked here, before anything of it reaches maps/: the bytes came off the
+// network, and the only thing that makes them a venue is that this parses them.
+// `label` names them in the messages and nothing else.
+venue_parse :: proc(
+	data: []u8,
+	label: string,
+	allocator := context.allocator,
+) -> (
+	p: Venue,
+	msg: string,
+	ok: bool,
+) {
 	if uerr := json.unmarshal(data, &p, json.DEFAULT_SPECIFICATION, allocator); uerr != nil {
-		return p, fmt.tprintf("could not parse %s: %v", path, uerr), false
+		return p, fmt.tprintf("could not parse %s: %v", label, uerr), false
 	}
+	// Refused, and nothing of it kept: a half-read document must not come back
+	// looking like a shallow one.
 	if p.format != VENUE_FORMAT {
-		return p, fmt.tprintf("not a venue document (format %q)", p.format), false
+		bad := strings.clone(p.format, context.temp_allocator)
+		venue_free(p, allocator)
+		return Venue{}, fmt.tprintf("not a venue document (format %q)", bad), false
 	}
 	if p.version != VENUE_VERSION {
-		return p, fmt.tprintf(
+		version := p.version
+		venue_free(p, allocator)
+		return Venue{}, fmt.tprintf(
 			"venue document version %d, and this build reads %d",
-			p.version,
+			version,
 			VENUE_VERSION,
 		), false
 	}
