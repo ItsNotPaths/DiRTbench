@@ -1,7 +1,10 @@
 # Michigan Rally. Its tracksplit holds "gravel" (bas_07 + bas_08) and
 # "gravel_tamac" (bas_06 + bas_08), sharing their second layer. So bas_06 is the
 # tarmac half and bas_08 is the gravel both sit on.
-paved.texture   = mic_ral_bas_06_d.tga
+loose.texture   = mic_ral_bas_07_d.tga
+loose.texture2  = mic_ral_bas_08_d.tga
+paved.texture   = mic_ral_bas_00_d.tga
+ground.texture  = mic_ral_inf_01_d.tga
 paved.collision = TSD*
 # Dark loam and heavy green woods.
 colour.road          = 7a6e5e

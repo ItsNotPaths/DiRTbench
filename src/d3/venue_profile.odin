@@ -28,7 +28,7 @@ D3_MATERIALS_FILE :: "materials.pssg"
 // A pack is shared and outlives the build that wrote it, so it says which build
 // that was. Raise this whenever the extraction changes, and every pack already
 // on disk is rebuilt instead of silently reused.
-D3_PACK_STAMP :: 4
+D3_PACK_STAMP :: 5
 
 // The profile's row names. Two tables because the two enums are two keyspaces,
 // spelling the same four names today: every surface that exists also has a look
@@ -38,6 +38,8 @@ D3_DRAW_KEY := [Draw_Material]string {
 	.Cliff      = "cliff",
 	.Terrain    = "terrain",
 	.Road_Paved = "road_paved",
+	.Roadside   = "roadside",
+	.Gutter     = "gutter",
 }
 
 D3_SURFACE_KEY := [Collision_Surface]string {
@@ -62,11 +64,16 @@ D3_Venue_Profile :: struct {
 	batch:     string,
 	tiles_x:   int,
 	tiles_z:   int,
-	// The texture the paved material was built from, recorded so a palette edit
-	// can be spotted: the material lives inside materials.pssg, so changing the
-	// texture means rebuilding the pack, not rewriting a row. Empty means the
-	// venue offered none and the paved road draws with the loose road's art.
-	paved_texture: string,
+	// The textures the made materials were built from, recorded so a palette edit
+	// can be spotted: they live inside materials.pssg, so changing one means
+	// rebuilding the pack rather than rewriting a row. Empty pairs mean the
+	// palette said nothing and the venue's own art was measured out instead.
+	art: D3_Pack_Art,
+	// The stock instance `dirtbench_ground` was cloned from. Recorded for the
+	// same reason as the texture above: the clone lives inside materials.pssg,
+	// and the venue tracksplit has to make it again from the base venue's own
+	// art rather than from a name the profile happens to hold afterwards.
+	ground_source: string,
 	collision: [Collision_Surface]string,
 }
 
@@ -125,8 +132,14 @@ d3_profile_assign :: proc(profile: ^D3_Venue_Profile, field, value: string) -> (
 		if !parsed { return fmt.tprintf("malformed pack stamp %s in Dirt 3 profile", value), false }
 		profile.pack = stamp
 		return "", true
-	case "paved_texture":
-		profile.paved_texture = value
+	case "loose_texture":   profile.art.loose[0] = value;  return "", true
+	case "loose_texture2":  profile.art.loose[1] = value;  return "", true
+	case "paved_texture":   profile.art.paved[0] = value;  return "", true
+	case "paved_texture2":  profile.art.paved[1] = value;  return "", true
+	case "ground_texture":  profile.art.ground[0] = value; return "", true
+	case "ground_texture2": profile.art.ground[1] = value; return "", true
+	case "ground_source":
+		profile.ground_source = value
 		return "", true
 	case "tiles_x", "tiles_z":
 		count, parsed := strconv.parse_int(value)
@@ -244,7 +257,15 @@ d3_profile_text :: proc(profile: D3_Venue_Profile, allocator := context.temp_all
 		)
 	}
 	strings.write_string(&b, "\n")
-	fmt.sbprintf(&b, "%s.paved_texture = %s\n", profile.id, profile.paved_texture)
+	strings.write_string(&b, "\n# The textures each made material was built from, and the stock instance\n")
+	strings.write_string(&b, "# the ground was cloned from. Changing one means rebuilding the pack.\n")
+	for row in ([?]struct{pair: [2]string, key: string}{
+		{profile.art.loose, "loose"}, {profile.art.paved, "paved"}, {profile.art.ground, "ground"},
+	}) {
+		fmt.sbprintf(&b, "%s.%s_texture = %s\n", profile.id, row.key, row.pair[0])
+		fmt.sbprintf(&b, "%s.%s_texture2 = %s\n", profile.id, row.key, row.pair[1])
+	}
+	fmt.sbprintf(&b, "%s.ground_source = %s\n", profile.id, profile.ground_source)
 	fmt.sbprintf(&b, "%s.tiles_x = %d\n", profile.id, profile.tiles_x)
 	fmt.sbprintf(&b, "%s.tiles_z = %d\n", profile.id, profile.tiles_z)
 	fmt.sbprintf(&b, "%s.lod = %s\n", profile.id, profile.lod)
@@ -276,6 +297,10 @@ d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
 	// painted road settles; see docs/dirt3-pssg.md.
 	profile.colour_b[.Road] = profile.colour[.Terrain]
 	profile.colour_b[.Road_Paved] = profile.colour[.Terrain]
+	// The roadside runs the other way round: weight 0 is the ground it stands
+	// in and weight 1 is the road it meets, so its two ends are the terrain's
+	// value and the road edge's, in that order.
+	profile.colour_b[.Roadside] = profile.colour[.Terrain]
 	return
 }
 

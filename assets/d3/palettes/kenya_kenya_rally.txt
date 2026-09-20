@@ -1,5 +1,9 @@
 # Kenya Rally. From "tarmac clean" and "tarmac rough" in its own tracksplit.
+loose.texture   = ken_ral_bas_08_d.tga
+loose.texture2  = ken_ral_bas_07_d.tga
 paved.texture   = ken_ral_bas_14_d.tga
+paved.texture2  = ken_ral_fea_12_d.tga
+ground.texture  = ken_ral_inf_05_d.tga
 paved.collision = TSD*
 # Red-orange laterite over dry scrub.
 colour.road          = 9c6640

@@ -1,6 +1,7 @@
 package d3
 
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 import "core:testing"
 
@@ -128,4 +129,105 @@ profile_without_a_stamp_reads_as_stale :: proc(t: ^testing.T) {
 	got, msg, ok := d3_profile_parse(old, want.template, context.temp_allocator)
 	testing.expect(t, ok, msg); if !ok { return }
 	testing.expect_value(t, got.pack, 0)
+}
+
+// The roadside material fades the ground into the road, and both its ends have
+// to be exactly what they fade between: its first texture is the one the road
+// edge draws, its second the one the ground draws. Anything else swaps one hard
+// edge for two fainter ones, which is worse than the edge.
+//
+// Read out of the built pack rather than off the call that made it, because the
+// clone is where a slot can be repointed wrongly and still look fine.
+@(test)
+the_roadside_ends_where_its_neighbours_begin :: proc(t: ^testing.T) {
+	pack, profile_text, msg, ok := d3_pack_build(
+		transmute([]u8)D3_FIXTURE_MATERIALS, "somevenue", D3_Pack_Art{}, context.temp_allocator,
+	)
+	testing.expect(t, ok, msg); if !ok { return }
+	profile, parse_msg, parsed := d3_profile_parse(profile_text, pack, context.temp_allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	testing.expect_value(t, profile.visual[.Roadside], D3_ROADSIDE_MATERIAL)
+
+	file, read_msg, read_ok := pssg_read(pack, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+	instances := d3_library(&file, "SHADERINSTANCE")
+
+	road := d3_material_texture(&file, instances, profile.visual[.Road], d3_infield_diffuse[0])
+	ground := d3_material_texture(&file, instances, profile.visual[.Terrain], d3_infield_diffuse[0])
+	near := d3_material_texture(&file, instances, D3_ROADSIDE_MATERIAL, d3_infield_diffuse[0])
+	far := d3_material_texture(&file, instances, D3_ROADSIDE_MATERIAL, d3_infield_diffuse[1])
+
+	testing.expect(t, road != "" && ground != "", "the two neighbours must name textures")
+	testing.expect(t, road != ground, "a venue drawing one texture for both has nothing to fade")
+	testing.expect_value(t, near, road)
+	testing.expect_value(t, far, ground)
+}
+
+// Every material we draw the ground with shares one baked ambient-occlusion map
+// and one colour map.
+//
+// `terrain_infield.fx` samples both at ST, and ST is one map over the whole
+// venue, so two materials carrying different ones tint the ground by two
+// unrelated images. They agree near the ST origin and drift apart across the
+// map — driven, that reads as gravel meeting gravel of another shade, further
+// along the road each time. It shipped that way once.
+@(test)
+every_ground_material_shares_one_baked_art :: proc(t: ^testing.T) {
+	pack, profile_text, msg, ok := d3_pack_build(
+		transmute([]u8)D3_FIXTURE_MATERIALS, "somevenue", D3_Pack_Art{}, context.temp_allocator,
+	)
+	testing.expect(t, ok, msg); if !ok { return }
+	profile, parse_msg, parsed := d3_profile_parse(profile_text, pack, context.temp_allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+
+	file, read_msg, read_ok := pssg_read(pack, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+	instances := d3_library(&file, "SHADERINSTANCE")
+
+	for parameter in d3_shared_art {
+		want, from := "", Draw_Material.Road
+		for material in Draw_Material {
+			got := d3_material_texture(&file, instances, profile.visual[material], parameter)
+			testing.expectf(t, got != "", "%v names no art at %#x", material, parameter)
+			if want == "" {
+				want, from = got, material
+				continue
+			}
+			testing.expectf(t, got == want,
+				"%v draws with %q at %#x and %v with %q: two images over one venue",
+				from, want, parameter, material, got)
+		}
+	}
+}
+
+// And the two textures the roadside fades between keep the tiling of the
+// materials they came from — the road's in the slot holding the road's texture,
+// the ground's in the slot holding the ground's. Same grain either side of the
+// join, not the same texture drawn at half the size.
+@(test)
+the_roadside_keeps_each_texture_at_its_own_scale :: proc(t: ^testing.T) {
+	pack, profile_text, msg, ok := d3_pack_build(
+		transmute([]u8)D3_FIXTURE_MATERIALS, "somevenue", D3_Pack_Art{}, context.temp_allocator,
+	)
+	testing.expect(t, ok, msg); if !ok { return }
+	profile, parse_msg, parsed := d3_profile_parse(profile_text, pack, context.temp_allocator)
+	testing.expect(t, parsed, parse_msg); if !parsed { return }
+
+	file, read_msg, read_ok := pssg_read(pack, context.temp_allocator)
+	testing.expect(t, read_ok, read_msg); if !read_ok { return }
+	instances := d3_library(&file, "SHADERINSTANCE")
+	tiling :: proc(file: ^Pssg_File, instances: ^Pssg_Node, id: string, parameter: u32) -> []u8 {
+		instance := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", id)
+		if instance == nil { return nil }
+		input := d3_input_at(file, instance, parameter)
+		return input == nil ? nil : input.data
+	}
+	road := tiling(&file, instances, profile.visual[.Road], D3_MAP_UV[0])
+	ground := tiling(&file, instances, profile.visual[.Terrain], D3_MAP_UV[0])
+	near := tiling(&file, instances, D3_ROADSIDE_MATERIAL, D3_MAP_UV[0])
+	far := tiling(&file, instances, D3_ROADSIDE_MATERIAL, D3_MAP_UV[1])
+
+	testing.expect(t, len(road) > 0 && len(ground) > 0, "both neighbours must name a tiling")
+	testing.expect(t, slice.equal(near, road), "the road's texture must tile as the road tiles it")
+	testing.expect(t, slice.equal(far, ground), "the ground's must tile as the ground tiles it")
 }

@@ -464,33 +464,27 @@ the_mix_walks_from_one_end_to_the_other :: proc(t: ^testing.T) {
 // the routes and made only in the pack, so the venue tracksplit had no instance
 // under the name and a whole surface went invisible.
 //
-// The venue template here is the pack with its made materials stripped out,
-// which is exactly what a base venue's own tracksplit is: the art, and none of
-// our additions.
+// The venue template is the fixture itself: the base venue's own art, holding
+// every stock instance and none of our additions. That is what a tracksplit is,
+// and it is *not* what the pack is — the pack keeps only the materials the
+// profile names, so the stock instances our clones came from are gone from it.
 @(test)
 a_venue_scene_makes_every_material_it_names :: proc(t: ^testing.T) {
-	art := D3_Pack_Art{paved_texture = "any_texture_d.tga"}
+	art := D3_Pack_Art{paved = {"any_texture_d.tga","any_texture_d.tga"}}
 	pack, profile_text, pack_msg, packed := d3_pack_build(
 		transmute([]u8)D3_FIXTURE_MATERIALS, "somevenue", art, context.temp_allocator,
 	)
 	testing.expect(t, packed, pack_msg); if !packed { return }
 	profile, parse_msg, parsed := d3_profile_parse(profile_text, pack, context.temp_allocator)
 	testing.expect(t, parsed, parse_msg); if !parsed { return }
+	// Every material we make rather than find has to be in play, or this proves
+	// nothing about the ones that are missing.
 	testing.expect_value(t, profile.visual[.Road_Paved], D3_PAVED_MATERIAL)
+	testing.expect_value(t, profile.visual[.Roadside], D3_ROADSIDE_MATERIAL)
+	testing.expect_value(t, profile.visual[.Terrain], D3_GROUND_MATERIAL)
+	testing.expect_value(t, profile.visual[.Gutter], D3_GUTTER_MATERIAL)
 
-	stripped, strip_msg, stripped_ok := pssg_read(pack, context.temp_allocator)
-	testing.expect(t, stripped_ok, strip_msg); if !stripped_ok { return }
-	instances := d3_library(&stripped, "SHADERINSTANCE")
-	kept := make([dynamic]^Pssg_Node, context.temp_allocator)
-	for child in instances.children {
-		if pssg_attr_string(&stripped, child, "id") != D3_PAVED_MATERIAL { append(&kept, child) }
-	}
-	testing.expect(t, len(kept) < len(instances.children), "the made material must be there to strip")
-	clear(&instances.children)
-	append(&instances.children, ..kept[:])
-	template, encoded := pssg_write(&stripped, context.temp_allocator)
-	testing.expect(t, encoded, "could not encode the stripped template"); if !encoded { return }
-
+	template := transmute([]u8)D3_FIXTURE_MATERIALS
 	tris := d3_test_mesh(context.temp_allocator)
 	raw, msg, built := d3_routesplit_build_with_template(
 		tris, &profile, template, .Venue, context.allocator,

@@ -591,7 +591,7 @@ mesh_deviation :: proc(a, b: geo.Tri_Mesh) -> (cliff, road: f32) {
 			switch mat {
 			case .Cliff:           cliff += d; cliff_n += 1
 			case .Road, .Road_Paved: road += d;  road_n += 1
-			case .Terrain:
+			case .Terrain, .Roadside, .Gutter:
 			}
 		}
 	}

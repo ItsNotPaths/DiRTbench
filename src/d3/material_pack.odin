@@ -69,6 +69,7 @@ d3_shader_base :: proc(id: string) -> string {
 
 D3_CLIFF_MATERIAL :: "dirtbench_cliff"
 D3_PAVED_MATERIAL :: "dirtbench_paved"
+D3_ROADSIDE_MATERIAL :: "dirtbench_roadside"
 
 // What a base venue's own art cannot say for itself, and so comes from the
 // content pack's palette instead.
@@ -84,7 +85,9 @@ D3_PAVED_MATERIAL :: "dirtbench_paved"
 // road's material and differs only in its collision code, which is still a real
 // tarmac surface to drive on.
 D3_Pack_Art :: struct {
-	paved_texture: string,
+	loose:  [2]string,
+	paved:  [2]string,
+	ground: [2]string,
 }
 
 // The two diffuse layers of `terrain_infield.fx`. A parameter id belongs to the
@@ -92,6 +95,10 @@ D3_Pack_Art :: struct {
 // nine base-eligible tracksplits. Both layers take the same texture, which
 // leaves the blend map between them nothing to decide.
 d3_infield_diffuse := [?]u32{0x0c, 0x15}
+
+// `Map2UVScaleAndOffset` and `Map3UVScaleAndOffset`, the tiling of those two
+// diffuse layers in the same order.
+D3_MAP_UV := [?]u32{0x01, 0x02}
 
 // Rock art, by Codemasters' own texture naming: `rck` is rock, `fea` is a
 // terrain feature, `_d` is the diffuse of the set. Every stock venue holds one,
@@ -133,26 +140,213 @@ d3_rock_texture :: proc(file: ^Pssg_File, allocator: mem.Allocator) -> string {
 d3_surface_material :: proc(
 	file: ^Pssg_File,
 	instances: ^Pssg_Node,
-	donor_id, name, texture: string,
+	donor_id, name: string,
+	textures: [len(d3_infield_diffuse)]string,
 	allocator: mem.Allocator,
 ) -> string {
 	donor := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", donor_id)
-	if donor == nil || texture == "" { return "" }
+	if donor == nil { return "" }
+	for texture in textures {
+		if texture == "" { return "" }
+	}
 
 	clone := pssg_clone_node(donor, allocator)
 	if !pssg_set_attr_string(file, clone, "id", name, allocator) { return "" }
-	// Local form, as a tracksplit names its own textures. The pack requalifies
-	// every reference it keeps, this one with the rest.
-	local := strings.concatenate({"#", texture}, allocator)
 	painted := 0
 	for input in clone.children {
 		id, known := pssg_attr_u32(file, input, "parameterID")
-		if !known || !slice.contains(d3_infield_diffuse[:], id) { continue }
+		if !known { continue }
+		slot, wanted := slice.linear_search(d3_infield_diffuse[:], id)
+		if !wanted { continue }
+		// Local form, as a tracksplit names its own textures. The pack requalifies
+		// every reference it keeps, these with the rest.
+		local := strings.concatenate({"#", textures[slot]}, allocator)
 		if pssg_set_attr_string(file, input, "texture", local, allocator) { painted += 1 }
 	}
 	if painted != len(d3_infield_diffuse) { return "" }
 	append(&instances.children, clone)
 	return name
+}
+
+D3_ROAD_MATERIAL :: "dirtbench_road"
+D3_GROUND_MATERIAL :: "dirtbench_ground"
+D3_GUTTER_MATERIAL :: "dirtbench_gutter"
+
+// How much coarser the gutter draws the road's dirt than the road does.
+//
+// A `MapNUVScaleAndOffset` is how many times the texture repeats over ST, so
+// **smaller is bigger**: halving it doubles the size of every stone. The cut is
+// a narrow thing a couple of metres across, and the road's own scale packs far
+// too much detail into it to read as anything.
+D3_GUTTER_MAGNIFY :: 0.5
+
+// Multiply the first two floats of a constant input — the scale half of a
+// `MapNUVScaleAndOffset`, leaving its offset alone.
+d3_scale_input :: proc(file: ^Pssg_File, instance: ^Pssg_Node, parameter: u32, by: f32) -> bool {
+	input := d3_input_at(file, instance, parameter)
+	if input == nil || len(input.data) < 8 { return false }
+	for k in 0 ..< 2 {
+		at := k*4
+		binary_store_f32(input.data, at, binary_load_f32(input.data, at, .Big)*by, .Big)
+	}
+	return true
+}
+
+// One material's whole input at `from`, copied onto another's at `to`, whatever
+// its type: the node carries a texture reference or a constant's bytes, and
+// replacing it wholesale copies either without knowing which.
+//
+// `from` and `to` differ when the same art belongs in a different slot: the
+// roadside holds the ground's texture in its *second* diffuse, so the tiling
+// that goes with it has to move from Map2 to Map3 or the grain comes out at the
+// wrong size.
+d3_copy_input :: proc(
+	file: ^Pssg_File,
+	clone, source: ^Pssg_Node,
+	from, to: u32,
+	allocator: mem.Allocator,
+) -> bool {
+	want := d3_input_at(file, source, from)
+	if want == nil { return false }
+	for input, i in clone.children {
+		got, known := pssg_attr_u32(file, input, "parameterID")
+		if !known || got != to { continue }
+		fresh := pssg_clone_node(want, allocator)
+		if !pssg_set_attr_u32(file, fresh, "parameterID", to, allocator) { return false }
+		clone.children[i] = fresh
+		return true
+	}
+	return false
+}
+
+d3_input_at :: proc(file: ^Pssg_File, instance: ^Pssg_Node, parameter: u32) -> ^Pssg_Node {
+	for input in instance.children {
+		got, known := pssg_attr_u32(file, input, "parameterID")
+		if known && got == parameter { return input }
+	}
+	return nil
+}
+
+// The texture one material draws at one of its diffuse slots. How the roadside
+// finds both ends of its fade without anyone writing a texture name down.
+d3_material_texture :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	id: string,
+	parameter: u32,
+) -> string {
+	instance := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", id)
+	if instance == nil { return "" }
+	if input := d3_input_at(file, instance, parameter); input != nil {
+		texture := pssg_attr_string(file, input, "texture")
+		// A tracksplit names its own textures locally (`#name`); a routesplit or
+		// a pack names them across files (`file.pssg#name`). The name is what
+		// follows the last `#` either way, and the clone re-qualifies from
+		// there. Reading the qualified form back produced
+		// `tracksplit.pssg#tracksplit.pssg#name`, which resolves to nothing and
+		// draws nothing without a word.
+		if at := strings.last_index_byte(texture, '#'); at >= 0 { return texture[at+1:] }
+		return texture
+	}
+	return ""
+}
+
+// Which section's baked art every one of our materials shares.
+//
+// `terrain_infield.fx` samples an ambient-occlusion map and a colour map at ST
+// directly, and ST is one map over our whole venue. Stock's are painted per
+// section of the donor venue, so two materials picked from different sections
+// tint our ground by two unrelated images: they agree near the ST origin and
+// drift apart across the map. Driven, that reads as gravel meeting gravel of a
+// different shade, further along each time.
+//
+// So every material we draw the ground with takes the **road's** pair. Which
+// section that is stays incidental — what matters is that it is one of them.
+d3_shared_art := [?]u32{0x19, 0x1d} // TAmbientOcclusion, TColourMap
+
+// The terrain, on the road's baked art. A clone rather than the stock instance
+// edited in place: stock materials stay stock, and everything we draw with is
+// ours.
+d3_ground_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	road_id, ground_id: string,
+	want: [2]string,
+	allocator: mem.Allocator,
+) -> string {
+	road := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", road_id)
+	// The palette's pair when it names one, else whatever the stock instance
+	// already drew: this material exists for the shared art even when the
+	// textures are not being changed.
+	pair := want
+	if pair[0] == "" {
+		pair = {
+			d3_material_texture(file, instances, ground_id, d3_infield_diffuse[0]),
+			d3_material_texture(file, instances, ground_id, d3_infield_diffuse[1]),
+		}
+	}
+	made := d3_surface_material(file, instances, ground_id, D3_GROUND_MATERIAL, pair, allocator)
+	if made == "" || road == nil { return "" }
+	clone := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", D3_GROUND_MATERIAL)
+	for parameter in d3_shared_art {
+		if !d3_copy_input(file, clone, road, parameter, parameter, allocator) { return "" }
+	}
+	return made
+}
+
+// The drainage cut: the road's own dirt, drawn coarser.
+//
+// Both diffuse slots take the same texture, which leaves the blend map between
+// them nothing to decide, and the road is the donor so the cut already shares
+// its baked art. Only the scale moves.
+d3_gutter_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	road_id: string,
+	allocator: mem.Allocator,
+) -> string {
+	texture := d3_material_texture(file, instances, road_id, d3_infield_diffuse[0])
+	made := d3_surface_material(
+		file, instances, road_id, D3_GUTTER_MATERIAL, {texture, texture}, allocator,
+	)
+	if made == "" { return "" }
+	clone := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", D3_GUTTER_MATERIAL)
+	for parameter in D3_MAP_UV {
+		if !d3_scale_input(file, clone, parameter, D3_GUTTER_MAGNIFY) { return "" }
+	}
+	return made
+}
+
+// The material that lets the ground fade into the road: the road's own first
+// texture at weight 1, the ground's at weight 0.
+//
+// Both are read off the two materials rather than named anywhere, so the fade
+// cannot disagree with what it fades between. The **ground** material is the
+// donor, so at weight 0 the roadside is identical to plain ground in every
+// input; the road's tiling is then copied onto the slot holding the road's
+// texture, so at weight 1 the grain matches too. The baked art needs no copying
+// here — the ground already carries the road's.
+d3_roadside_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	road_id, ground_id: string,
+	allocator: mem.Allocator,
+) -> string {
+	road := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", road_id)
+	ground := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", ground_id)
+	if road == nil || ground == nil { return "" }
+	road_tex := d3_material_texture(file, instances, road_id, d3_infield_diffuse[0])
+	ground_tex := d3_material_texture(file, instances, ground_id, d3_infield_diffuse[0])
+	made := d3_surface_material(
+		file, instances, ground_id, D3_ROADSIDE_MATERIAL, {road_tex, ground_tex}, allocator,
+	)
+	if made == "" { return "" }
+	clone := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", D3_ROADSIDE_MATERIAL)
+	// Each texture keeps the tiling it is drawn at by the material it came from.
+	// The ground's moves slot, from the first diffuse to the second.
+	if !d3_copy_input(file, clone, road, D3_MAP_UV[0], D3_MAP_UV[0], allocator) { return "" }
+	if !d3_copy_input(file, clone, ground, D3_MAP_UV[0], D3_MAP_UV[1], allocator) { return "" }
+	return made
 }
 
 d3_cliff_material :: proc(
@@ -162,7 +356,7 @@ d3_cliff_material :: proc(
 	allocator: mem.Allocator,
 ) -> string {
 	rock := d3_rock_texture(file, allocator)
-	return d3_surface_material(file, instances, donor_id, D3_CLIFF_MATERIAL, rock, allocator)
+	return d3_surface_material(file, instances, donor_id, D3_CLIFF_MATERIAL, {rock, rock}, allocator)
 }
 
 d3_pack_source_sizes :: proc(file: ^Pssg_File, node: ^Pssg_Node, out: ^map[string]u64) {
@@ -334,10 +528,20 @@ d3_pack_build :: proc(
 	// different name drives the terrain. Most venues offer one or two, so this
 	// degrades to every material sharing a shader rather than to a failure.
 	road := surface[0].id
-	ground := road
+	stock_ground := road
 	for pick in surface {
-		if d3_shader_base(pick.id) != d3_shader_base(road) { ground = pick.id; break }
+		if d3_shader_base(pick.id) != d3_shader_base(road) { stock_ground = pick.id; break }
 	}
+	// The road the palette names, if it names one. Codemasters' ground textures
+	// are numbered rather than described, so which of them is the road's own
+	// dirt cannot be measured off the venue — see src/app/palette.odin.
+	if made := d3_surface_material(&file, instances, road, D3_ROAD_MATERIAL, art.loose, scratch);
+	   made != "" { road = made }
+	// The ground on the road's baked art, so the two agree everywhere rather
+	// than only near the ST origin. With one material for both there is nothing
+	// to reconcile and the stock instance stands.
+	ground := d3_ground_material(&file, instances, road, stock_ground, art.ground, scratch)
+	if ground == "" { ground = stock_ground }
 	// The cliff draws with rock the venue already owns. Failing that, any third
 	// surface material still beats cutting the cliff out of the road's gravel,
 	// and a venue offering two materials has no choice but the road.
@@ -346,19 +550,31 @@ d3_pack_build :: proc(
 		cliff = road
 		for pick in surface {
 			base := d3_shader_base(pick.id)
-			if base != d3_shader_base(road) && base != d3_shader_base(ground) { cliff = pick.id; break }
+			if base != d3_shader_base(road) && base != d3_shader_base(stock_ground) { cliff = pick.id; break }
 		}
 	}
 	// The paved road is made from the palette's texture. With none, it falls
 	// back to the loose road's material: right grip, wrong paint, still useful.
-	paved := d3_surface_material(&file, instances, road, D3_PAVED_MATERIAL, art.paved_texture, scratch)
+	paved := d3_surface_material(&file, instances, road, D3_PAVED_MATERIAL, art.paved, scratch)
 	if paved == "" { paved = road }
+	// With no roadside material the ground meets the road at a line, which is
+	// where it met it before this existed. A venue drawing one material for both
+	// has nothing to fade between and says so by falling back.
+	roadside := d3_roadside_material(&file, instances, road, ground, scratch)
+	if roadside == "" { roadside = ground }
+	// A gutter with no material of its own keeps wearing the ground, which is
+	// what it wore before this existed.
+	gutter := d3_gutter_material(&file, instances, road, scratch)
+	if gutter == "" { gutter = ground }
 
 	for material in Draw_Material { profile.visual[material] = road }
 	profile.visual[.Terrain] = ground
 	profile.visual[.Cliff] = cliff
 	profile.visual[.Road_Paved] = paved
-	profile.paved_texture = art.paved_texture
+	profile.visual[.Roadside] = roadside
+	profile.visual[.Gutter] = gutter
+	profile.art = art
+	profile.ground_source = stock_ground
 
 	wanted := make(map[string]bool, scratch)
 	for material in Draw_Material { wanted[profile.visual[material]] = true }

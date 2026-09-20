@@ -189,6 +189,16 @@ Mat_Id :: enum u8 {
 	Cliff,
 	Terrain,
 	Road_Paved, // its hard road: tarmac, or concrete where the venue has no tarmac
+	// Ground within TERRAIN_ROADSIDE_M of a bare road edge. Ordinary terrain in
+	// every way that drives; it exists only so the ground can fade into the road
+	// instead of meeting it at a line. A ground shader holds two textures, so two
+	// materials can never blend into each other — only a third holding both can,
+	// and this is it. See MAT_EXPORT in app/export.odin.
+	Roadside,
+	// The drainage cut at the road edge. Washed-out road dirt rather than the
+	// grass it used to wear: water runs off the road into it, so what collects
+	// there is what came off the road. Drives as ground, the way it always did.
+	Gutter,
 }
 
 // What a run of road is made of. Deliberately venue-neutral: the same value is
@@ -607,6 +617,12 @@ Look :: struct {
 	gutter:        gfx.Color, // a wet cut, darker than the road
 }
 
+// How far out from a bare road edge the ground keeps some of the road's own
+// texture. Short: it is the join that wants softening, not the verge. Stock's
+// own gravel-to-tarmac bridge on Tupasentie covers 16 m *along* the road, and
+// across the edge a few metres is the whole distance there is.
+TERRAIN_ROADSIDE_M :: 4.0
+
 DEFAULT_LOOK :: Look {
 	// Loose is brown and paved is a dark neutral grey, far enough apart to tell
 	// at a glance across a whole stage. They used to sit 20 levels apart in the
@@ -734,7 +750,7 @@ verge_quad_look :: proc(row: int, look: Look) -> (col: gfx.Color, mat: Mat_Id) {
 	seg, t := verge_row_at(row)
 	switch seg {
 	case .Gutter_In, .Gutter_Out:
-		return look.gutter, .Terrain
+		return look.gutter, .Gutter
 	case .Bank_In, .Bank_Out:
 		return look.bank, .Terrain
 	case .Cliff:

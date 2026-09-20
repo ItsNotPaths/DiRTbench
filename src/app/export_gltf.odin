@@ -46,6 +46,10 @@ gltf_material_colour :: proc(m: geo.Mat_Id, look: geo.Look) -> gfx.Color {
 	case .Road_Paved: return look.road_paved
 	case .Cliff:      return look.cliff_top
 	case .Terrain:    return look.terrain
+	// Per material, and the roadside's whole point is that it varies per vertex.
+	// Halfway between its two ends is the closest one colour gets.
+	case .Roadside:   return geo.lerp_col(look.terrain, look.road, 0.5)
+	case .Gutter:     return look.gutter
 	}
 	return look.road
 }

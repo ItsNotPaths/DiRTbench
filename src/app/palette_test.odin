@@ -26,11 +26,23 @@ every_baked_palette_names_a_collision_code :: proc(t: ^testing.T) {
 		testing.expectf(t, p.paved_collision != "", "%s names no paved collision code", file.name)
 		testing.expectf(t, len(p.paved_collision) == 4,
 			"%s: %q is not a four-character surface code", file.name, p.paved_collision)
-		// A texture is optional — a snow venue has no paving to point at — but a
-		// present one has to look like a texture rather than a shader name.
-		if p.paved_texture != "" {
-			testing.expectf(t, strings.has_suffix(p.paved_texture, ".tga"),
-				"%s: %q is not a texture name", file.name, p.paved_texture)
+		// Every venue names its loose road and its ground; only paving is
+		// optional, because a snow venue has none to point at.
+		testing.expectf(t, p.loose.a != "", "%s names no loose road texture", file.name)
+		testing.expectf(t, p.ground.a != "", "%s names no ground texture", file.name)
+		// A named texture has to look like one rather than like a shader name.
+		// `.dds` as well as `.tga`: Monte Carlo ships one of each.
+		for got in ([?]string{p.loose.a, p.loose.b, p.paved.a, p.paved.b, p.ground.a, p.ground.b}) {
+			if got == "" { continue }
+			testing.expectf(t, strings.has_suffix(got, ".tga") || strings.has_suffix(got, ".dds"),
+				"%s: %q is not a texture name", file.name, got)
+		}
+		// A second layer with no first would be silently dropped by the pair
+		// rule, which fills an unnamed second from the first and never the other
+		// way round.
+		for pair in ([?]Layers{p.loose, p.paved, p.ground}) {
+			testing.expectf(t, !(pair.a == "" && pair.b != ""),
+				"%s names a second layer with no first", file.name)
 		}
 	}
 }
@@ -128,18 +140,40 @@ every_colour_slot_is_reachable_by_name :: proc(t: ^testing.T) {
 a_palette_row_lays_over_the_one_below_it :: proc(t: ^testing.T) {
 	p: Palette
 	palette_apply("paved.texture = base_d.tga\npaved.collision = TSD*\n", &p, context.temp_allocator)
-	testing.expect_value(t, p.paved_texture, "base_d.tga")
+	testing.expect_value(t, p.paved.a, "base_d.tga")
 	testing.expect_value(t, p.paved_collision, "TSD*")
 
 	palette_apply("# only the texture\npaved.texture = mine_d.tga\n", &p, context.temp_allocator)
-	testing.expect_value(t, p.paved_texture, "mine_d.tga")
+	testing.expect_value(t, p.paved.a, "mine_d.tga")
 	testing.expect_value(t, p.paved_collision, "TSD*")
 
 	// A row this build does not know must not stop it reading the ones it does.
 	// A palette written for a later version has to stay loadable.
 	palette_apply("iced.texture = later_d.tga\npaved.collision = CON*\n", &p, context.temp_allocator)
 	testing.expect_value(t, p.paved_collision, "CON*")
-	testing.expect_value(t, p.paved_texture, "mine_d.tga")
+	testing.expect_value(t, p.paved.a, "mine_d.tga")
+}
+
+// One named layer fills both, which is what a surface with nothing to blend
+// between looks like. A second layer with no first is not filled the other way
+// round, because that would invent a first layer out of a second.
+@(test)
+one_named_layer_fills_both :: proc(t: ^testing.T) {
+	p: Palette
+	palette_apply("loose.texture = one_d.tga\n", &p, context.temp_allocator)
+	art := palette_art(p)
+	testing.expect_value(t, art.loose[0], "one_d.tga")
+	testing.expect_value(t, art.loose[1], "one_d.tga")
+
+	palette_apply("loose.texture2 = two_d.tga\n", &p, context.temp_allocator)
+	art = palette_art(p)
+	testing.expect_value(t, art.loose[0], "one_d.tga")
+	testing.expect_value(t, art.loose[1], "two_d.tga")
+
+	// A surface the palette says nothing about stays empty, and the pack then
+	// measures the venue's own art instead of drawing nothing.
+	testing.expect_value(t, art.ground[0], "")
+	testing.expect_value(t, art.ground[1], "")
 }
 
 // The palette only owns the rows it names. Everything else on a profile was

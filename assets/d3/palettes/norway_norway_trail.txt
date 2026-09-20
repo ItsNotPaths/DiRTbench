@@ -1,8 +1,11 @@
 # Norway Trail. A snow venue: no tarmac anywhere in it, and physics_surfaces.txt
 # names no T code. Concrete is the hard surface it does have.
 #
-# No paved texture: nothing here reads as paving, and the loose road's own art is
-# a better answer than a wrong guess. The paved surface still drives as concrete.
+# No paved texture: there is no paving in the venue at all, so the paved surface
+# draws with the snow and differs only in driving as concrete.
+loose.texture   = nor_tra_bas_07_d.tga
+loose.texture2  = nor_tra_bas_01_d.tga
+ground.texture  = nor_tra_inf_04_d.tga
 paved.collision = CON*
 colour.road          = b4bcc6
 colour.road_paved    = 6a6e74

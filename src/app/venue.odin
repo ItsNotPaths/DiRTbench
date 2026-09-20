@@ -948,16 +948,21 @@ pack_headless :: proc(only: string) -> bool {
 		art := palette_art(palette_for(base, base, context.temp_allocator))
 		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, art, context.temp_allocator)
 		if ok {
-			fmt.printfln(
-				"%-18s %6d bytes  road=%-26s terrain=%-26s cliff=%-26s lod=%-24s batch=%s",
-				venue.id,
-				len(profile.template),
-				profile.visual[.Road],
-				profile.visual[.Terrain],
-				profile.visual[.Cliff],
-				profile.lod,
-				profile.batch,
-			)
+			// One line per material, because what matters per venue is which of
+			// them we *made* and which fell back: a fallback is not a failure
+			// but it is a surface drawing as another, and only this says so.
+			fmt.printfln("%-18s %6d bytes  lod=%s batch=%s", venue.id, len(profile.template), profile.lod, profile.batch)
+			for material in d3.Draw_Material {
+				name := profile.visual[material]
+				note := ""
+				switch name {
+				case profile.visual[.Road]:
+					if material != .Road { note = "  <- fell back to the road" }
+				case profile.visual[.Terrain]:
+					if material != .Terrain { note = "  <- fell back to the ground" }
+				}
+				fmt.printfln("    %-12v %-28s%s", material, name, note)
+			}
 		} else {
 			refused += 1
 			fmt.printfln("%-18s refused: %s", venue.id, msg)

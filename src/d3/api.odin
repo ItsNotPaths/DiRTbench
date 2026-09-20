@@ -31,6 +31,13 @@ Draw_Material :: enum u8 {
 	Cliff,
 	Terrain,
 	Road_Paved,
+	// Ground beside a bare road edge, holding the road's texture and the
+	// terrain's so it can fade between them. Drawn only: it collides as Terrain,
+	// which is exactly the independence this enum exists for.
+	Roadside,
+	// The drainage cut, in the road's own dirt at a coarser scale. Drawn only,
+	// like the roadside: it collides as Terrain.
+	Gutter,
 }
 
 Collision_Triangle :: struct {

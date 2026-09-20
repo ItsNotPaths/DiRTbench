@@ -310,6 +310,13 @@ MAT_EXPORT := [geo.Mat_Id]struct{draw: d3.Draw_Material, surface: d3.Collision_S
 	.Cliff      = {.Cliff,      .Cliff},
 	.Terrain    = {.Terrain,    .Terrain},
 	.Road_Paved = {.Road_Paved, .Road_Paved},
+	// The first row where the two differ, and the reason they are two: a strip
+	// of ground that draws with the road's texture still drives as ground.
+	.Roadside   = {.Roadside,   .Terrain},
+	// Drawn as road dirt and driven as ground. Whether a dirt gutter should also
+	// *grip* like the road is a separate question from what it looks like, and
+	// this changes only the second.
+	.Gutter     = {.Gutter,     .Terrain},
 }
 
 // The triangle soup, in material order, as a target-agnostic collision list.

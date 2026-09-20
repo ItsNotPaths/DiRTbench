@@ -160,11 +160,11 @@ content_pack_profile :: proc(
 	palette := palette_for(pack.base, id, context.temp_allocator)
 
 	// Two things make a pack on disk stale. The stamp covers a change to this
-	// tool. The paving texture covers a change to the palette, because that one
-	// is cloned into a material inside materials.pssg rather than named in a row
-	// — so laying the palette over the profile could not fix it.
+	// tool. The textures cover a change to the palette, because those are cloned
+	// into materials inside materials.pssg rather than named in a row — so
+	// laying the palette over the profile could not fix them.
 	if profile, _, ok = d3.Profile_Load(dir, allocator); ok &&
-	   profile.pack == d3.Pack_Stamp && profile.paved_texture == palette.paved_texture {
+	   profile.pack == d3.Pack_Stamp && profile.art == palette_art(palette) {
 		palette_over_profile(palette, &profile)
 		return profile, "", true
 	}

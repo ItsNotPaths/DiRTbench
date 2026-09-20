@@ -1,10 +1,13 @@
 # Monte Carlo Rally. Snow over tarmac, and the only base venue whose main road
 # is paved to begin with.
 #
-# UNVERIFIED: nothing here is named for its surface, so this is road_main_02's
-# own texture rather than a material that says "tarmac". Look at it in game
-# before trusting it.
-paved.texture   = mon_ral_bas_10_d.tga
+# Picked by eye off the decoded textures: bas_12 is snow over the road, bas_01
+# and bas_02 the plain tarmac under it.
+loose.texture   = mon_ral_bas_12_d.dds
+loose.texture2  = mon_ral_bas_11_d.tga
+paved.texture   = mon_ral_bas_01_d.tga
+paved.texture2  = mon_ral_bas_02_d.tga
+ground.texture  = mon_ral_bas_17_d.tga
 paved.collision = TSD*
 # Snow over tarmac: a darker road than Norway's, on the same white ground.
 colour.road          = 8a8e94

@@ -2,7 +2,12 @@
 #
 # fin_tra_bas_13..18 are the venue's tarmac set; 01..12 are its gravel. Nothing
 # in the names says so — route_0's own tarmac materials are what identify them.
-paved.texture   = fin_tra_bas_13_d.tga
+loose.texture   = fin_tra_bas_01_d.tga
+loose.texture2  = fin_tra_bas_07_d.tga
+paved.texture   = fin_tra_bas_14_d.tga
+paved.texture2  = fin_tra_bas_15_d.tga
+ground.texture  = fin_tra_inf_01_d.tga
+ground.texture2 = fin_tra_inf_03_d.tga
 paved.collision = TSD*
 # Brown gravel through green forest, tarmac a dark neutral grey against it.
 # These are the defaults, so this file is also the worked example.

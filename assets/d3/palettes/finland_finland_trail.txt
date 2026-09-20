@@ -1,6 +1,11 @@
 # Finland Trail. Shares the fin_tra_* texture set with Finland Rally; its
 # tracksplit names the tarmac outright, in Tarmac_ed1.
-paved.texture   = fin_tra_bas_16_d.tga
+loose.texture   = fin_tra_bas_09_d.tga
+loose.texture2  = fin_tra_bas_01_d.tga
+paved.texture   = fin_tra_bas_14_d.tga
+paved.texture2  = fin_tra_bas_15_d.tga
+ground.texture  = fin_tra_inf_01_d.tga
+ground.texture2 = fin_tra_inf_03_d.tga
 paved.collision = TSD*
 colour.road          = 8a7254
 colour.road_paved    = 4a4c52

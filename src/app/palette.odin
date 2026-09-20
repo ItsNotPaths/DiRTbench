@@ -45,8 +45,17 @@ PALETTE_EXT :: ".txt"
 // half-installed.
 PALETTES := #load_directory("../../assets/d3/palettes")
 
+// A surface's two texture layers, in the order a ground material holds them:
+// the first is what it draws at weight 0, the second at weight 1. One name fills
+// both, which is a surface that does not blend.
+Layers :: struct {
+	a, b: string,
+}
+
 Palette :: struct {
-	paved_texture:   string,
+	loose:           Layers,
+	paved:           Layers,
+	ground:          Layers,
 	paved_collision: string,
 	// The editor's own colours for this venue's ground, as `rrggbb`. Viewport
 	// only — the game never sees them. Rows the file leaves out keep Finland's,
@@ -78,7 +87,12 @@ palette_apply :: proc(
 	it := Config_Iter{rest = text}
 	for key, value in config_next(&it) {
 		switch key {
-		case "paved.texture":   out.paved_texture = strings.clone(value, allocator)
+		case "loose.texture":   out.loose.a  = strings.clone(value, allocator)
+		case "loose.texture2":  out.loose.b  = strings.clone(value, allocator)
+		case "paved.texture":   out.paved.a  = strings.clone(value, allocator)
+		case "paved.texture2":  out.paved.b  = strings.clone(value, allocator)
+		case "ground.texture":  out.ground.a = strings.clone(value, allocator)
+		case "ground.texture2": out.ground.b = strings.clone(value, allocator)
 		case "paved.collision": out.paved_collision = strings.clone(value, allocator)
 		case:
 			if !strings.has_prefix(key, "colour.") { continue }
@@ -150,8 +164,16 @@ palette_for :: proc(base, pack_id: string, allocator := context.temp_allocator) 
 }
 
 // What the pack builder needs from the palette while it is cloning materials.
+//
+// A surface naming one texture gets it in both layers, which is what a material
+// with nothing to blend between looks like. A surface naming none keeps whatever
+// the venue's own art measured out to, which is how this behaved before the
+// palette said anything.
 palette_art :: proc(p: Palette) -> d3.Pack_Art {
-	return {paved_texture = p.paved_texture}
+	pair :: proc(l: Layers) -> [2]string {
+		return {l.a, l.b != "" ? l.b : l.a}
+	}
+	return {loose = pair(p.loose), paved = pair(p.paved), ground = pair(p.ground)}
 }
 
 // Lay the palette's rows over a profile the pack build produced. Only the rows

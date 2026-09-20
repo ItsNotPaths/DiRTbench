@@ -654,13 +654,34 @@ d3_make_materials :: proc(
 ) -> (msg: string, ok: bool) {
 	instances := d3_library(file, "SHADERINSTANCE")
 	road := profile.visual[.Road]
+	// The road first: every other made material clones it or the ground, and the
+	// ground clones the road's baked art.
+	if road == D3_ROAD_MATERIAL {
+		made := d3_surface_material(file, instances, profile.ground_source, D3_ROAD_MATERIAL, profile.art.loose, allocator)
+		if made == "" { return "the base venue no longer holds the textures the road draws with", false }
+	}
 	if profile.visual[.Cliff] == D3_CLIFF_MATERIAL &&
 	   d3_cliff_material(file, instances, road, allocator) == "" {
 		return "the base venue no longer holds the rock the cliff material draws with", false
 	}
 	if profile.visual[.Road_Paved] == D3_PAVED_MATERIAL &&
-	   d3_surface_material(file, instances, road, D3_PAVED_MATERIAL, profile.paved_texture, allocator) == "" {
+	   d3_surface_material(file, instances, road, D3_PAVED_MATERIAL, profile.art.paved, allocator) == "" {
 		return "the base venue no longer holds the texture the paved road draws with", false
+	}
+	// Both re-derived rather than remembered: every texture and tiling they use
+	// is read back off the materials they sit between, so they cannot drift out
+	// of step with them. The ground comes first — the roadside is cloned from it.
+	if profile.visual[.Terrain] == D3_GROUND_MATERIAL &&
+	   d3_ground_material(file, instances, road, profile.ground_source, profile.art.ground, allocator) == "" {
+		return "the base venue no longer holds the art the ground shares with the road", false
+	}
+	if profile.visual[.Roadside] == D3_ROADSIDE_MATERIAL &&
+	   d3_roadside_material(file, instances, road, profile.visual[.Terrain], allocator) == "" {
+		return "the base venue no longer holds the textures the roadside fades between", false
+	}
+	if profile.visual[.Gutter] == D3_GUTTER_MATERIAL &&
+	   d3_gutter_material(file, instances, road, allocator) == "" {
+		return "the base venue no longer holds the dirt the gutter draws with", false
 	}
 	return "", true
 }

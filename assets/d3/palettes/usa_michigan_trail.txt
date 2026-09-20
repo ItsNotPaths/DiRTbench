@@ -1,9 +1,10 @@
-# Michigan Trail. Three road materials, all gravel, none of them paving, so the
-# paved road draws with the loose road's art and differs only in how it drives.
-# The venue does list TSD+.
-#
-# Michigan Rally shares the mic_ral_* texture set. If its tarmac reads right
-# here, copy that line over and rebuild the content pack.
+# Michigan Trail. Shares the mic_ral_* texture set with Michigan Rally, so it
+# takes the same road and ground textures.
+loose.texture   = mic_ral_bas_07_d.tga
+loose.texture2  = mic_ral_bas_08_d.tga
+paved.texture   = mic_ral_bas_00_d.tga
+paved.texture2  = mic_ral_bas_01_d.tga
+ground.texture  = mic_ral_inf_01_d.tga
 paved.collision = TSD*
 colour.road          = 7a6e5e
 colour.road_paved    = 4a4c52

@@ -1,5 +1,8 @@
 # Kenya Trail. Dirt, mud and sand throughout, with no paving in the tracksplit
 # and no T code in physics_surfaces.txt. Concrete is the hard surface it has.
+loose.texture   = ken_tra_set1_01_d.tga
+loose.texture2  = ken_tra_set1_04_d.tga
+ground.texture  = ken_tral_inf_09_d.tga
 paved.collision = CON*
 colour.road          = 9c6640
 colour.road_paved    = 4a4b50

@@ -271,6 +271,11 @@ Field_Sample :: struct {
 	seam:   [2][2]f32, // seam XZ per side
 	seam_y: [2]f32,
 	e:      [2]f32, // the seam's outward offset from the centreline, per side
+	// 1 where the seam is the road edge itself, 0 where a guard stands between
+	// them. A float rather than a flag so it can be interpolated along the road:
+	// the roadside blend then fades out as a cliff begins, instead of stopping at
+	// the first slice that carries one.
+	bare:   [2]f32,
 	arc:    f32,
 	run:    int,       // which run this sample belongs to
 	nb:     [2]int,    // neighbouring sample per direction, -1 at a run end
@@ -280,6 +285,7 @@ Field_Sample :: struct {
 // A world point's relationship to one leg of the road.
 Terrain_Leg :: struct {
 	u:      f32, // metres outward from that leg's seam; never negative
+	bare:   f32, // 1 where this leg's seam is the road edge; see Field_Sample.bare
 	seam_y: f32,
 	w:      f32, // normalised blend weight
 	side:   int,
@@ -321,6 +327,7 @@ field_samples :: proc(
 
 		for side in 0 ..< 2 {
 			seam := verge_seam(cs, side, roughness)
+			s.bare[side] = verge_profile(cs, side).any ? 0 : 1
 			out_dir := terrain_outward(cs, side)
 			s.seam[side] = {seam.x, seam.z}
 			s.seam_y[side] = seam.y
@@ -629,6 +636,7 @@ field_leg_at :: proc(fs: []Field_Sample, i: int, p: [2]f32) -> (leg: Terrain_Leg
 
 	leg.side = fr.side
 	leg.seam_y = s.seam_y[fr.side] + (sj.seam_y[fr.side] - s.seam_y[fr.side]) * fr.tt
+	leg.bare = s.bare[fr.side] + (sj.bare[fr.side] - s.bare[fr.side]) * fr.tt
 	leg.u = max(0, field_su(fs, i, fr))
 	return
 }
@@ -689,6 +697,13 @@ Terrain_Point :: struct {
 	legs:  [2]Terrain_Leg,
 	n:     int,
 	fixed: bool,
+	// How much of the road's own texture this point keeps: 1 at a bare road
+	// edge, 0 by TERRAIN_ROADSIDE_M and 0 wherever a guard stands between the
+	// ground and the road. Stored rather than derived from the legs, because a
+	// rim point **is** the seam and carries no legs at all — deriving it there
+	// read as no road, which is the one place the road should be at its
+	// strongest. Depends on the ribbon alone, so it caches with the point.
+	roadside: f32,
 }
 
 // Points and triangles depend only on the ribbon and on reach/cell — never on the
@@ -729,6 +744,18 @@ terrain_point_u :: proc(v: Terrain_Point) -> f32 {
 		u += v.legs[k].w * v.legs[k].u
 	}
 	return u
+}
+
+// The roadside weight an interior point works out to: bareness and distance
+// blended across its legs, like everything else a point reads off the road. A
+// rim point does not go through this — see Terrain_Point.roadside.
+terrain_legs_roadside :: proc(legs: [2]Terrain_Leg, n: int) -> f32 {
+	bare, u: f32
+	for k in 0 ..< n {
+		bare += legs[k].w * legs[k].bare
+		u += legs[k].w * legs[k].u
+	}
+	return bare * (1 - clamp(u/TERRAIN_ROADSIDE_M, 0, 1))
 }
 
 // The global lift: ground climbs away from the road, on top of whatever the
@@ -938,6 +965,7 @@ terrain_field_build :: proc(
 			z = p[1],
 		}
 		pt.legs, pt.n = field_legs(hash, fs, near_other, p, limit)
+		pt.roadside = terrain_legs_roadside(pt.legs, pt.n)
 		append(&f.pts, pt)
 	}
 
@@ -949,7 +977,13 @@ terrain_field_build :: proc(
 			if !dedupe_add(&seen, seam.x, seam.z) {
 				continue
 			}
-			append(&f.pts, Terrain_Point{x = seam.x, y = seam.y, z = seam.z, fixed = true})
+			// u is zero by construction here, so the weight is the bareness and
+			// nothing else: the road's own texture where the seam is the road
+			// edge, none of it where a guard stands in between.
+			append(&f.pts, Terrain_Point{
+				x = seam.x, y = seam.y, z = seam.z, fixed = true,
+				roadside = fs[i].bare[side],
+			})
 		}
 	}
 
@@ -1265,6 +1299,11 @@ build_terrain_mesh :: proc(
 		a := at(f, ys, tri[0])
 		b := at(f, ys, tri[1])
 		cp := at(f, ys, tri[2])
+		// How much of the road's own texture each corner keeps. Carried beside
+		// the positions because the winding fix below may swap two of them.
+		wa := f.pts[tri[0]].roadside
+		wb := f.pts[tri[1]].roadside
+		wc := f.pts[tri[2]].roadside
 
 		// The terrain is a height field over XZ, so every face points up. Delaunay
 		// gives no orientation guarantee, so read the normal and flip the winding
@@ -1276,6 +1315,7 @@ build_terrain_mesh :: proc(
 		nrm = gfx.Vector3Normalize(nrm)
 		if nrm.y < 0 {
 			b, cp = cp, b
+			wb, wc = wc, wb
 			nrm = -nrm
 		}
 		// A height field over XZ, so a world-planar XZ UV is the natural
@@ -1284,7 +1324,16 @@ build_terrain_mesh :: proc(
 		uv :: proc(v: gfx.Vector3) -> [2]f32 {
 			return {v.x / UV_TILE_M, v.z / UV_TILE_M}
 		}
-		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), terrain_tri_colour(nrm, look), .Terrain)
+		// A triangle clear of the road is ordinary terrain. That is not only
+		// cheaper: it is what makes the handover exact, because the roadside
+		// material at weight 0 draws the terrain's own texture and nothing else.
+		col := terrain_tri_colour(nrm, look)
+		mat := Mat_Id.Terrain
+		if max(wa, wb, wc) > 0 {
+			mat = .Roadside
+			col = lerp_col(col, look.road, (wa + wb + wc)/3) // preview only
+		}
+		add_tri(m, a, b, cp, uv(a), uv(b), uv(cp), col, mat, {wa, wb, wc})
 	}
 	build_terrain_skirt(m, t, f, ribbon, roughness, look)
 }
