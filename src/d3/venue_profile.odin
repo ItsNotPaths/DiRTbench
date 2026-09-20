@@ -28,7 +28,7 @@ D3_MATERIALS_FILE :: "materials.pssg"
 // A pack is shared and outlives the build that wrote it, so it says which build
 // that was. Raise this whenever the extraction changes, and every pack already
 // on disk is rebuilt instead of silently reused.
-D3_PACK_STAMP :: 5
+D3_PACK_STAMP :: 6
 
 // The profile's row names. Two tables because the two enums are two keyspaces,
 // spelling the same four names today: every surface that exists also has a look
@@ -40,6 +40,7 @@ D3_DRAW_KEY := [Draw_Material]string {
 	.Road_Paved = "road_paved",
 	.Roadside   = "roadside",
 	.Gutter     = "gutter",
+	.Road_Change = "road_change",
 }
 
 D3_SURFACE_KEY := [Collision_Surface]string {
@@ -301,6 +302,10 @@ d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
 	// in and weight 1 is the road it meets, so its two ends are the terrain's
 	// value and the road edge's, in that order.
 	profile.colour_b[.Roadside] = profile.colour[.Terrain]
+	// The changeover runs loose to paved, so weight 0 is the loose road and
+	// weight 1 the paved: the reverse of the road's own two ends.
+	profile.colour[.Road_Change] = profile.colour[.Terrain]
+	profile.colour_b[.Road_Change] = {0x00, 0xff, 0xff, 0x00}
 	return
 }
 

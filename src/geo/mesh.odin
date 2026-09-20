@@ -199,6 +199,12 @@ Mat_Id :: enum u8 {
 	// grass it used to wear: water runs off the road into it, so what collects
 	// there is what came off the road. Drives as ground, the way it always did.
 	Gutter,
+	// Road within ROAD_CHANGE_M of a surface change, drawn with one material
+	// holding both surfaces so the paint can cross gradually. Two of them for
+	// one drawn material, because the code under the car cannot fade: grip flips
+	// at the control point while the texture is still half way through.
+	Road_Change_Loose,
+	Road_Change_Paved,
 }
 
 // What a run of road is made of. Deliberately venue-neutral: the same value is
@@ -214,6 +220,11 @@ Road_Surface :: enum u8 {
 
 road_surface_mat :: proc(surface: Road_Surface) -> Mat_Id {
 	return surface == .Paved ? .Road_Paved : .Road
+}
+
+// The same, for road that is mid-change. One drawn material, two codes.
+road_change_mat :: proc(surface: Road_Surface) -> Mat_Id {
+	return surface == .Paved ? .Road_Change_Paved : .Road_Change_Loose
 }
 
 // `pos`, `nrm`, `uv`, `col` and `blend` are per *vertex* (three per triangle,
@@ -623,6 +634,11 @@ Look :: struct {
 // across the edge a few metres is the whole distance there is.
 TERRAIN_ROADSIDE_M :: 4.0
 
+// How far either side of a surface change the road fades between the two.
+// Stock's own gravel-to-tarmac bridge on Tupasentie covers 16 m of road, so this
+// is half of that each way.
+ROAD_CHANGE_M :: 8.0
+
 DEFAULT_LOOK :: Look {
 	// Loose is brown and paved is a dark neutral grey, far enough apart to tell
 	// at a glance across a whole stage. They used to sit 20 levels apart in the
@@ -650,6 +666,56 @@ lerp_col :: proc(a, b: gfx.Color, t: f32) -> gfx.Color {
 // at the edges, out of one material. See Tri_Mesh.blend.
 road_blend :: proc(col, cols: int) -> f32 {
 	return abs(2 * f32(col) / f32(cols) - 1)
+}
+
+// How far through a surface change each slice is: 0 all loose, 1 all paved, and
+// `near` marking the slices a change actually reaches.
+//
+// A surface changes at a control point and the code under the car changes with
+// it, because grip cannot fade. The paint can, so the road either side of the
+// change draws with one material holding both surfaces and ramps across it. The
+// two need not agree — stock's own boundary on Tupasentie has its paint and its
+// physics about 30 m apart.
+//
+// Two changes closer together than ROAD_CHANGE_M overwrite one another, last
+// one winning. That is a surface run shorter than its own fade, which has
+// nowhere to go but pick an answer.
+road_changeover :: proc(
+	ribbon: []Cross_Section,
+	arc: []f32,
+	allocator := context.temp_allocator,
+) -> (mix: []f32, near: []bool) {
+	mix = make([]f32, len(ribbon), allocator)
+	near = make([]bool, len(ribbon), allocator)
+	for cs, i in ribbon { mix[i] = cs.surface == .Paved ? 1 : 0 }
+	// A surface changes at a control point, which is where one graph edge ends
+	// and the next begins — so the change always sits on a slice that starts a
+	// run. Skipping those found no change at all.
+	//
+	// The walk is bounded by arc distance alone. `ribbon_arc` accumulates the
+	// real distance between consecutive samples, so it runs on through a break
+	// where two edges meet at a node (the twins are a metre of nothing apart)
+	// and jumps by the whole gap where the next run starts somewhere else. The
+	// jump exceeds the reach on its own, which ends the walk without a rule
+	// about it.
+	for i in 1 ..< len(ribbon) {
+		if ribbon[i].surface == ribbon[i-1].surface { continue }
+		to_paved := ribbon[i].surface == .Paved
+		at := arc[i]
+		for j := i; j < len(ribbon); j += 1 {
+			d := arc[j] - at
+			if d > ROAD_CHANGE_M { break }
+			mix[j] = to_paved ? 0.5 + 0.5*d/ROAD_CHANGE_M : 0.5 - 0.5*d/ROAD_CHANGE_M
+			near[j] = true
+		}
+		for j := i-1; j >= 0; j -= 1 {
+			d := at - arc[j]
+			if d > ROAD_CHANGE_M { break }
+			mix[j] = to_paved ? 0.5 - 0.5*d/ROAD_CHANGE_M : 0.5 + 0.5*d/ROAD_CHANGE_M
+			near[j] = true
+		}
+	}
+	return
 }
 
 // One road-surface vertex: ribbon sample `s`, column `col` of `cols` across the
@@ -704,26 +770,35 @@ road_vertex :: proc(
 // no [0,1] constraint. The across-road extent is *normalised*, not scaled by
 // UV_TILE_M, so the texture spans the road exactly once at any width.
 build_road_surface :: proc(m: ^Tri_Mesh, ribbon: []Cross_Section, arc: []f32, roughness: f32, look: Look) {
+	mix, near := road_changeover(ribbon, arc)
 	for i in 0 ..< len(ribbon) - 1 {
 		if ribbon[i + 1].break_before { continue }
 		// `xsec_ends` returns the +right end first, so that end takes v = 0.
 		ua := arc[i] / UV_TILE_M
 		ub := arc[i + 1] / UV_TILE_M
-		// The segment takes the surface of the slice it leaves, so a change lands
-		// on a control point rather than smearing across the span into it.
-		mat := road_surface_mat(ribbon[i].surface)
-		col := mat == .Road ? look.road : look.road_paved
+		// The segment takes the surface of the slice it leaves, so the code under
+		// the car changes on a control point rather than smearing across the span
+		// into it.
+		changing := near[i] || near[i + 1]
+		mat := changing ? road_change_mat(ribbon[i].surface) : road_surface_mat(ribbon[i].surface)
+		tint := changing ? (mix[i] + mix[i+1])/2 : mix[i]
+		col := lerp_col(look.road, look.road_paved, tint)
 		for c in 0 ..< ROAD_COLS {
 			a0, va0 := road_vertex(ribbon[i], i, c, ROAD_COLS, roughness)
 			a1, va1 := road_vertex(ribbon[i], i, c + 1, ROAD_COLS, roughness)
 			b1, vb1 := road_vertex(ribbon[i + 1], i + 1, c + 1, ROAD_COLS, roughness)
 			b0, vb0 := road_vertex(ribbon[i + 1], i + 1, c, ROAD_COLS, roughness)
-			w0 := road_blend(c, ROAD_COLS)
-			w1 := road_blend(c + 1, ROAD_COLS)
+			// Mid-change the mix runs *along* the road, so the wear across its
+			// width steps aside for it: one material holds two textures, and
+			// through the change they are the two surfaces rather than the two
+			// halves of one.
+			wa := changing ? mix[i]   : road_blend(c, ROAD_COLS)
+			wb := changing ? mix[i+1] : road_blend(c + 1, ROAD_COLS)
+			blend := changing ? [4]f32{wa, wa, wb, wb} : [4]f32{wa, wb, wb, wa}
 			add_quad(
 				m, a0, a1, b1, b0,
 				{ua, va0}, {ua, va1}, {ub, vb1}, {ub, vb0},
-				col, mat, {w0, w1, w1, w0},
+				col, mat, blend,
 			)
 		}
 	}

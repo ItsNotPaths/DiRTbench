@@ -317,6 +317,10 @@ MAT_EXPORT := [geo.Mat_Id]struct{draw: d3.Draw_Material, surface: d3.Collision_S
 	// *grip* like the road is a separate question from what it looks like, and
 	// this changes only the second.
 	.Gutter     = {.Gutter,     .Terrain},
+	// One drawn material over two codes, which is the whole reason the two axes
+	// are two. The paint crosses the change gradually; the grip cannot.
+	.Road_Change_Loose = {.Road_Change, .Road},
+	.Road_Change_Paved = {.Road_Change, .Road_Paved},
 }
 
 // The triangle soup, in material order, as a target-agnostic collision list.

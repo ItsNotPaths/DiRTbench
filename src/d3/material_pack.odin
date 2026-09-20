@@ -70,6 +70,7 @@ d3_shader_base :: proc(id: string) -> string {
 D3_CLIFF_MATERIAL :: "dirtbench_cliff"
 D3_PAVED_MATERIAL :: "dirtbench_paved"
 D3_ROADSIDE_MATERIAL :: "dirtbench_roadside"
+D3_CHANGE_MATERIAL :: "dirtbench_loose_paved"
 
 // What a base venue's own art cannot say for itself, and so comes from the
 // content pack's palette instead.
@@ -291,6 +292,35 @@ d3_ground_material :: proc(
 	for parameter in d3_shared_art {
 		if !d3_copy_input(file, clone, road, parameter, parameter, allocator) { return "" }
 	}
+	return made
+}
+
+// The road fading from its loose surface into its paved one: the loose road's
+// texture at weight 0, the paved road's at weight 1.
+//
+// The **loose road** is the donor, so at weight 0 the changeover is identical to
+// the road it leaves in every input. The paved road's tiling then moves onto the
+// slot holding its texture, so at weight 1 the grain matches what it arrives at.
+//
+// Empty when the venue has no paving of its own, which is the three snow venues:
+// there is nothing to fade to, and the change is a code change alone.
+d3_change_material :: proc(
+	file: ^Pssg_File,
+	instances: ^Pssg_Node,
+	road_id, paved_id: string,
+	allocator: mem.Allocator,
+) -> string {
+	road := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", road_id)
+	paved := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", paved_id)
+	if road == nil || paved == nil || road_id == paved_id { return "" }
+	loose_tex := d3_material_texture(file, instances, road_id, d3_infield_diffuse[0])
+	paved_tex := d3_material_texture(file, instances, paved_id, d3_infield_diffuse[0])
+	made := d3_surface_material(
+		file, instances, road_id, D3_CHANGE_MATERIAL, {loose_tex, paved_tex}, allocator,
+	)
+	if made == "" { return "" }
+	clone := pssg_walk_first_by_id(file, instances, "SHADERINSTANCE", D3_CHANGE_MATERIAL)
+	if !d3_copy_input(file, clone, paved, D3_MAP_UV[0], D3_MAP_UV[1], allocator) { return "" }
 	return made
 }
 
@@ -566,6 +596,10 @@ d3_pack_build :: proc(
 	// what it wore before this existed.
 	gutter := d3_gutter_material(&file, instances, road, scratch)
 	if gutter == "" { gutter = ground }
+	// With nothing to fade to, the change is a code change alone and the road
+	// simply keeps drawing as itself across it.
+	change := d3_change_material(&file, instances, road, paved, scratch)
+	if change == "" { change = road }
 
 	for material in Draw_Material { profile.visual[material] = road }
 	profile.visual[.Terrain] = ground
@@ -573,6 +607,7 @@ d3_pack_build :: proc(
 	profile.visual[.Road_Paved] = paved
 	profile.visual[.Roadside] = roadside
 	profile.visual[.Gutter] = gutter
+	profile.visual[.Road_Change] = change
 	profile.art = art
 	profile.ground_source = stock_ground
 

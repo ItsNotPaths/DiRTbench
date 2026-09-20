@@ -38,6 +38,11 @@ Draw_Material :: enum u8 {
 	// The drainage cut, in the road's own dirt at a coarser scale. Drawn only,
 	// like the roadside: it collides as Terrain.
 	Gutter,
+	// Road mid-surface-change, holding the loose road's texture and the paved
+	// road's so the paint can cross gradually. **Two** surfaces share it, which
+	// is the case this enum was split for: grip flips at the control point while
+	// the texture is still half way through.
+	Road_Change,
 }
 
 Collision_Triangle :: struct {

@@ -683,6 +683,11 @@ d3_make_materials :: proc(
 	   d3_gutter_material(file, instances, road, allocator) == "" {
 		return "the base venue no longer holds the dirt the gutter draws with", false
 	}
+	// After the paved road, which it fades to.
+	if profile.visual[.Road_Change] == D3_CHANGE_MATERIAL &&
+	   d3_change_material(file, instances, road, profile.visual[.Road_Paved], allocator) == "" {
+		return "the base venue no longer holds the surfaces the road changes between", false
+	}
 	return "", true
 }
 

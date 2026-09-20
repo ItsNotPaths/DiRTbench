@@ -50,6 +50,7 @@ gltf_material_colour :: proc(m: geo.Mat_Id, look: geo.Look) -> gfx.Color {
 	// Halfway between its two ends is the closest one colour gets.
 	case .Roadside:   return geo.lerp_col(look.terrain, look.road, 0.5)
 	case .Gutter:     return look.gutter
+	case .Road_Change_Loose, .Road_Change_Paved: return geo.lerp_col(look.road, look.road_paved, 0.5)
 	}
 	return look.road
 }

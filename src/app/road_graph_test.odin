@@ -590,7 +590,7 @@ mesh_deviation :: proc(a, b: geo.Tri_Mesh) -> (cliff, road: f32) {
 			d := gfx.Vector3Length(b.pos[i] - a.pos[i])
 			switch mat {
 			case .Cliff:           cliff += d; cliff_n += 1
-			case .Road, .Road_Paved: road += d;  road_n += 1
+			case .Road, .Road_Paved, .Road_Change_Loose, .Road_Change_Paved: road += d;  road_n += 1
 			case .Terrain, .Roadside, .Gutter:
 			}
 		}
