@@ -16,6 +16,8 @@ import "core:path/filepath"
 import "core:strconv"
 import d3 "../d3"
 import "../geo"
+import "core:strings"
+import "../gfx"
 
 // `--export <stage> [--target <id>] [--terrain]` exports a saved stage and exits,
 // without ever opening a window. Anything else falls through to the editor.
@@ -23,6 +25,10 @@ run_cli :: proc() -> (handled: bool) {
 	args := os.args[1:]
 	if len(args) >= 2 && args[0] == "--pacenotes" {
 		pacenotes_headless(args[1], len(args) > 2 && args[2] == "--reverse")
+		os.exit(0)
+	}
+	if len(args) >= 2 && args[0] == "--pacenote-fit" {
+		pacenote_fit_headless(args[1], args[2:])
 		os.exit(0)
 	}
 	if len(args) >= 4 && args[0] == "--hectic" {
@@ -276,7 +282,142 @@ pacenotes_headless :: proc(stage: string, reverse: bool) {
 	geo.pace_generate(ribbon, geo.PACE_DEFAULTS, &notes)
 	fmt.printf("%d notes on %q\n", len(notes), stage)
 	for nt in notes {
-		fmt.printf("%8.0f m  %s\n", nt.station, geo.pace_note_text(nt))
+		shape := ""
+		if nt.kind == .Corner {
+			shape = fmt.tprintf("   r=%.0f m  swept %.0f deg", nt.radius, nt.sweep)
+		}
+		fmt.printf("%8.0f m  %-26s%s\n", nt.station, geo.pace_note_text(nt), shape)
+	}
+	free_all(context.temp_allocator)
+}
+
+// --- fitting the note generator against the game's own calls ------------------
+//
+// `--pacenote-fit <points.txt> [knob=value ...]` runs pace_generate over a bare
+// centreline and prints its notes as fields. The centreline is one `x y z` per
+// line, which is how a stock route gets in here at all: this package writes
+// BinXML but cannot read it, so `tools/pacenote_fit.py` reads the game's files
+// and hands the road over as text.
+//
+// The point is to fit against ground truth rather than taste. DiRT 3's own
+// stages say what they call and where, so the knobs can be searched until our
+// notes agree with theirs.
+pacenote_fit_headless :: proc(points_path: string, knobs: []string) {
+	blob, read_err := os.read_entire_file(points_path, context.allocator)
+	if read_err != nil {
+		fmt.eprintfln("cannot read %s", points_path)
+		os.exit(1)
+	}
+	defer delete(blob)
+	pts := make([dynamic]gfx.Vector3, context.temp_allocator)
+	for raw in strings.split_lines(string(blob), context.temp_allocator) {
+		line := strings.trim_space(raw)
+		if line == "" || strings.has_prefix(line, "#") {
+			continue
+		}
+		parts := strings.fields(line, context.temp_allocator)
+		if len(parts) < 3 {
+			continue
+		}
+		x, _ := strconv.parse_f32(parts[0])
+		y, _ := strconv.parse_f32(parts[1])
+		z, _ := strconv.parse_f32(parts[2])
+		append(&pts, gfx.Vector3{x, y, z})
+	}
+	if len(pts) < 8 {
+		fmt.eprintfln("%s holds %d points, too few for a stage", points_path, len(pts))
+		os.exit(1)
+	}
+	ribbon := make([]geo.Cross_Section, len(pts), context.temp_allocator)
+	for i in 0 ..< len(pts) {
+		a := pts[max(i - 1, 0)]
+		b := pts[min(i + 1, len(pts) - 1)]
+		fwd := gfx.Vector3Normalize(b - a)
+		// CAUTION: this hand must match what build_ribbon produces, or the fit
+		// measures a mirrored generator and every direction reads backwards.
+		// It is settled by a control rather than by argument: our own venue's
+		// exported calls are in the corpus, and comparing the generator against
+		// its own output has to score 1.00 on side. With the other hand it
+		// scored 0.00 over 44 pairs -- perfectly inverted, which is the shape
+		// a frame error makes and noise never does.
+		ribbon[i] = {
+			pos   = pts[i],
+			fwd   = fwd,
+			right = gfx.Vector3{fwd.z, 0, -fwd.x},
+			up    = gfx.Vector3{0, 1, 0},
+			width = 8,
+		}
+	}
+	pp := geo.PACE_DEFAULTS
+	for knob in knobs {
+		cut := strings.index(knob, "=")
+		if cut < 0 {
+			continue
+		}
+		name := knob[:cut]
+		value, _ := strconv.parse_f32(knob[cut + 1:])
+		switch name {
+		case "smooth_m":     pp.smooth_m = value
+		case "r_on":         pp.r_on = value
+		case "r_off":        pp.r_off = value
+		case "square_tol":   pp.square_tol = value
+		case "min_sweep":    pp.min_sweep = value
+		case "long_deg":     pp.long_deg = value
+		case "tighten":      pp.tighten = value
+		case "into_m":       pp.into_m = value
+		case "and_m":        pp.and_m = value
+		case "dist_min_m":   pp.dist_min_m = value
+		case "lead_m":       pp.lead_m = value
+		case "crest_k":      pp.crest_k = value
+		case "jump_grade":   pp.jump_grade = value
+		case "feat_gap_m":   pp.feat_gap_m = value
+		case "hectic_win_m": pp.hectic_win_m = value
+		case "hectic_flicks": pp.hectic_flicks = int(value)
+		case "hectic_amp":   pp.hectic_amp = value
+		case "hectic_min_len_m": pp.hectic_min_len_m = value
+		case "deg0": pp.sev_deg[0] = value
+		case "deg1": pp.sev_deg[1] = value
+		case "deg2": pp.sev_deg[2] = value
+		case "deg3": pp.sev_deg[3] = value
+		case "deg4": pp.sev_deg[4] = value
+		case "deg5": pp.sev_deg[5] = value
+		case "sev0": pp.sev_r[0] = value
+		case "sev1": pp.sev_r[1] = value
+		case "sev2": pp.sev_r[2] = value
+		case "sev3": pp.sev_r[3] = value
+		case "sev4": pp.sev_r[4] = value
+		case "sev5": pp.sev_r[5] = value
+		case "sev6": pp.sev_r[6] = value
+		case:
+			fmt.eprintfln("unknown knob %q", name)
+			os.exit(1)
+		}
+	}
+	notes: [dynamic]geo.Pace_Note
+	defer delete(notes)
+	geo.pace_generate(ribbon[:], pp, &notes)
+	// station kind dir severity distance link mods radius sweep
+	for nt in notes {
+		kind := "corner"
+		switch nt.kind {
+		case .Corner:   kind = "corner"
+		case .Distance: kind = "distance"
+		case .Crest:    kind = "crest"
+		case .Dip:      kind = "dip"
+		case .Jump:     kind = "jump"
+		case .Hectic:   kind = "hectic"
+		}
+		dir := nt.dir == .Left ? "left" : (nt.dir == .Right ? "right" : "-")
+		link := nt.link == .Into ? "into" : (nt.link == .And ? "and" : "-")
+		mods := make([dynamic]string, context.temp_allocator)
+		if .Long in nt.mods {append(&mods, "long")}
+		if .Tightens in nt.mods {append(&mods, "tightens")}
+		if .Opens in nt.mods {append(&mods, "opens")}
+		mod_text := len(mods) > 0 ? strings.join(mods[:], "+", context.temp_allocator) : "-"
+		fmt.printf(
+			"%.1f %s %s %d %d %s %s %.1f %.1f\n",
+			nt.station, kind, dir, nt.sev, nt.dist, link, mod_text, nt.radius, nt.sweep,
+		)
 	}
 	free_all(context.temp_allocator)
 }

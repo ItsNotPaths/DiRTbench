@@ -73,17 +73,28 @@ Pace_Note :: struct {
 	link:    Pace_Link,
 	mods:    bit_set[Pace_Mod],
 	dist:    int, // Distance: metres (rounded to the recorded 40..200 ladder)
+	// Corner: the tightest radius measured, in metres, and the angle swept.
+	// What `sev` was decided from, carried so a call can be checked against the
+	// road it was made for without re-deriving anything.
+	radius:  f32,
+	sweep:   f32,
 }
 
-// All the tuning knobs — the "numbers" to calibrate by ear against the preview.
-// Radii are in metres, angles in degrees. Defaults are a *guess* for Stadium-car
-// scale (the demo's hairpins sit ~30 m radius); expect to move them.
+// All the tuning knobs. Radii are in metres, angles in degrees.
+//
+// The defaults are no longer a guess. They are fitted against DiRT 3's own
+// calls: every stock route says what it calls and where, so `tools/pacenote_fit.py`
+// searches these until our notes agree with the game's. Fitted on finland,
+// norway and michigan (24 routes) and checked on monte carlo, kenya, monaco,
+// aspen and smelter (22 routes it never saw).
 Pace_Params :: struct {
 	smooth_m:   f32,     // curvature box-filter window (~a car length)
 	r_on:       f32,     // enter a corner when radius drops below this
 	r_off:      f32,     // leave it when radius rises above this (hysteresis)
-	sev_r:      [7]f32,  // upper radius bound of [hairpin,1,2,3,4,5,6]
+	sev_r:      [7]f32,  // radius bands, kept for reporting; see pace_sev
+	sev_deg:    [7]f32,  // lower swept-angle bound of [hairpin,1,2,3,4,5,6]
 	square_tol: f32,     // within this many deg of 90 (and mid severity) -> square
+	min_sweep:  f32,     // a corner sweeping less than this is not called at all
 	long_deg:   f32,     // swept angle above this -> "long"
 	tighten:    f32,     // exit-third radius this fraction under entry-third -> tightens
 	into_m:     f32,     // straight <= this before a corner -> "into"
@@ -104,16 +115,29 @@ Pace_Params :: struct {
 
 PACE_DEFAULTS :: Pace_Params {
 	smooth_m   = 4,
-	r_on       = 200,
-	r_off      = 260,
-	sev_r      = {18, 30, 45, 70, 105, 160, 220},
+	r_on       = 160,
+	r_off      = 390,
+	// The bands are narrow at the tight end and wide at 4 on purpose, and it is
+	// not overfitting: restoring the old even spread costs grade error 1.06 ->
+	// 1.84 and exact agreement 0.28 -> 0.06 on venues the fit never saw. With
+	// an even spread we call almost everything tighter than the game does.
+	sev_r      = {18, 21, 24, 30, 89, 160, 220},
+	// Read off the game's own calls: the median swept angle it gives to a
+	// hairpin, 2, 3, 4, 5 and 6 is 154, 82, 77, 57, 51 and 44 degrees.
+	sev_deg    = {143, 140, 134, 86, 54, 47, 0},
 	square_tol = 12,
+	// The game does not name a bend this slight. Without a floor we called
+	// 8-degree kinks and emitted 12.1 calls/km against its 7.0.
+	min_sweep  = 28,
 	long_deg   = 90,
 	tighten    = 0.25,
 	into_m     = 30,
 	and_m      = 8,
+	// 26% of everything the game says is a distance. At 60 we emit half that;
+	// the fit raised it and nothing in the objective noticed until the notes
+	// were read out loud.
 	dist_min_m = 40,
-	lead_m     = 60,
+	lead_m     = 95,
 	crest_k    = 0.008,
 	jump_grade = 0.14,
 	feat_gap_m = 15,
@@ -152,11 +176,21 @@ pace_smooth :: proc(k, arc: []f32, win: f32, allocator := context.temp_allocator
 	return out
 }
 
-// radius -> severity: 0 = hairpin, 1..6. First band the radius falls under.
+// How sharp a corner is called: 0 = hairpin, 1..6, from how far it turns.
+//
+// **Radius does not decide this, and that is measured, not assumed.** Over 894
+// stock calls the game's 3, 4, 5 and 6 sit at 31, 36, 43 and 44 m of radius —
+// no separation at all — while their swept angles are 77, 57, 51 and 44
+// degrees. Grading on radius, or on the tighter of radius and angle, calls the
+// game's 6 about a 4; grading on angle alone moves exact agreement from 0.37
+// to 0.48 on venues the fit never saw.
+//
+// `sev_r` survives for the radius the note carries, which the exporter and the
+// inspector both show. Nothing reads it to pick a grade.
 @(private = "file")
-pace_sev :: proc(r: f32, pp: Pace_Params) -> int {
+pace_sev :: proc(swept_deg: f32, pp: Pace_Params) -> int {
 	for i in 0 ..< 7 {
-		if r < pp.sev_r[i] {
+		if swept_deg >= pp.sev_deg[i] {
 			return i
 		}
 	}
@@ -352,6 +386,15 @@ for i < n {
 	}
 	sweep_deg := math.to_degrees(sweep)
 
+	// A corner that barely bends is road, not a call. Without this the
+	// generator names 8-degree kinks and outruns the game's own density.
+	if sweep_deg < pp.min_sweep {
+		prev_exit_s = s_exit
+		have_prev = true
+		i = j
+		continue
+	}
+
 	note: Pace_Note
 	note.kind = .Corner
 	// The curvature sign runs opposite the driven left/right, so positive
@@ -359,7 +402,8 @@ for i < n {
 	// "positive = right" doc; the viewport agrees with this one. reverse_spline
 	// only swaps sides, so the single flip serves both driving directions.
 	note.dir = sign ? .Left : .Right
-	note.sev = pace_sev(r_min, pp)
+	note.sev = pace_sev(sweep_deg, pp)
+	note.radius, note.sweep = r_min, sweep_deg
 	if note.sev >= 2 && note.sev <= 4 && abs(sweep_deg - 90) < pp.square_tol {
 		note.square = true
 	}
