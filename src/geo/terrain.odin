@@ -1041,11 +1041,10 @@ terrain_field_build :: proc(
 		coords[i * 2 + 0] = f64(p.x)
 		coords[i * 2 + 1] = f64(p.z)
 	}
-	tris, ok := delaunay_triangulate(coords)
+	tris, ok := delaunay_owned(coords, context.temp_allocator)
 	if !ok {
 		return
 	}
-	defer delaunay_delete(tris)
 
 	// Delaunay fills the convex hull, so the road corridor, the ground past
 	// `reach` and the space off the ends all come back triangulated. Drop them by

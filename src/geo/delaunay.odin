@@ -46,6 +46,22 @@ delaunay_triangulate :: proc(coords: []f64) -> (tris: [][3]u32, ok: bool) {
 	return ([^][3]u32)(raw)[:count], true
 }
 
+// The triangulation, in memory the caller owns.
+//
+// `delaunay_triangulate` hands back a C allocation that only `delaunay_delete`
+// may free. Copying it out here is what keeps that pairing in one place; every
+// caller then holds an ordinary slice and frees it the ordinary way.
+delaunay_owned :: proc(coords: []f64, allocator := context.allocator) -> (tris: [][3]u32, ok: bool) {
+	raw, made := delaunay_triangulate(coords)
+	if !made {
+		return nil, false
+	}
+	defer delaunay_delete(raw)
+	out := make([][3]u32, len(raw), allocator)
+	copy(out, raw)
+	return out, true
+}
+
 delaunay_delete :: proc(tris: [][3]u32) {
 	if len(tris) > 0 {
 		dirt_delaunay_free(([^]u32)(raw_data(tris)))
