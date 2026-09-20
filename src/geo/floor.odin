@@ -61,39 +61,24 @@ Floor :: struct {
 // knows which this is.
 //
 // `flatten` is an arg like the rest, so an outline with it off is only an
-// outline: no ceiling, no divot lift, nothing read from `y` but the level the
-// other args hang off.
+// outline: no ceiling, no divot lift, and `y` is read as nothing but the level
+// the other args work at.
 //
 // Each claims the outline alone, never the falloff band — the band is a blend
 // into the hillside, and the hillside keeps what it grows.
 Floor_Opts :: struct {
-	flatten:     bool,
-	no_trees:    bool,
-	no_cover:    bool,
-	water:       bool,
-	water_depth: f32,
-}
-
-// How deep the water stands over a pad that has just been flooded.
-FLOOR_WATER_DEPTH :: 1.5
-
-// Water is one-sided: it draws from above and shows nothing from below or
-// edge-on. A surface level with the pad it sits on is therefore invisible, so a
-// flooded pad always holds some depth. See docs/dirt3-water.md.
-FLOOR_WATER_MIN :: 0.25
-
-// The height of the water surface over one pad, and whether it has any.
-//
-// The surface stands `water_depth` above the pad's own `y`, flattened or not. A
-// flattened pad cuts the ground to `y` and never lifts it, so its bed is at `y`
-// or below and the shoreline is wherever the falloff band climbs back through
-// the surface. An unflattened one is a plane hung over the hill as it stands,
-// and where the hill is already above the surface there is simply no water.
-floor_water_level :: proc(f: Floor) -> (y: f32, ok: bool) {
-	if !f.water {
-		return 0, false
-	}
-	return f.y + max(f.water_depth, FLOOR_WATER_MIN), true
+	flatten:  bool,
+	no_trees: bool,
+	no_cover: bool,
+	// Standing water, its surface at the pad's own `y`. The outline is the
+	// shoreline and the height handle is the waterline, so a lake is drawn
+	// where the water is to reach rather than where its bed is.
+	//
+	// Water is one-sided: it draws from above and shows nothing from below or
+	// edge-on (docs/dirt3-water.md). So this wants the ground under it left
+	// alone — pair it with `flatten` and the surface lies on the bed it just
+	// cut, coplanar, and draws nothing.
+	water: bool,
 }
 
 // Which of a pad's two scatters is being asked about.

@@ -140,7 +140,6 @@ Stage_Floor :: struct {
 	no_trees:    bool,
 	no_cover:    bool,
 	water:       bool,
-	water_depth: f32,
 }
 
 // One hand-placed prop. The library is named rather than numbered: a venue's
@@ -293,7 +292,6 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 				no_trees    = f.no_trees,
 				no_cover    = f.no_cover,
 				water       = f.water,
-				water_depth = f.water_depth,
 			}
 		}
 		road.floors = floors
@@ -460,7 +458,6 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 				no_trees    = f.no_trees,
 				no_cover    = f.no_cover,
 				water       = f.water,
-				water_depth = f.water_depth,
 			}
 			if i := geo.floor_add(terrain, f.points, f.y, opts); i >= 0 {
 				terrain.floors[i].falloff = clamp(f.falloff, 0, geo.TERRAIN_REACH_MAX)

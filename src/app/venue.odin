@@ -41,6 +41,8 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
+// v11 drops `water_depth`. A flooded pad's surface is its own `y`, so the
+// height handle is the waterline and the ground under it is whatever it was.
 // v10 makes flattening one floor arg among the rest: a pad carries `flatten`
 // beside `no_trees`, `no_cover` and `water`, so an outline can flood or clear
 // ground it never levels. Every floor key is written every time, and the
@@ -54,7 +56,7 @@ VENUE_FORMAT :: "dirtbench.venue"
 // v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
 // or older venue: the tool was not released, and the venues that existed were
 // converted by hand.
-VENUE_VERSION :: 10
+VENUE_VERSION :: 11
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens

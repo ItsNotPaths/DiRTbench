@@ -692,19 +692,13 @@ draw_floor_opts :: proc(o: ^geo.Floor_Opts) -> (changed: bool) {
 		changed = true
 	}
 	if ui.igCheckbox("water", &o.water) {
-		// Zero depth sits level with the bed and draws nothing; see
-		// geo.FLOOR_WATER_MIN.
-		if o.water && o.water_depth < geo.FLOOR_WATER_MIN {
-			o.water_depth = geo.FLOOR_WATER_DEPTH
-		}
 		changed = true
 	}
-	if o.water {
-		if ui.igSliderFloat(
-			"depth", &o.water_depth, geo.FLOOR_WATER_MIN, 20, "%.2f m", ui.IM_SLIDER_NONE,
-		) {
-			changed = true
-		}
+	// The one pairing that draws nothing: a cut bed with its own surface lying
+	// on it. Said here rather than prevented, because which arg to drop is the
+	// author's call.
+	if o.water && o.flatten {
+		ui.im_text_colored(WARN_COL, "water on a flat pad lies on its own bed")
 	}
 	return
 }

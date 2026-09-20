@@ -243,23 +243,24 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(back.terrain.floors), 1)
 }
 
-// Water on a pad, and the level it stands at. A pad cuts the ground and never
-// lifts it, so the surface has to sit above the pad's own height or it draws
-// nothing: water is one-sided. See docs/dirt3-water.md.
+// Water on a pad stands at the pad's own height: the outline is the shoreline
+// and the height handle is the waterline. Pinned through the export, which is
+// what the level is actually for. See docs/dirt3-water.md.
 @(test)
-water_on_a_floor_round_trips_and_stands_above_its_bed :: proc(t: ^testing.T) {
+water_on_a_floor_stands_at_the_pads_own_level :: proc(t: ^testing.T) {
 	doc := doc_defaults()
 	defer geo.terrain_delete(&doc.terrain)
 	defer geo.spline_free(&doc.spline)
 	seed_spline(&doc.spline)
 	doc.terrain.enabled = true
 	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
-	i := geo.floor_add(&doc.terrain, square, -6, {water = true, water_depth = 2.5})
+	i := geo.floor_add(&doc.terrain, square, -6, {water = true})
 	testing.expect(t, i >= 0, "the pad was not added")
 
-	level, wet := geo.floor_water_level(doc.terrain.floors[i])
-	testing.expect(t, wet, "a flooded pad reported no water")
-	testing.expect_value(t, level, f32(-3.5))
+	bodies, _, ok := export_water(&doc.terrain, context.temp_allocator)
+	testing.expect(t, ok, "the flooded pad did not export")
+	testing.expect_value(t, len(bodies), 1)
+	testing.expect_value(t, bodies[0].y, f32(-6))
 
 	path := "/tmp/claude-1000/dirtbench-floor-water.json"
 	defer os.remove(path)
@@ -274,9 +275,15 @@ water_on_a_floor_round_trips_and_stands_above_its_bed :: proc(t: ^testing.T) {
 	}
 	testing.expect_value(t, len(back.terrain.floors), 1)
 	testing.expect_value(t, back.terrain.floors[0].water, true)
-	testing.expect_value(t, back.terrain.floors[0].water_depth, f32(2.5))
+	testing.expect_value(t, back.terrain.floors[0].y, f32(-6))
 	// This one only floods: the arg it was made without must stay off.
 	testing.expect_value(t, back.terrain.floors[0].flatten, false)
+
+	// A dry pad is the default, and it exports no body at all.
+	back.terrain.floors[0].water = false
+	bodies, _, ok = export_water(&back.terrain, context.temp_allocator)
+	testing.expect(t, ok, "a dry pad failed the export")
+	testing.expect_value(t, len(bodies), 0)
 }
 
 // The args are independent. A pad with everything but `flatten` leaves the
@@ -289,7 +296,7 @@ a_pad_that_does_not_flatten_leaves_the_ground_alone :: proc(t: ^testing.T) {
 	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
 	fi := geo.floor_add(
 		&terrain, square, 10,
-		{no_trees = true, no_cover = true, water = true, water_depth = 2},
+		{no_trees = true, no_cover = true, water = true},
 	)
 
 	_, _, ok := geo.terrain_floor_level(&terrain, {20, 20}, 25)
@@ -308,27 +315,7 @@ a_pad_that_does_not_flatten_leaves_the_ground_alone :: proc(t: ^testing.T) {
 		t, geo.terrain_floor_clears(&terrain, {20, 20}, .Trees),
 		"a pad that does not flatten stopped clearing its trees",
 	)
-	level, wet := geo.floor_water_level(terrain.floors[fi])
-	testing.expect(t, wet, "a pad that does not flatten stopped holding water")
-	testing.expect_value(t, level, f32(12))
-}
-
-// A dry pad is the default, and a pad flooded with no depth would lie flush
-// with its own bed, where nothing can see it.
-@(test)
-a_floor_is_dry_until_it_is_flooded :: proc(t: ^testing.T) {
-	doc := doc_defaults()
-	defer geo.terrain_delete(&doc.terrain)
-	defer geo.spline_free(&doc.spline)
-	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
-	i := geo.floor_add(&doc.terrain, square, 3)
-	_, wet := geo.floor_water_level(doc.terrain.floors[i])
-	testing.expect(t, !wet, "a pad nobody flooded came back wet")
-
-	doc.terrain.floors[i].water = true
-	level, now_wet := geo.floor_water_level(doc.terrain.floors[i])
-	testing.expect(t, now_wet, "a flooded pad reported no water")
-	testing.expect_value(t, level, f32(3) + geo.FLOOR_WATER_MIN)
+	testing.expect(t, terrain.floors[fi].water, "a pad that does not flatten lost its water")
 }
 
 // Delaunay spans the convex hull, so the L's notch comes back covered. Those

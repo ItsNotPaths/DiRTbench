@@ -242,7 +242,8 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	), true
 }
 
-// One body of standing water per flooded pad.
+// One body of standing water per flooded pad, its surface at the pad's own
+// height.
 //
 // A pad that cannot be triangulated fails the export rather than being
 // dropped: dropped water disappears silently.
@@ -254,8 +255,7 @@ export_water :: proc(
 ) -> (bodies: []d3.Water_Body, msg: string, ok: bool) {
 	out := make([dynamic]d3.Water_Body, allocator)
 	for f, i in t.floors {
-		level, wet := geo.floor_water_level(f)
-		if !wet {
+		if !f.water {
 			continue
 		}
 		poly := geo.floor_verts(t, f)
@@ -267,7 +267,7 @@ export_water :: proc(
 		}
 		append(&out, d3.Water_Body{
 			name   = fmt.tprintf("water_%02d", i),
-			y      = level,
+			y      = f.y,
 			points = poly,
 			tris   = tris,
 		})
