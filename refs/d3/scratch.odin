@@ -1013,7 +1013,7 @@ d3_stock_route_all_visible_objects :: proc(
 }
 
 // `donor_vis_path`, when non-empty, floors every tag's header count at the
-// donor file's own count for that tag — see d3_vis_build_single_cell. Pass
+// donor file's own count for that tag — see d3_vis_build. Pass
 // the route's own stock backup to keep a tag whose derived count is known to
 // undersell the real one (ornaments) from sizing the game's allocation too
 // small.
@@ -1043,7 +1043,7 @@ d3_stock_route_all_visible_vis :: proc(
 		donor_msg = fmt.tprintf("header floors from %s", donor_vis_path)
 	}
 
-	built, build_msg, built_ok := d3_vis_build_single_cell(objects, effective_floor, allocator)
+	built, build_msg, built_ok := d3_vis_build(objects, nil, effective_floor, allocator)
 	if !built_ok { return nil, build_msg, false }
 	return built, fmt.tprintf("%s -- %s -- %s", objects_msg, donor_msg, build_msg), true
 }
