@@ -1,0 +1,10 @@
+# dirtbench, machine-local settings. Written on first run, never shipped: an
+# install path is true of one machine only.
+#
+# Grammar: one `key = value` a line, `#` starts a comment, values are unquoted
+# and run to the end of the line. src/app/config.odin has the rest.
+#
+# install_dir is the game folder — the one holding dirt3_game.exe. The project
+# manager's top line writes it for you, so this is here to be read, not edited.
+
+# install_dir = /path/to/DiRT 3 Complete Edition

@@ -27,6 +27,10 @@ import "core:strings"
 
 CONF_NAME :: "dirtbench.conf"
 
+// The file first run emits. Baked into the binary so a release is one file, and
+// commented rather than empty so the grammar is beside the keys.
+CONF_TEMPLATE :: #load("../../assets/dirtbench.conf.default")
+
 // A line with no `=` comes back as the whole line in `key` with an empty `val`.
 // Callers reject that as a malformed entry rather than guessing at it.
 Config_Iter :: struct {
@@ -56,6 +60,16 @@ conf_path :: proc(allocator := context.temp_allocator) -> string {
 		return beside
 	}
 	return strings.clone(CONF_NAME, allocator)
+}
+
+// First run: the template beside the binary, so the file every message names
+// exists. An existing config is left exactly as it is.
+conf_ensure :: proc(allocator := context.temp_allocator) -> (path: string, made: bool) {
+	path = conf_write_path(allocator)
+	if os.exists(path) {
+		return path, false
+	}
+	return path, os.write_entire_file(path, CONF_TEMPLATE) == nil
 }
 
 // One key out of the config. Absent file and absent key are the same answer.

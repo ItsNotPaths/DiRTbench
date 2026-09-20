@@ -1,5 +1,6 @@
 package main
 
+import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -87,4 +88,21 @@ conf_apply_removing_an_absent_key_changes_nothing :: proc(t: ^testing.T) {
 	after := conf_apply(before, "upload_slug.b6f588abc7b58ab4", "", context.allocator, remove = true)
 	defer delete(after)
 	testing.expect_value(t, after, before)
+}
+
+// First run has no config at all. The template goes beside the binary, and a
+// second run leaves it alone — the file is the user's once it exists.
+@(test)
+conf_ensure_writes_the_template_once :: proc(t: ^testing.T) {
+	path, made := conf_ensure(context.temp_allocator)
+	if !made {
+		return // this machine has one already; nothing to prove and nothing to touch
+	}
+	defer os.remove(path)
+	body, err := os.read_entire_file(path, context.temp_allocator)
+	testing.expect(t, err == nil, "the template was not written")
+	testing.expect(t, strings.contains(string(body), D3_INSTALL_KEY), "the template says nothing about the install")
+
+	_, again := conf_ensure(context.temp_allocator)
+	testing.expect(t, !again, "an existing config was written over")
 }

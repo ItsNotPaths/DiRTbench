@@ -222,6 +222,12 @@ main :: proc() {
 	app.recovery = recovery_pending(recovery_root())
 	defer recovery_pending_delete(app.recovery)
 
+	// First run writes the config the install path is remembered in, so the
+	// path box and every "no install" message name a file that exists.
+	if path, made := conf_ensure(); made {
+		fmt.printfln("wrote %s", path)
+	}
+
 	install_scan_init(&app.install)
 	defer install_scan_delete(&app.install)
 	defer uploader_delete(&app.uploader)
