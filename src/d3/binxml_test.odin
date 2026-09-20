@@ -94,7 +94,9 @@ dirt3_track_generators_accept_a_real_polyline :: proc(t:^testing.T) {
 	line:=d3_route_stations(route)
 	markers:=[]Progress_Marker{{.Start,50},{.Checkpoint,160},{.Checkpoint,270},{.Finish,370}}
 	progress,pok:=d3_progress_xml(line,markers,context.temp_allocator)
-	ai,aok:=d3_ai_xml(line,context.temp_allocator)
+	gate_d:=d3_ai_gate_distances(line[len(line)-1].distance)
+	brakes:=d3_brake_points(line,gate_d)
+	ai,aok:=d3_ai_xml(line,gate_d,brakes,context.temp_allocator)
 	testing.expect(t,pok); testing.expect(t,aok)
 	testing.expect_value(t,test_le_u32(progress,0),BXML_FILE)
 	testing.expect_value(t,test_le_u32(ai,0),BXML_FILE)
@@ -104,7 +106,11 @@ dirt3_track_generators_accept_a_real_polyline :: proc(t:^testing.T) {
 	// for short stages; fewer gates throws "invalid vector<T> subscript".
 	testing.expect_value(t,test_bxml_attr(ai,"gates","num_gates"),"61")
 	testing.expect_value(t,test_bxml_attr(ai,"links","num_links"),"60")
-	testing.expect_value(t,test_bxml_attr(ai,"brake_lines","num_brake_lines"),"0")
+	// The one kink in this polyline is one corner, so one brake line and the
+	// hold line that must pair with it.
+	testing.expect_value(t,test_bxml_attr(ai,"brake_lines","num_brake_lines"),"1")
+	testing.expect_value(t,test_bxml_attr(ai,"hold_lines","num_hold_lines"),"1")
+	testing.expect_value(t,test_bxml_attr(ai,"hold_line","brakeline_id"),"0")
 	// Resampling includes both endpoints exactly.
 	testing.expect_value(t,d3_station_at(line,0).centre,route[0].Centre)
 	testing.expect_value(t,d3_station_at(line,line[len(line)-1].distance).centre,route[len(route)-1].Centre)

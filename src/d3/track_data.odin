@@ -13,6 +13,19 @@ D3_RACING_INSET :: f32(1.4)
 // Both fewer and more checkpoints overrun assumptions in the route interpolator.
 D3_TIME_SPLITS :: 3
 
+// One brake line per corner, sized off the corner radius. Stock fits
+// `max_speed = grip * sqrt(radius)` with a ceiling, measured over all 95 stock
+// routes; everything else in a brake_data record is a constant there.
+D3_BRAKE_GRIP :: f32(4.7)
+D3_BRAKE_SPEED_CAP :: f32(80)
+D3_BRAKE_RADIUS_CUT :: f32(250)
+D3_BRAKE_MERGE :: f32(60)
+D3_BRAKE_STEP :: f32(8)
+D3_BRAKE_SPAN :: f32(17)
+D3_BRAKE_MIN_SPEED_DROP :: f32(0.6)
+// ai_vehicle_track.xml puts drift_speed this far under max_speed.
+D3_BRAKE_DRIFT_DROP :: f32(5)
+
 Route_Station :: struct {
 	distance: f32,
 	centre, left, right: [3]f32,
@@ -94,6 +107,62 @@ d3_nearest_gate :: proc(gates: []f32, distance: f32) -> int {
 	return nearest
 }
 
+Brake_Point :: struct {
+	gate:  int,
+	speed: f32,
+}
+
+d3_dist_flat :: proc(a, b: [3]f32) -> f32 {
+	dx, dz := b[0]-a[0], b[2]-a[2]
+	return math.sqrt(dx*dx+dz*dz)
+}
+
+// Radius of the circle through three centre-line points `span` apart. Our
+// racing line is the centre line, so this is the radius the AI drives.
+d3_corner_radius :: proc(line: []Route_Station, distance, span: f32) -> f32 {
+	a := d3_station_at(line, distance-span).centre
+	b := d3_station_at(line, distance).centre
+	c := d3_station_at(line, distance+span).centre
+	area2 := math.abs((b[0]-a[0])*(c[2]-a[2])-(b[2]-a[2])*(c[0]-a[0]))
+	ab, bc, ac := d3_dist_flat(a,b), d3_dist_flat(b,c), d3_dist_flat(a,c)
+	if area2 < 1e-6 || ab < 1e-6 || bc < 1e-6 { return max(f32) }
+	return ab*bc*ac/(2*area2)
+}
+
+d3_brake_speed :: proc(radius: f32) -> f32 {
+	return min(D3_BRAKE_SPEED_CAP, D3_BRAKE_GRIP*math.sqrt(radius))
+}
+
+// One brake point per corner: local minima of the radius, thinned so no two sit
+// closer than the merge distance, then snapped onto the AI gates. The last gate
+// is skipped because every brake line needs a hold line on the gate after it.
+d3_brake_points :: proc(line: []Route_Station, gates: []f32, allocator := context.temp_allocator) -> []Brake_Point {
+	length := line[len(line)-1].distance
+	if length <= 2*D3_BRAKE_SPAN { return nil }
+	count := int((length-2*D3_BRAKE_SPAN)/D3_BRAKE_STEP)+1
+	radii := make([]f32, count, context.temp_allocator)
+	for i in 0..<count { radii[i] = d3_corner_radius(line, D3_BRAKE_SPAN+f32(i)*D3_BRAKE_STEP, D3_BRAKE_SPAN) }
+	minima := make([dynamic]int, context.temp_allocator)
+	for i in 1..<count-1 {
+		// Not strict on either side, so a constant-radius sweeper still counts
+		// as a corner instead of falling through as a plateau.
+		if radii[i] >= D3_BRAKE_RADIUS_CUT || radii[i] > radii[i-1] || radii[i] > radii[i+1] { continue }
+		if n := len(minima); n > 0 && f32(i-minima[n-1])*D3_BRAKE_STEP < D3_BRAKE_MERGE {
+			if radii[i] < radii[minima[n-1]] { minima[n-1] = i }
+			continue
+		}
+		append(&minima, i)
+	}
+	out := make([dynamic]Brake_Point, allocator)
+	for at in minima {
+		gate := d3_nearest_gate(gates, D3_BRAKE_SPAN+f32(at)*D3_BRAKE_STEP)
+		if gate >= len(gates)-1 { continue }
+		if n := len(out); n > 0 && out[n-1].gate >= gate { continue }
+		append(&out, Brake_Point{gate=gate, speed=d3_brake_speed(radii[at])})
+	}
+	return out[:]
+}
+
 d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, allocator := context.allocator) -> (data: []u8, ok: bool) {
 	length := line[len(line)-1].distance
 	gate_d:=d3_progress_gate_distances(length)
@@ -128,9 +197,7 @@ d3_progress_xml :: proc(line: []Route_Station, markers:[]Progress_Marker, alloca
 	return bxml_build(root,allocator)
 }
 
-d3_ai_xml :: proc(line: []Route_Station, allocator := context.allocator) -> (data: []u8, ok: bool) {
-	length:=line[len(line)-1].distance
-	distances:=d3_ai_gate_distances(length)
+d3_ai_xml :: proc(line: []Route_Station, distances: []f32, brakes: []Brake_Point, allocator := context.allocator) -> (data: []u8, ok: bool) {
 	gates:=make([dynamic]^Bxml_Node,context.temp_allocator)
 	for distance,i in distances {
 		s:=d3_station_at(line,distance)
@@ -153,11 +220,74 @@ d3_ai_xml :: proc(line: []Route_Station, allocator := context.allocator) -> (dat
 	}
 	links:=make([dynamic]^Bxml_Node,context.temp_allocator)
 	for i in 0..<len(gates)-1 { append(&links,bxml_node("link",[]Bxml_Attr{{"id",d3_i(i)},{"from_gate",d3_i(i)},{"to_gate",d3_i(i+1)}})) }
+	brake_lines:=make([dynamic]^Bxml_Node,context.temp_allocator)
+	hold_lines:=make([dynamic]^Bxml_Node,context.temp_allocator)
+	for brake,i in brakes {
+		speed:=fmt.tprintf("%.2f",brake.speed)
+		append(&brake_lines,bxml_node("brake_line",[]Bxml_Attr{{"id",d3_i(i*10)},{"gate_id",d3_i(brake.gate)}},[]^Bxml_Node{
+			bxml_node("brake_data",[]Bxml_Attr{
+				{"type","normal"},
+				{"min_speed",fmt.tprintf("%.2f",brake.speed*D3_BRAKE_MIN_SPEED_DROP)},
+				{"min_speed_drop",fmt.tprintf("%.2f",D3_BRAKE_MIN_SPEED_DROP)},
+				{"max_speed",speed},{"max_speed_left",speed},{"max_speed_right",speed},
+				{"hold_line_id",d3_i(i)},
+				{"hold_distance_modifier","0.00"},
+				{"distance_modifier","1.00"},
+				{"brake_cruise_ratio","1.10"},
+				{"curve_modifier","1.00"},{"curve_modifier_left","1.00"},{"curve_modifier_right","1.00"},
+			}),
+		}))
+		append(&hold_lines,bxml_node("hold_line",[]Bxml_Attr{{"id",d3_i(i)},{"gate_id",d3_i(brake.gate+1)},{"brakeline_id",d3_i(i*10)}}))
+	}
 	sections:=make([dynamic]^Bxml_Node,context.temp_allocator)
-	append(&sections,bxml_node("gates",[]Bxml_Attr{{"num_gates",d3_i(len(gates))}},gates[:]),bxml_node("links",[]Bxml_Attr{{"num_links",d3_i(len(links))}},links[:]))
-	empty_sections:=[]string{"brake_lines","hold_lines","min_speed_lines","speed_lines","retire_lines","fork_sets"}
+	append(&sections,
+		bxml_node("gates",[]Bxml_Attr{{"num_gates",d3_i(len(gates))}},gates[:]),
+		bxml_node("links",[]Bxml_Attr{{"num_links",d3_i(len(links))}},links[:]),
+		bxml_node("brake_lines",[]Bxml_Attr{{"num_brake_lines",d3_i(len(brake_lines))}},brake_lines[:]),
+		bxml_node("hold_lines",[]Bxml_Attr{{"num_hold_lines",d3_i(len(hold_lines))}},hold_lines[:]),
+	)
+	empty_sections:=[]string{"min_speed_lines","speed_lines","retire_lines","fork_sets"}
 	for name in empty_sections { append(&sections,bxml_node(name,[]Bxml_Attr{{fmt.tprintf("num_%s",name),"0"}})) }
 	root:=bxml_node("ai_track_data",[]Bxml_Attr{{"version_major","3"},{"version_minor","0"},{"version_revision","2"}},[]^Bxml_Node{bxml_node("track",[]Bxml_Attr{{"name","default"}},sections[:])})
+	return bxml_build(root,allocator)
+}
+
+// Per-class AI tuning, which stock pairs with ai_track.xml by brake-line id.
+// The numbers are the same corner speeds; the per-class hand tuning stock puts
+// in curve_modifier we leave at 1.
+d3_ai_vehicle_xml :: proc(brakes: []Brake_Point, allocator := context.allocator) -> (data: []u8, ok: bool) {
+	names:=[]string{
+		"default","landrush_buggie","landrush_trucks","raid_t1",
+		"rally_60s","rally_70s","rally_80s","rally_90s","rally_cross",
+		"rally_groupb","rally_open","rally_s2000","rally_wrc",
+		"trailblazer","trailblazer_cla",
+	}
+	types:=make([dynamic]^Bxml_Node,context.temp_allocator)
+	for name in names {
+		lines:=make([dynamic]^Bxml_Node,context.temp_allocator)
+		for brake,i in brakes {
+			speed:=fmt.tprintf("%.2f",brake.speed)
+			append(&lines,bxml_node("brake_line",[]Bxml_Attr{{"id",d3_i(i*10)}},[]^Bxml_Node{
+				bxml_node("brake_data",[]Bxml_Attr{
+					{"type","curve"},
+					{"min_speed",fmt.tprintf("%.2f",brake.speed*D3_BRAKE_MIN_SPEED_DROP)},
+					{"min_speed_drop",fmt.tprintf("%.2f",D3_BRAKE_MIN_SPEED_DROP)},
+					{"max_speed",speed},{"max_speed_left",speed},{"max_speed_right",speed},
+					{"drift_speed",fmt.tprintf("%.2f",max(0,brake.speed-D3_BRAKE_DRIFT_DROP))},
+					{"distance_modifier","1.00"},
+					{"brake_cruise_ratio","1.10"},
+					{"hold_time","0.00"},
+					{"curve_modifier","1.00"},{"curve_modifier_left","1.00"},{"curve_modifier_right","1.00"},
+				}),
+			}))
+		}
+		append(&types,bxml_node("vehicle_type",[]Bxml_Attr{{"name",name}},[]^Bxml_Node{
+			bxml_node("brake_lines",[]Bxml_Attr{{"num_brake_lines",d3_i(len(lines))}},lines[:]),
+		}))
+	}
+	root:=bxml_node("vehicle_type_track_data",[]Bxml_Attr{{"version_major","3"},{"version_minor","0"},{"version_revision","0"}},[]^Bxml_Node{
+		bxml_node("vehicle_track",[]Bxml_Attr{{"name","default"}},[]^Bxml_Node{bxml_node("vehicle_types",nil,types[:])}),
+	})
 	return bxml_build(root,allocator)
 }
 
@@ -208,17 +338,25 @@ d3_write_track_data :: proc(job:^Export_Job) -> (msg:string,ok:bool) {
 	if gates:=d3_progress_gate_distances(length); len(gates)<4 {
 		return fmt.tprintf("the stage is %.0f m long and yields %d progress gates; Dirt 3 needs at least 4",length,len(gates)),false
 	}
+	ai_gates:=d3_ai_gate_distances(length)
+	brakes:=d3_brake_points(line,ai_gates)
 	progress,pok:=d3_progress_xml(line,job.Markers); if !pok { return "could not encode progress_track.xml",false }
-	ai,aok:=d3_ai_xml(line); if !aok { delete(progress); return "could not encode ai_track.xml",false }
-	overrides,ook:=d3_route_overrides_build(line[len(line)-1].distance); if !ook { delete(progress); delete(ai); return "could not encode route_overrides.xml",false }
-	defer delete(progress); defer delete(ai); defer delete(overrides)
+	defer delete(progress)
+	ai,aok:=d3_ai_xml(line,ai_gates,brakes); if !aok { return "could not encode ai_track.xml",false }
+	defer delete(ai)
+	vehicle,vok:=d3_ai_vehicle_xml(brakes); if !vok { return "could not encode ai_vehicle_track.xml",false }
+	defer delete(vehicle)
+	overrides,ook:=d3_route_overrides_build(length); if !ook { return "could not encode route_overrides.xml",false }
+	defer delete(overrides)
 	if write_msg,written:=d3_write_out(job,"progress_track.xml",progress); !written { return write_msg,false }
 	if write_msg,written:=d3_write_out(job,"ai_track.xml",ai); !written { return write_msg,false }
+	if write_msg,written:=d3_write_out(job,"ai_vehicle_track.xml",vehicle); !written { return write_msg,false }
 	if write_msg,written:=d3_write_out(job,"route_overrides.xml",overrides); !written { return write_msg,false }
 	return fmt.tprintf(
-		"route data: %d progress gates, %d AI gates",
-		len(d3_progress_gate_distances(line[len(line)-1].distance)),
-		len(d3_ai_gate_distances(line[len(line)-1].distance)),
+		"route data: %d progress gates, %d AI gates, %d brake lines",
+		len(d3_progress_gate_distances(length)),
+		len(ai_gates),
+		len(brakes),
 	),true
 }
 
