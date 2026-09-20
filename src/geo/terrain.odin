@@ -108,6 +108,10 @@ Terrain :: struct {
 	cell_m:  f32, // spacing of the interior points
 	row_m:   f32, // target world-space distance between sculpt controls
 	warp_m:  f32, // global lift of the ground by the time it reaches `reach_m`
+	// How far the ground stands off the road, swooping between the two along
+	// its length. Read here, built into the verge: see the road detachment
+	// section in mesh.odin.
+	detach:  Detach_Opts,
 	controls: [dynamic]Terrain_Control,
 	controls_gen: u64,
 	// Flat pads cut into the ground (floor.odin). Authored and world-space, so
@@ -175,6 +179,7 @@ terrain_reset :: proc(t: ^Terrain) {
 	t.enabled = d.enabled
 	t.reach_m, t.blend_m, t.cell_m, t.row_m = d.reach_m, d.blend_m, d.cell_m, d.row_m
 	t.warp_m = d.warp_m
+	t.detach = d.detach
 	terrain_invalidate(t)
 	// The pads go with it. terrain_invalidate deliberately keeps them: they are
 	// world-space and owe the road nothing, so replacing the spline must not
@@ -327,7 +332,7 @@ field_samples :: proc(
 
 		for side in 0 ..< 2 {
 			seam := verge_seam(cs, side, roughness)
-			s.bare[side] = verge_profile(cs, side).any ? 0 : 1
+			s.bare[side] = verge_profile(cs, side).guarded ? 0 : 1
 			out_dir := terrain_outward(cs, side)
 			s.seam[side] = {seam.x, seam.z}
 			s.seam_y[side] = seam.y

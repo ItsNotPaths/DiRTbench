@@ -357,6 +357,145 @@ hash_u32 :: proc(x: u32) -> u32 {
 	return h
 }
 
+// --- road detachment ----------------------------------------------------------
+//
+// The ground standing off the road, swooping between two knobs along its length.
+//
+// The road never moves: it is authored geometry, and the terrain is welded to
+// the verge seam (terrain.odin). So detachment is the *ground* letting go, and
+// it is built here rather than in the terrain field for one reason — the field's
+// nearest vertex to the road stands `cell_m * TERRAIN_RIM_MARGIN` clear of the
+// rim, metres out, to keep Delaunay from pairing it with the rim into slivers.
+// A half-metre step cannot be drawn by a mesh whose first vertex is two metres
+// away. The verge already tessellates exactly this band, so the step is its
+// outermost segment and every consumer of `verge_seam` follows for free.
+//
+// Positive falls away, which reads as the road up on a low embankment. Negative
+// rises, which reads as a lip of ground along the road edge.
+DETACH_RUN :: 0.5   // metres out the step takes to happen
+DETACH_LIMIT :: 0.75 // furthest either knob may be dragged, each way
+
+// Metres across the largest swoop. Long against a half-metre step, so the road
+// detaches and rejoins over hundreds of metres rather than rippling.
+DETACH_WAVE :: 150.0
+
+// Detachment always goes to nothing where roads meet.
+//
+// Two edges into one node let go of the ground independently. A fork with both
+// sides dropped tears: the branch's verge falls away across the mouth of the
+// road it just left, and the seam the terrain welds to arrives at the node from
+// two directions at two heights. Fading over the last stretch hands every
+// junction back flat, where the two roads join flush and the verges agree.
+//
+// Long enough that two roads leaving a node at a shallow angle have pulled
+// clear of each other before either starts to drop.
+DETACH_JOIN_M :: 24.0
+
+// The two ends of the swoop, in metres. Both zero is the feature off.
+Detach_Opts :: struct {
+	min_m, max_m: f32,
+}
+
+detach_on :: proc(o: Detach_Opts) -> bool {
+	return o.min_m != 0 || o.max_m != 0
+}
+
+// Where a spot sits in the swoop, -1..1.
+//
+// One octave of the value noise the cliff rock uses, read off world XZ rather
+// than road arc. Arc is the obvious axis and the wrong one: `ribbon_arc`
+// accumulates straight across a run break, and either side of a fork the two
+// branches carry different arc at the same place, so the ground would let go by
+// different amounts on two roads meeting at a node. Position agrees with itself
+// everywhere, including where two legs of a hairpin pass.
+detach_noise :: proc(p: [2]f32) -> f32 {
+	return rock_octave({p[0] / DETACH_WAVE, 0, p[1] / DETACH_WAVE}, 0x5EA15EA1)
+}
+
+// The fall at a world spot, in metres.
+detach_at :: proc(o: Detach_Opts, p: [2]f32) -> f32 {
+	n := clamp(detach_noise(p), -1, 1)
+	return math.lerp(o.min_m, o.max_m, (n + 1) * 0.5)
+}
+
+// Which graph nodes two or more roads meet at. A plain chain point joins one
+// road to itself and needs nothing. A fork, a merge and both ends of a weld are
+// places two verges have to agree, and a weld counts whatever its degree says:
+// it is the one edge the parent tree cannot express.
+detach_joins :: proc(sp: Spline, allocator := context.temp_allocator) -> []bool {
+	out := make([]bool, len(sp.points), allocator)
+	deg := make([]int, len(sp.points), context.temp_allocator)
+	for p, i in sp.points {
+		if p.parent >= 0 && p.parent < len(sp.points) {
+			deg[i] += 1
+			deg[p.parent] += 1
+		}
+		if p.weld >= 0 && p.weld < len(sp.points) && p.weld != i {
+			out[i], out[p.weld] = true, true
+		}
+	}
+	for d, i in deg {
+		if d > 2 {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+// How much of the swoop survives at each sample: nothing at a junction, all of
+// it DETACH_JOIN_M of road away from one.
+//
+// Distance is measured **along the road**, by two sweeps that both stop at a run
+// break. A run is one graph edge, and the sample after a break is somewhere else
+// entirely, so the straight-line distance between the two means nothing.
+detach_join_fade :: proc(
+	ribbon: []Cross_Section, join: []bool, allocator := context.temp_allocator,
+) -> []f32 {
+	FAR :: f32(1e9)
+	n := len(ribbon)
+	d := make([]f32, n, allocator)
+	ds := sample_spacing(ribbon)
+	at_node :: proc(cs: Cross_Section, join: []bool) -> bool {
+		node := cs.t <= 1e-4 ? cs.e_from : cs.t >= 1 - 1e-4 ? cs.e_to : -1
+		return node >= 0 && node < len(join) && join[node]
+	}
+	for cs, i in ribbon {
+		d[i] = at_node(cs, join) ? 0 : FAR
+	}
+	for i in 1 ..< n {
+		if !ribbon[i].break_before {
+			d[i] = min(d[i], d[i - 1] + ds[i - 1])
+		}
+	}
+	for i := n - 2; i >= 0; i -= 1 {
+		if !ribbon[i + 1].break_before {
+			d[i] = min(d[i], d[i + 1] + ds[i])
+		}
+	}
+	for &v in d {
+		v = math.smoothstep(f32(0), f32(DETACH_JOIN_M), v)
+	}
+	return d
+}
+
+// Stamp the swoop onto a built ribbon, the way resolve_guards stamps the guards.
+// Read at the centreline, so both sides of the road let go together.
+//
+// Only the fall fades at a junction. The run holds, for the reason
+// verge_profile gates on it: a seam that stepped sideways would do it at the one
+// place two seams have to meet.
+resolve_detach :: proc(sp: Spline, ribbon: []Cross_Section, o: Detach_Opts) {
+	if !detach_on(o) || len(ribbon) < 2 {
+		return
+	}
+	fade := detach_join_fade(ribbon, detach_joins(sp))
+	for &cs, i in ribbon {
+		cs.detach_run = DETACH_RUN
+		fall := clamp(detach_at(o, {cs.pos.x, cs.pos.z}), -DETACH_LIMIT, DETACH_LIMIT)
+		cs.detach_fall = fall * fade[i]
+	}
+}
+
 // side 0 = the verge on the ribbon's `left` end (+right), side 1 = the other.
 verge_size :: proc(cs: Cross_Section, side: int, kind: Guard_Kind) -> f32 {
 	return cs.verge[side][kind].size
@@ -373,6 +512,7 @@ Verge_Seg_Id :: enum u8 {
 	Bank_In,    // up to the bank crest
 	Bank_Out,   // and back down to where the bank started
 	Cliff,      // the rock face behind the lot
+	Detach,     // the ground pulling away from whatever the verge ended at
 }
 VERGE_SEGS :: len(Verge_Seg_Id)
 VERGE_PTS :: VERGE_SEGS + 1
@@ -383,16 +523,21 @@ VERGE_PTS :: VERGE_SEGS + 1
 VERGE_GUTTER_ROWS :: 2
 VERGE_BANK_ROWS :: 2
 VERGE_CLIFF_ROWS :: 4
+// One. The detachment step is a straight fall, so extra rows on it would only
+// put collinear vertices down the middle of a half-metre slope.
+VERGE_DETACH_ROWS :: 1
 VERGE_SEG_ROWS := [Verge_Seg_Id]int {
 	.Gutter_In  = VERGE_GUTTER_ROWS,
 	.Gutter_Out = VERGE_GUTTER_ROWS,
 	.Bank_In    = VERGE_BANK_ROWS,
 	.Bank_Out   = VERGE_BANK_ROWS,
 	.Cliff      = VERGE_CLIFF_ROWS,
+	.Detach     = VERGE_DETACH_ROWS,
 }
 
 // How many rows a verge profile is swept into, all segments together.
-VERGE_ROWS :: 2 * VERGE_GUTTER_ROWS + 2 * VERGE_BANK_ROWS + VERGE_CLIFF_ROWS
+VERGE_ROWS :: 2 * VERGE_GUTTER_ROWS + 2 * VERGE_BANK_ROWS + VERGE_CLIFF_ROWS +
+	VERGE_DETACH_ROWS
 
 // What one segment inherits from the guard that drew it, so a vertex on it can
 // be jittered without going back to the cross-section to ask whose it is.
@@ -412,6 +557,12 @@ Verge_Profile :: struct {
 	pts: [VERGE_PTS]Verge_Point,
 	seg: [Verge_Seg_Id]Verge_Seg,
 	any: bool, // false means "no verge this side": every point is the road edge
+	// A gutter, a bank or a cliff stands here. Split from `any` because
+	// detachment also makes the sweep emit, and the two questions have
+	// different answers: the ground beside a detached road is still ground
+	// beside a bare road edge, so it still takes the road's own texture
+	// (TERRAIN_ROADSIDE_M). A guard is what stops that.
+	guarded: bool,
 }
 
 // The profile at one cross-section, one side. Guards stack outward in the order
@@ -462,6 +613,24 @@ verge_profile :: proc(cs: Cross_Section, side: int) -> Verge_Profile {
 		prof.any = true
 	} else {
 		prof.pts[5] = at
+	}
+	at = prof.pts[5]
+	prof.guarded = prof.any
+
+	// The ground leaving the road, outward of everything else: whatever the
+	// guards ended at is where it lets go. `run` at zero is the feature switched
+	// off, and it is the geometric identity — the seam stays exactly where the
+	// guards left it and this segment's row lands on the one before it.
+	//
+	// The run is gated on rather than the fall, so a stretch where the swoop
+	// happens to pass through zero metres keeps the same seam offset as its
+	// neighbours. Gating on the fall would step the seam half a metre sideways
+	// between two adjacent samples, and the terrain welds to that seam.
+	if cs.detach_run > 0 {
+		prof.pts[6] = {at.x + cs.detach_run, at.y - cs.detach_fall}
+		prof.any = true
+	} else {
+		prof.pts[6] = at
 	}
 	return prof
 }
@@ -830,6 +999,10 @@ verge_quad_look :: proc(row: int, look: Look) -> (col: gfx.Color, mat: Mat_Id) {
 		return look.bank, .Terrain
 	case .Cliff:
 		return lerp_col(look.cliff_bot, look.cliff_top, t), .Cliff
+	case .Detach:
+		// Ground, not rock and not spoil: this is the ground itself letting go
+		// of the road, so it wears the plain terrain colour whatever the venue.
+		return look.terrain, .Terrain
 	}
 	return look.cliff_bot, .Cliff
 }

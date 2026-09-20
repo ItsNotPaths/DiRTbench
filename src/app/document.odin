@@ -210,7 +210,7 @@ veg_cache_clear :: proc(doc: ^Venue_Doc) {
 rebuild_geometry :: proc(doc: ^Venue_Doc, dragging := false) -> (controls_moved: bool) {
 	if doc.dirty_road {
 		delete(doc.ribbon)
-		doc.ribbon = geo.build_ribbon(doc.spline, allocator = context.allocator)
+		doc.ribbon = geo.build_ribbon(doc.spline, allocator = context.allocator, detach = doc.terrain.detach)
 		doc.ribbon_gen += 1
 		geo.road_mesh_rebuild(&doc.road, doc.ribbon, doc.roughness, doc.look)
 		doc.dirty_road = false

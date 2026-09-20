@@ -656,6 +656,18 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("warp up", &t.warp_m, 0, 120, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)
 	}
+	// How far the ground stands off the road, swooping between the two along its
+	// length. Positive is the road up on a low bank, negative is a lip of ground
+	// along the edge, and equal values hold one height the whole way. This one
+	// moves the verge seam, so it marks the road dirty, not just the ground.
+	L :: geo.DETACH_LIMIT
+	if ui.igSliderFloat("detach min", &t.detach.min_m, -L, L, "%.2f m", ui.IM_SLIDER_NONE) {
+		mark_dirty(ed.doc)
+	}
+	if ui.igSliderFloat("detach max", &t.detach.max_m, -L, L, "%.2f m", ui.IM_SLIDER_NONE) {
+		mark_dirty(ed.doc)
+	}
+	t.detach.max_m = max(t.detach.max_m, t.detach.min_m)
 	// Spacing of the interior points the ground is triangulated from.
 	if ui.igSliderFloat("cell", &t.cell_m, 1, 32, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)

@@ -287,6 +287,12 @@ Cross_Section :: struct {
 	// Never lerped — a surface changes at a control point, not across the span
 	// into one — so this is the edge's source node's surface and nothing else.
 	surface:     Road_Surface,
+	// The ground's detachment from the road here: how far out the step runs and
+	// how far it falls. Filled by build_ribbon through resolve_detach, and a
+	// zero `run` is the feature off. See the road detachment section in
+	// mesh.odin.
+	detach_run:  f32,
+	detach_fall: f32,
 }
 
 // One guard kind's shape at one road edge, after every guard that reaches this
@@ -511,10 +517,13 @@ sample_edge :: proc(sp: Spline, parent, child: int, t: f32) -> Cross_Section {
 // `samples_per_seg` defaults to SAMPLES_PER_SEG; only tests pass anything else.
 // Returns a freshly-allocated
 // slice (caller deletes) or nil when there is nothing to draw.
+// `detach` sits after the allocator because most callers pass theirs
+// positionally. It is the road detachment swoop; zero is off.
 build_ribbon :: proc(
 	sp: Spline,
 	samples_per_seg := SAMPLES_PER_SEG,
 	allocator := context.temp_allocator,
+	detach := Detach_Opts{},
 ) -> []Cross_Section {
 	nseg := len(sp.points) - 1
 	if nseg < 1 {
@@ -547,6 +556,7 @@ build_ribbon :: proc(
 		}
 		resolve_guards(sp, out[:])
 		resolve_surfaces(sp, out[:])
+		resolve_detach(sp, out[:], detach)
 		return out[:]
 	}
 	for seg in 0 ..< nseg {
@@ -559,6 +569,7 @@ build_ribbon :: proc(
 	append(&out, sample_at(sp, nseg - 1, 1.0))
 	resolve_guards(sp, out[:])
 	resolve_surfaces(sp, out[:])
+	resolve_detach(sp, out[:], detach)
 	return out[:]
 }
 

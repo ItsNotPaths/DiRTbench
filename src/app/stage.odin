@@ -125,6 +125,11 @@ Stage_Terrain :: struct {
 	cell_m:   f32,
 	row_m:    f32,
 	warp_m:   f32,
+	// Road detachment, v12. Zero is a road joined to its ground, so these could
+	// have gone in unversioned — see the note on VENUE_VERSION for why they did
+	// not.
+	detach_min_m: f32,
+	detach_max_m: f32,
 	controls: []Stage_Terrain_Control,
 }
 
@@ -278,6 +283,8 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 			cell_m   = terrain.cell_m,
 			row_m    = terrain.row_m,
 			warp_m   = terrain.warp_m,
+			detach_min_m = terrain.detach.min_m,
+			detach_max_m = terrain.detach.max_m,
 			controls = controls,
 		}
 	}
@@ -445,6 +452,8 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		terrain.cell_m = max(t.cell_m, 1)
 		terrain.row_m = clamp(t.row_m, geo.TERRAIN_ROW_M_MIN, geo.TERRAIN_ROW_M_MAX)
 		terrain.warp_m = clamp(t.warp_m, 0, geo.TERRAIN_REACH_MAX)
+		terrain.detach.min_m = clamp(t.detach_min_m, -geo.DETACH_LIMIT, geo.DETACH_LIMIT)
+		terrain.detach.max_m = clamp(t.detach_max_m, terrain.detach.min_m, geo.DETACH_LIMIT)
 		geo.terrain_sculpt_load(terrain, saved)
 	}
 	{

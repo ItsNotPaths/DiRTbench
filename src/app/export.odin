@@ -525,7 +525,7 @@ build_geometry :: proc(doc: ^Venue_Doc, spline: geo.Spline) -> (g: Export_Geomet
 	if len(spline.points) < 2 {
 		return g, "nothing to export: a road needs at least 2 points", false
 	}
-	g.ribbon = geo.build_ribbon(spline, allocator = context.temp_allocator)
+	g.ribbon = geo.build_ribbon(spline, allocator = context.temp_allocator, detach = doc.terrain.detach)
 	g.terrain = geo.terrain_clone(&doc.terrain)
 	if g.terrain.enabled {
 		geo.terrain_ensure(&g.terrain, g.ribbon, doc.roughness)

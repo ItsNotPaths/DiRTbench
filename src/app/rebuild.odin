@@ -330,7 +330,7 @@ rebuild_worker :: proc(t: ^thread.Thread) {
 rebuild_job_run :: proc(j: ^Rebuild_Job) {
 	ribbon := j.held
 	if j.do_road {
-		j.ribbon = geo.build_ribbon(j.spline, allocator = context.allocator)
+		j.ribbon = geo.build_ribbon(j.spline, allocator = context.allocator, detach = j.terrain.detach)
 		ribbon = j.ribbon
 		j.road_mesh = geo.build_tri_mesh(ribbon, j.roughness, j.look, context.allocator)
 	}

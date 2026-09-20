@@ -41,6 +41,11 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
+// v12 adds road detachment: `detach_min_m` and `detach_max_m` under `terrain`.
+// Both zero is a road joined to its ground, so a v11 venue would have read
+// correctly without the bump. It is here anyway, so an older build refuses a
+// detached venue outright rather than opening it flat and saving the
+// detachment back out as nothing.
 // v11 drops `water_depth`. A flooded pad's surface is its own `y`, so the
 // height handle is the waterline and the ground under it is whatever it was.
 // v10 makes flattening one floor arg among the rest: a pad carries `flatten`
@@ -56,7 +61,7 @@ VENUE_FORMAT :: "dirtbench.venue"
 // v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
 // or older venue: the tool was not released, and the venues that existed were
 // converted by hand.
-VENUE_VERSION :: 11
+VENUE_VERSION :: 12
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens

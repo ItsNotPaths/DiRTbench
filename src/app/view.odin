@@ -281,7 +281,7 @@ stage_cache_refresh :: proc(ed: ^Editor) {
 		return
 	}
 	ed.stage.spline = sp
-	ed.stage.ribbon = geo.build_ribbon(sp, allocator = context.allocator)
+	ed.stage.ribbon = geo.build_ribbon(sp, allocator = context.allocator, detach = ed.doc.terrain.detach)
 	if arc := geo.ribbon_arc(ed.stage.ribbon); len(arc) > 0 {
 		ed.stage.length = arc[len(arc) - 1]
 	}
