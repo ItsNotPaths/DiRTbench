@@ -89,8 +89,6 @@ d3_vertex_layout :: proc(stride: u32) -> (D3_Vertex_Layout, bool) {
 	return {}, false
 }
 
-d3_half :: proc(v: f32) -> u16 { return transmute(u16)f16(v) }
-
 d3_triangle_normal :: proc(tri: Collision_Triangle) -> [3]f32 {
 	u := tri.Points[1]-tri.Points[0]
 	v := tri.Points[2]-tri.Points[0]
@@ -254,39 +252,15 @@ d3_pack_indices :: proc(w: ^D3_Weld, allocator: mem.Allocator) -> []u8 {
 	return data
 }
 
-// A poisoned builder stops making nodes and keeps the first message, the way
-// Binary_Writer does, so the assembly below reads as a list of nodes.
-D3_Build :: struct {
-	file:      ^Pssg_File,
-	types:     ^Pssg_Types,
-	ids:       ^Pssg_Ids,
-	profile:   ^D3_Venue_Profile,
-	tris:      []Collision_Triangle,
-	st:        D3_St_Map,
-	blocks:    [dynamic]^Pssg_Node,
-	segments:  [dynamic]^Pssg_Node,
-	draws:     int,
-	allocator: mem.Allocator,
-	msg:       string,
-	ok:        bool,
+// The surface builder: the shared PSSG scene builder plus what only a
+// routesplit needs to lay one tile.
+D3_Surface_Build :: struct {
+	using build: D3_Build,
+	profile:     ^D3_Venue_Profile,
+	tris:        []Collision_Triangle,
+	st:          D3_St_Map,
+	draws:       int,
 }
-
-d3_node :: proc(b: ^D3_Build, name: string, attrs: []Pssg_Set, children: []^Pssg_Node = nil, data: []u8 = nil) -> ^Pssg_Node {
-	if !b.ok {
-		for child in children { pssg_node_delete(child, b.allocator) }
-		if data != nil { delete(data, b.allocator) }
-		return nil
-	}
-	node, msg, ok := pssg_make(b.types, name, attrs, children, data, b.allocator)
-	if !ok { b.msg = msg; b.ok = false }
-	return node
-}
-
-d3_fail :: proc(b: ^D3_Build, msg: string) {
-	if b.ok { b.msg = msg; b.ok = false }
-}
-
-d3_ref :: proc(id: string) -> string { return fmt.tprintf("#%s", id) }
 
 D3_Cell :: struct {
 	ix, iz: int,
@@ -312,7 +286,7 @@ d3_colour_mix :: proc(a, b: [4]u8, t: f32) -> (out: [4]u8) {
 
 // A HIGH node carries one draw call for each material present in the tile, the
 // way stock tiles carry up to 37. Every other layer is one call over the tile.
-d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_Group {
+d3_layer_groups :: proc(b: ^D3_Surface_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_Group {
 	groups := make([dynamic]D3_Group, b.allocator)
 	switch layer.role {
 	case .Surface:
@@ -336,7 +310,7 @@ d3_layer_groups :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> []D3_G
 // One draw call: a vertex block, an index run, a data source and the instance
 // that binds them to a shader. Appends to the render node being assembled.
 d3_draw_call :: proc(
-	b: ^D3_Build,
+	b: ^D3_Surface_Build,
 	layout: D3_Vertex_Layout,
 	w: ^D3_Weld,
 	group: D3_Group,
@@ -351,7 +325,7 @@ d3_draw_call :: proc(
 
 	block_kids := make([dynamic]^Pssg_Node, b.allocator)
 	for stream in layout.streams {
-		append(&block_kids, d3_node(b, "DATABLOCKSTREAM", []Pssg_Set{
+		append(&block_kids, d3_node(&b.build, "DATABLOCKSTREAM", []Pssg_Set{
 			{"renderType", stream.render_type},
 			{"dataType", stream.data_type},
 			{"offset", stream.offset},
@@ -360,8 +334,8 @@ d3_draw_call :: proc(
 	}
 	payload := d3_pack_vertices(w, layout, b.st, group.colour, group.colour_b, b.allocator)
 	size := u32(len(payload))
-	append(&block_kids, d3_node(b, "DATABLOCKDATA", nil, nil, payload))
-	append(&b.blocks, d3_node(b, "DATABLOCK", []Pssg_Set{
+	append(&block_kids, d3_node(&b.build, "DATABLOCKDATA", nil, nil, payload))
+	append(&b.blocks, d3_node(&b.build, "DATABLOCK", []Pssg_Set{
 		{"streamCount", u32(len(layout.streams))},
 		{"size", size},
 		{"elementCount", vertices},
@@ -369,39 +343,39 @@ d3_draw_call :: proc(
 	}, block_kids[:]))
 
 	source_kids := make([dynamic]^Pssg_Node, b.allocator)
-	append(&source_kids, d3_node(b, "RENDERINDEXSOURCE", []Pssg_Set{
+	append(&source_kids, d3_node(&b.build, "RENDERINDEXSOURCE", []Pssg_Set{
 		{"primitive", "triangles"},
 		{"maximumIndex", vertices-1},
 		{"format", "ushort"},
 		{"count", indices},
 		{"id", index_id},
-	}, []^Pssg_Node{d3_node(b, "INDEXSOURCEDATA", nil, nil, d3_pack_indices(w, b.allocator))}))
+	}, []^Pssg_Node{d3_node(&b.build, "INDEXSOURCEDATA", nil, nil, d3_pack_indices(w, b.allocator))}))
 	for _, i in layout.streams {
-		append(&source_kids, d3_node(b, "RENDERSTREAM", []Pssg_Set{
+		append(&source_kids, d3_node(&b.build, "RENDERSTREAM", []Pssg_Set{
 			{"dataBlock", d3_ref(block_id)},
 			{"subStream", u32(i)},
 			{"id", fmt.tprintf("%s_%d", source_id, i)},
 		}))
 	}
-	append(sources, d3_node(b, "RENDERDATASOURCE", []Pssg_Set{
+	append(sources, d3_node(&b.build, "RENDERDATASOURCE", []Pssg_Set{
 		{"streamCount", u32(len(layout.streams))},
 		{"primitive", "triangles"},
 		{"id", source_id},
 	}, source_kids[:]))
-	append(instances, d3_node(b, "RENDERSTREAMINSTANCE", []Pssg_Set{
+	append(instances, d3_node(&b.build, "RENDERSTREAMINSTANCE", []Pssg_Set{
 		{"sourceCount", u32(1)},
 		{"indices", d3_ref(source_id)},
 		{"streamCount", u32(0)},
 		{"shader", d3_ref(group.shader)},
 		{"id", instance_id},
-	}, []^Pssg_Node{d3_node(b, "RENDERINSTANCESOURCE", []Pssg_Set{{"source", d3_ref(source_id)}})}))
+	}, []^Pssg_Node{d3_node(&b.build, "RENDERINSTANCESOURCE", []Pssg_Set{{"source", d3_ref(source_id)}})}))
 
 	return d3_bounds(w.points[:])
 }
 
-d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> ^Pssg_Node {
+d3_render_node :: proc(b: ^D3_Surface_Build, layer: D3_Layer, cell: ^D3_Cell) -> ^Pssg_Node {
 	layout, supported := d3_vertex_layout(layer.stride)
-	if !supported { d3_fail(b, fmt.tprintf("unsupported Dirt 3 vertex stride %d", layer.stride)); return nil }
+	if !supported { d3_fail(&b.build, fmt.tprintf("unsupported Dirt 3 vertex stride %d", layer.stride)); return nil }
 
 	sources := make([dynamic]^Pssg_Node, b.allocator)
 	instances := make([dynamic]^Pssg_Node, b.allocator)
@@ -433,7 +407,7 @@ d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> ^Pssg_N
 	// One SEGMENTSET per RENDERNODE, holding every draw call of that node.
 	b.draws += len(sources)
 	set_id := pssg_mint(b.ids, b.allocator)
-	append(&b.segments, d3_node(b, "SEGMENTSET", []Pssg_Set{
+	append(&b.segments, d3_node(&b.build, "SEGMENTSET", []Pssg_Set{
 		{"segmentCount", u32(len(sources))},
 		{"id", set_id},
 	}, sources[:]))
@@ -442,13 +416,13 @@ d3_render_node :: proc(b: ^D3_Build, layer: D3_Layer, cell: ^D3_Cell) -> ^Pssg_N
 	return d3_scene_node(b, "RENDERNODE", name, lo, hi, instances[:])
 }
 
-d3_scene_node :: proc(b: ^D3_Build, kind, name: string, lo, hi: [3]f32, children: []^Pssg_Node) -> ^Pssg_Node {
+d3_scene_node :: proc(b: ^D3_Surface_Build, kind, name: string, lo, hi: [3]f32, children: []^Pssg_Node) -> ^Pssg_Node {
 	frame, msg, ok := pssg_frame(b.types, lo, hi, b.allocator)
-	if !ok { d3_fail(b, msg); return nil }
+	if !ok { d3_fail(&b.build, msg); return nil }
 	kids := make([dynamic]^Pssg_Node, b.allocator)
 	append(&kids, frame[0], frame[1])
 	append(&kids, ..children)
-	return d3_node(b, kind, []Pssg_Set{
+	return d3_node(&b.build, kind, []Pssg_Set{
 		{"stopTraversal", u32(0)},
 		{"nickname", name},
 		{"id", name},
@@ -586,7 +560,7 @@ d3_scene_cells :: proc(
 	return cells
 }
 
-d3_scene_tiles :: proc(b: ^D3_Build, cells: []D3_Cell) -> []^Pssg_Node {
+d3_scene_tiles :: proc(b: ^D3_Surface_Build, cells: []D3_Cell) -> []^Pssg_Node {
 	tiles := make([dynamic]^Pssg_Node, b.allocator)
 	for iz := b.profile.tiles_z-1; iz >= 0; iz -= 1 {
 		for ix := b.profile.tiles_x-1; ix >= 0; ix -= 1 {
@@ -720,12 +694,14 @@ d3_routesplit_build_with_template :: proc(
 	ids := pssg_ids(&file, scratch)
 
 	lo, hi := d3_mesh_bounds(collision)
-	b := D3_Build{
-		file = &file, types = &types, ids = &ids, profile = profile, tris = collision,
-		st = d3_st_map(lo, hi),
-		blocks = make([dynamic]^Pssg_Node, scratch),
-		segments = make([dynamic]^Pssg_Node, scratch),
-		allocator = scratch, ok = true,
+	b := D3_Surface_Build{
+		build = {
+			file = &file, types = &types, ids = &ids,
+			blocks = make([dynamic]^Pssg_Node, scratch),
+			segments = make([dynamic]^Pssg_Node, scratch),
+			allocator = scratch, ok = true,
+		},
+		profile = profile, tris = collision, st = d3_st_map(lo, hi),
 	}
 
 	pitch_x := max(hi[0]-lo[0], D3_MIN_EXTENT)/f32(profile.tiles_x)

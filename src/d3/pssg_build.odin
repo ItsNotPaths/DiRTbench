@@ -8,6 +8,7 @@ package d3
 // real node of the same type in the donor.
 
 import "core:fmt"
+import "core:mem"
 import "core:strings"
 
 Pssg_Attr_Key :: struct {
@@ -163,3 +164,38 @@ pssg_frame :: proc(types: ^Pssg_Types, lo, hi: [3]f32, allocator := context.allo
 	if !bok { pssg_node_delete(transform, allocator); return out, bmsg, false }
 	return {transform, box}, "", true
 }
+
+// --- the scene builder --------------------------------------------------------
+
+// A poisoned builder stops making nodes and keeps the first message, the way
+// Binary_Writer does, so an assembly reads as a list of nodes. `blocks` and
+// `segments` are the two libraries every scene fills.
+D3_Build :: struct {
+	file:      ^Pssg_File,
+	types:     ^Pssg_Types,
+	ids:       ^Pssg_Ids,
+	blocks:    [dynamic]^Pssg_Node,
+	segments:  [dynamic]^Pssg_Node,
+	allocator: mem.Allocator,
+	msg:       string,
+	ok:        bool,
+}
+
+d3_node :: proc(b: ^D3_Build, name: string, attrs: []Pssg_Set, children: []^Pssg_Node = nil, data: []u8 = nil) -> ^Pssg_Node {
+	if !b.ok {
+		for child in children { pssg_node_delete(child, b.allocator) }
+		if data != nil { delete(data, b.allocator) }
+		return nil
+	}
+	node, msg, ok := pssg_make(b.types, name, attrs, children, data, b.allocator)
+	if !ok { b.msg = msg; b.ok = false }
+	return node
+}
+
+d3_fail :: proc(b: ^D3_Build, msg: string) {
+	if b.ok { b.msg = msg; b.ok = false }
+}
+
+d3_ref :: proc(id: string) -> string { return fmt.tprintf("#%s", id) }
+
+d3_half :: proc(v: f32) -> u16 { return transmute(u16)f16(v) }
