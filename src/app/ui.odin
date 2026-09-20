@@ -688,6 +688,21 @@ draw_floor_opts :: proc(o: ^geo.Floor_Opts) -> (changed: bool) {
 	if ui.igCheckbox("no ground cover", &o.no_cover) {
 		changed = true
 	}
+	if ui.igCheckbox("water", &o.water) {
+		// Zero depth sits level with the bed and draws nothing; see
+		// geo.FLOOR_WATER_MIN.
+		if o.water && o.water_depth < geo.FLOOR_WATER_MIN {
+			o.water_depth = geo.FLOOR_WATER_DEPTH
+		}
+		changed = true
+	}
+	if o.water {
+		if ui.igSliderFloat(
+			"depth", &o.water_depth, geo.FLOOR_WATER_MIN, 20, "%.2f m", ui.IM_SLIDER_NONE,
+		) {
+			changed = true
+		}
+	}
 	return
 }
 
@@ -712,9 +727,14 @@ draw_floor_section :: proc(ed: ^Editor) {
 	}
 	ui.im_same_line()
 	ui.im_text(fmt.ctprintf("%d placed", len(t.floors)))
-	draw_floor_opts(&ed.floor_opts)
+	// Args for the *next* pad, drawn only with nothing selected: beside a
+	// selected pad they duplicate its widgets, and only the pad's do anything.
 	if selected_floor(ed) < 0 {
+		ui.im_text_colored(DIM_COL, "args for the next pad")
+		draw_floor_opts(&ed.floor_opts)
 		ui.im_text_colored(DIM_COL, "click one to select it")
+	} else {
+		ui.im_text_colored(DIM_COL, "this pad's args are in the block below")
 	}
 }
 
@@ -728,8 +748,8 @@ SEL_ROWS := [Sel_Kind]f32{
 	.None       = 2,
 	.Point      = 8,
 	.Node       = 3,
-	.Floor      = 8,
-	.Floor_Vert = 8,
+	.Floor      = 10,
+	.Floor_Vert = 10,
 	.Prop       = 7,
 }
 
@@ -777,15 +797,17 @@ draw_floor_selection :: proc(ed: ^Editor) {
 	_, v := selected_floor_vert(ed)
 	ui.igSeparatorText(fmt.ctprintf("Floor %d", fi))
 	ui.im_text(fmt.ctprintf("%d corners%s", f.count, v >= 0 ? fmt.ctprintf(", corner %d", v) : ""))
+	// Args first: the block clamps to half the dock, and a short window hides
+	// whatever is last.
+	if draw_floor_opts(&f.opts) {
+		mark_terrain_dirty(ed.doc)
+	}
 	if ui.igDragFloat("height", &f.y, 0.1, 0, 0, "%.1f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)
 	}
 	// Zero is a wall: the pad would meet the hillside at a vertical face, and
 	// that face is exported as collision, not just drawn.
 	if ui.igSliderFloat("falloff", &f.falloff, 0, 64, "%.0f m", ui.IM_SLIDER_NONE) {
-		mark_terrain_dirty(ed.doc)
-	}
-	if draw_floor_opts(&f.opts) {
 		mark_terrain_dirty(ed.doc)
 	}
 	ui.im_text_colored(DIM_COL, "RMB an edge adds a corner, Del removes")

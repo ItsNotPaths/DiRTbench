@@ -136,7 +136,11 @@ Stage_Floor :: struct {
 	points:    [][2]f32,
 	no_trees:  bool,
 	no_cover:  bool,
-	// What the two above used to be, when a pad cleared both or neither. Read
+	// Standing water over the pad, and how far above its floor the surface
+	// sits. New keys rather than a version bump: absent reads as no water.
+	water:       bool `json:"water,omitempty"`,
+	water_depth: f32  `json:"water_depth,omitempty"`,
+	// What the first two used to be, when a pad cleared both or neither. Read
 	// so a venue written before the split keeps its pads; never written, so it
 	// leaves every new file as soon as that venue is saved again.
 	clear_veg: bool `json:"clear_veg,omitempty"`,
@@ -288,8 +292,10 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 				y        = f.y,
 				falloff  = f.falloff,
 				points   = geo.floor_verts(terrain, f),
-				no_trees = f.no_trees,
-				no_cover = f.no_cover,
+				no_trees    = f.no_trees,
+				no_cover    = f.no_cover,
+				water       = f.water,
+				water_depth = f.water_depth,
 			}
 		}
 		road.floors = floors
@@ -452,8 +458,10 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		clear(&terrain.floor_pts)
 		for f in road.floors {
 			opts := geo.Floor_Opts {
-				no_trees = f.no_trees || f.clear_veg,
-				no_cover = f.no_cover || f.clear_veg,
+				no_trees    = f.no_trees || f.clear_veg,
+				no_cover    = f.no_cover || f.clear_veg,
+				water       = f.water,
+				water_depth = f.water_depth,
 			}
 			if i := geo.floor_add(terrain, f.points, f.y, opts); i >= 0 {
 				terrain.floors[i].falloff = clamp(f.falloff, 0, geo.TERRAIN_REACH_MAX)

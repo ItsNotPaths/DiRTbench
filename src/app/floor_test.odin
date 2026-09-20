@@ -241,6 +241,76 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(back.terrain.floors), 1)
 }
 
+// Water on a pad, and the level it stands at. A pad cuts the ground and never
+// lifts it, so the surface has to sit above the pad's own height or it draws
+// nothing: water is one-sided. See docs/dirt3-water.md.
+@(test)
+water_on_a_floor_round_trips_and_stands_above_its_bed :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer geo.terrain_delete(&doc.terrain)
+	defer geo.spline_free(&doc.spline)
+	seed_spline(&doc.spline)
+	doc.terrain.enabled = true
+	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
+	i := geo.floor_add(&doc.terrain, square, -6, {water = true, water_depth = 2.5})
+	testing.expect(t, i >= 0, "the pad was not added")
+
+	level, wet := geo.floor_water_level(doc.terrain.floors[i])
+	testing.expect(t, wet, "a flooded pad reported no water")
+	testing.expect_value(t, level, f32(-3.5))
+
+	path := "/tmp/claude-1000/dirtbench-floor-water.json"
+	defer os.remove(path)
+	if _, ok := save_road(&doc, path); !ok {
+		testing.fail_now(t, "could not write the road")
+	}
+	back := doc_defaults()
+	defer geo.terrain_delete(&back.terrain)
+	defer geo.spline_free(&back.spline)
+	if _, ok := load_road(&back, path); !ok {
+		testing.fail_now(t, "could not read the road back")
+	}
+	testing.expect_value(t, len(back.terrain.floors), 1)
+	testing.expect_value(t, back.terrain.floors[0].water, true)
+	testing.expect_value(t, back.terrain.floors[0].water_depth, f32(2.5))
+}
+
+// A dry pad is the default, and a pad flooded with no depth would lie flush
+// with its own bed, where nothing can see it.
+@(test)
+a_floor_is_dry_until_it_is_flooded :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer geo.terrain_delete(&doc.terrain)
+	defer geo.spline_free(&doc.spline)
+	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
+	i := geo.floor_add(&doc.terrain, square, 3)
+	_, wet := geo.floor_water_level(doc.terrain.floors[i])
+	testing.expect(t, !wet, "a pad nobody flooded came back wet")
+
+	doc.terrain.floors[i].water = true
+	level, now_wet := geo.floor_water_level(doc.terrain.floors[i])
+	testing.expect(t, now_wet, "a flooded pad reported no water")
+	testing.expect_value(t, level, f32(3) + geo.FLOOR_WATER_MIN)
+}
+
+// Delaunay spans the convex hull, so the L's notch comes back covered. Those
+// triangles are dropped, and every kept face is wound to point +Y. The area
+// check binds both ways: a hull leak overshoots, a dropped interior falls short.
+@(test)
+a_concave_floor_triangulates_inside_itself_only :: proc(t: ^testing.T) {
+	poly := [][2]f32{{0, 0}, {40, 0}, {40, 20}, {20, 20}, {20, 40}, {0, 40}}
+	tris, ok := geo.floor_triangulate(poly, context.temp_allocator)
+	testing.expect(t, ok, "the L did not triangulate")
+	area: f32
+	for tri in tris {
+		a, b, c := poly[tri[0]], poly[tri[1]], poly[tri[2]]
+		up := (b[1] - a[1]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[1] - a[1])
+		testing.expect(t, up > 0, "a face is wound away from +Y")
+		area += up / 2
+	}
+	testing.expect_value(t, area, f32(1200))
+}
+
 // A pad written before trees and ground cover answered separately: one
 // `clear_veg` key, and it meant both.
 @(test)

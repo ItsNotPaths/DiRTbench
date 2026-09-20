@@ -58,8 +58,31 @@ Floor :: struct {
 // Each claims the outline alone, never the falloff band — the band is a blend
 // into the hillside, and the hillside keeps what it grows.
 Floor_Opts :: struct {
-	no_trees: bool,
-	no_cover: bool,
+	no_trees:    bool,
+	no_cover:    bool,
+	water:       bool,
+	water_depth: f32,
+}
+
+// How deep the water stands over a pad that has just been flooded.
+FLOOR_WATER_DEPTH :: 1.5
+
+// Water is one-sided: it draws from above and shows nothing from below or
+// edge-on. A surface level with the pad it sits on is therefore invisible, so a
+// flooded pad always holds some depth. See docs/dirt3-water.md.
+FLOOR_WATER_MIN :: 0.25
+
+// The height of the water surface over one pad, and whether it has any.
+//
+// A pad cuts the ground to `y` and never lifts it, so the bed is at `y` or
+// below and the surface stands `water_depth` above it. The shoreline is wherever
+// the untouched ground outside climbs back through that level, which is what
+// the falloff band is already doing.
+floor_water_level :: proc(f: Floor) -> (y: f32, ok: bool) {
+	if !f.water {
+		return 0, false
+	}
+	return f.y + max(f.water_depth, FLOOR_WATER_MIN), true
 }
 
 // Which of a pad's two scatters is being asked about.
@@ -342,4 +365,42 @@ floors_copy :: proc(dst: ^Terrain, src: Terrain) {
 	dst.floor_pts = nil
 	append(&dst.floors, ..src.floors[:])
 	append(&dst.floor_pts, ..src.floor_pts[:])
+}
+
+// Triangles covering a pad's outline, wound so each face points +Y.
+//
+// Delaunay spans the convex hull, so a concave outline comes back with
+// triangles outside itself; those are dropped by testing each centroid against
+// the polygon. The winding is then forced, because delaunator promises none and
+// a water face wound the other way is backface culled into nothing.
+floor_triangulate :: proc(poly: [][2]f32, allocator := context.allocator) -> (tris: [][3]u32, ok: bool) {
+	if len(poly) < FLOOR_MIN_VERTS {
+		return nil, false
+	}
+	coords := make([]f64, len(poly) * 2, context.temp_allocator)
+	for p, i in poly {
+		coords[i * 2], coords[i * 2 + 1] = f64(p[0]), f64(p[1])
+	}
+	spanned, made := delaunay_owned(coords, context.temp_allocator)
+	if !made {
+		return nil, false
+	}
+	out := make([dynamic][3]u32, allocator)
+	for tri in spanned {
+		a, b, c := poly[tri[0]], poly[tri[1]], poly[tri[2]]
+		mid := [2]f32{(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3}
+		if poly_signed_dist(poly, mid) > 0 {
+			continue // the hull reaches outside the outline here
+		}
+		kept := tri
+		if (b[1] - a[1]) * (c[0] - a[0]) - (b[0] - a[0]) * (c[1] - a[1]) < 0 {
+			kept[1], kept[2] = kept[2], kept[1]
+		}
+		append(&out, kept)
+	}
+	if len(out) == 0 {
+		delete(out)
+		return nil, false
+	}
+	return out[:], true
 }

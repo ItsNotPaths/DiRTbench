@@ -211,12 +211,17 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	}
 	drawn := export_drawn(job)
 	collision := collision_from_mesh(drawn.mesh, drawn.order, context.temp_allocator)
+	water, water_msg, water_ok := export_water(&drawn.terrain, context.temp_allocator)
+	if !water_ok {
+		return fmt.tprintf("water: %s", water_msg), false
+	}
 	out := d3.Export_Job{
 		Name = job.name, Out = job.out, Backup = job.installing,
 		Route = route, Markers = markers, Collision = collision,
 		Profile = job.profile, Venue_Dir = job.venue_dir,
 		Route_Index = job.route_index, Ground_Cover = cover_cells > 0,
 		Service = d3_route_sample(job.setup),
+		Water = water,
 	}
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
@@ -235,6 +240,39 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		tracksplit_msg, cover_msg, route_msg, placement_msg, billboard_msg,
 		props_cut, placed_cut,
 	), true
+}
+
+// One body of standing water per flooded pad.
+//
+// A pad that cannot be triangulated fails the export rather than being
+// dropped: dropped water disappears silently.
+//
+// Names are positional. Nothing outside `niwater.pssg` and `niwater.xml` refers
+// to a body, and the two are written together from this same list.
+export_water :: proc(
+	t: ^geo.Terrain, allocator := context.allocator,
+) -> (bodies: []d3.Water_Body, msg: string, ok: bool) {
+	out := make([dynamic]d3.Water_Body, allocator)
+	for f, i in t.floors {
+		level, wet := geo.floor_water_level(f)
+		if !wet {
+			continue
+		}
+		poly := geo.floor_verts(t, f)
+		tris, made := geo.floor_triangulate(poly, allocator)
+		if !made {
+			return nil, fmt.tprintf(
+				"floor %d is flooded but its %d corners do not triangulate", i, f.count,
+			), false
+		}
+		append(&out, d3.Water_Body{
+			name   = fmt.tprintf("water_%02d", i),
+			y      = level,
+			points = poly,
+			tris   = tris,
+		})
+	}
+	return out[:], fmt.tprintf("%d flooded", len(out)), true
 }
 
 // The scatter, minus whatever stands in one of the two shots.
