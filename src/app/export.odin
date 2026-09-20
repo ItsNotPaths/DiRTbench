@@ -223,6 +223,9 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		Route_Index = job.route_index, Ground_Cover = cover_cells > 0,
 		Service = d3_route_sample(job.setup),
 		Water = water,
+		Calls = d3_codriver_calls(job.notes),
+		Codriver = codriver_vocabulary(job.base),
+		Codriver_Base = job.base,
 	}
 	// Before the route files: track.vis censuses both placement files for its
 	// tag-2 and tag-3 objects, so they have to be the ones this stage has.
@@ -415,6 +418,9 @@ Export_Job :: struct {
 	// Which route of its venue this is, parsed from a `route_n` id. Camera and
 	// cutscene idents are built from it.
 	route_index:     int,
+	// The stock venue whose art this stage builds on, `location/venue`. The
+	// game names the co-driver files after it, not after our venue.
+	base:            string,
 	// See export_venue_dirs.
 	venue_dir:       string,
 	template_dir:    string,
@@ -611,6 +617,7 @@ build_export_job :: proc(doc: ^Venue_Doc, stage: geo.Spline, name: string) -> (j
 	// that names them.
 	if p, _, loaded := venue_of_doc(doc, context.temp_allocator); loaded {
 		job.profile, job.profile_msg, _ = export_profile(doc.install, p, context.temp_allocator)
+		job.base = pack_manifest(p.base).base
 	} else {
 		job.profile_msg = "this road belongs to no venue, so it has no shaders"
 	}

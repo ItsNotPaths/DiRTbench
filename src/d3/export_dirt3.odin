@@ -237,12 +237,16 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !water_ok {
 		return fmt.tprintf("niwater: %s", water_msg), false
 	}
+	codriver_msg, codriver_ok := d3_write_codriver(job)
+	if !codriver_ok {
+		return fmt.tprintf("codriver: %s", codriver_msg), false
+	}
 	omit_msg, omit_ok := d3_omit_stale_route_files(job)
 	if !omit_ok {
 		return omit_msg, false
 	}
 	return fmt.tprintf(
-		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; cameras: %s; niwater: %s; %s",
+		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; cameras: %s; niwater: %s; codriver: %s; %s",
 		track_msg,
 		collision_msg,
 		visual_msg,
@@ -250,6 +254,7 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		grid_msg,
 		camera_msg,
 		water_msg,
+		codriver_msg,
 		omit_msg,
 	), true
 }

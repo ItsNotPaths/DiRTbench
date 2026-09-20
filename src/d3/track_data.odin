@@ -80,6 +80,8 @@ d3_ai_gate_distances :: proc(length: f32, allocator := context.temp_allocator) -
 
 d3_f3 :: proc(v: [3]f32) -> string { return fmt.tprintf("%.2f %.2f %.2f", v[0],v[1],v[2]) }
 d3_f5 :: proc(v: f32) -> string { return fmt.tprintf("%.5g", v) }
+// Trigger matrices carry six significant digits in stock files.
+d3_f6 :: proc(v: f32) -> string { return fmt.tprintf("%.6g", v) }
 d3_i :: proc(v: int) -> string { return fmt.tprintf("%d",v) }
 
 d3_across :: proc(s: Route_Station, offset: f32) -> [3]f32 {

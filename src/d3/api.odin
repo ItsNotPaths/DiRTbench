@@ -105,6 +105,17 @@ Export_Job :: struct {
 	// Standing water, one body per flooded pad. Empty writes nothing and
 	// leaves the route's water files alone; see d3_write_niwater.
 	Water:        []D3_Water_Body,
+	// The co-driver's calls, in road order, and the baked vocabulary of the
+	// base venue's speech bank. Both empty writes no co-driver files at all and
+	// leaves whatever the route already has: the audio cannot be written, so a
+	// venue whose bank we have not read has nothing to say. See
+	// docs/guide-pacenotes.md.
+	Calls:        []D3_Call,
+	Codriver:     []u8,
+	// The venue that owns the art, `location/venue`. It selects whose speech
+	// bank the vocabulary describes. It does NOT name the files: those take our
+	// own venue directory's name. See d3_codriver_file_name.
+	Codriver_Base: string,
 }
 
 // The names the editor calls this package by.
