@@ -391,9 +391,9 @@ view_defaults :: proc() -> Editor {
 			.Object   = prop_browser_defaults(),
 		},
 		prop_last = .Object,
-		// Both on: the pad most people draw is a levelled patch to stand
-		// something on, and what grew there is in the way.
-		floor_opts = {no_trees = true, no_cover = true},
+		// The pad most people draw is a levelled patch to stand something on,
+		// and what grew there is in the way.
+		floor_opts = {flatten = true, no_trees = true, no_cover = true},
 	}
 }
 

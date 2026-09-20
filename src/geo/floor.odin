@@ -1,13 +1,17 @@
 package geo
 
-// Floors — flat pads cut into the generated ground.
+// Floors — pads laid over the generated ground.
 //
-// A floor is a closed polygon in world XZ and one height. It is a **ceiling on
-// the terrain**: where the ground stands above it the ground comes down, and
-// where the ground already lies below it nothing happens. That asymmetry is the
-// whole point. A pad that could also lift would drag a hillside up to meet it
-// wherever it was hung too high, and it would fight the road, whose verge seam
-// is fixed geometry the terrain is welded to (see terrain.odin).
+// A floor is a closed polygon in world XZ and one height, plus the args that
+// say what it does there: flatten, clear the trees, clear the ground cover,
+// flood it. Any of them alone, and the rest of this file is about the first.
+//
+// A flattening floor is a **ceiling on the terrain**: where the ground stands
+// above it the ground comes down, and where the ground already lies below it
+// nothing happens. That asymmetry is the whole point. A pad that could also
+// lift would drag a hillside up to meet it wherever it was hung too high, and
+// it would fight the road, whose verge seam is fixed geometry the terrain is
+// welded to (see terrain.odin).
 //
 // The one exception is the divot. A dip that already sat below the floor is left
 // as a hole in an otherwise flat pad, which is the one thing a ceiling alone
@@ -51,13 +55,19 @@ Floor :: struct {
 	using opts:   Floor_Opts,
 }
 
-// What a pad does besides cutting the ground. Args rather than one fixed
-// behaviour: a levelled patch that keeps its grass is as ordinary as one
-// scraped bare, and the author is the one who knows which this is.
+// What a pad does. Args rather than one fixed behaviour: a levelled patch that
+// keeps its grass is as ordinary as one scraped bare, and a pad may just as
+// well flood or clear a hillside it never levels. The author is the one who
+// knows which this is.
+//
+// `flatten` is an arg like the rest, so an outline with it off is only an
+// outline: no ceiling, no divot lift, nothing read from `y` but the level the
+// other args hang off.
 //
 // Each claims the outline alone, never the falloff band — the band is a blend
 // into the hillside, and the hillside keeps what it grows.
 Floor_Opts :: struct {
+	flatten:     bool,
 	no_trees:    bool,
 	no_cover:    bool,
 	water:       bool,
@@ -74,10 +84,11 @@ FLOOR_WATER_MIN :: 0.25
 
 // The height of the water surface over one pad, and whether it has any.
 //
-// A pad cuts the ground to `y` and never lifts it, so the bed is at `y` or
-// below and the surface stands `water_depth` above it. The shoreline is wherever
-// the untouched ground outside climbs back through that level, which is what
-// the falloff band is already doing.
+// The surface stands `water_depth` above the pad's own `y`, flattened or not. A
+// flattened pad cuts the ground to `y` and never lifts it, so its bed is at `y`
+// or below and the shoreline is wherever the falloff band climbs back through
+// the surface. An unflattened one is a plane hung over the hill as it stands,
+// and where the hill is already above the surface there is simply no water.
 floor_water_level :: proc(f: Floor) -> (y: f32, ok: bool) {
 	if !f.water {
 		return 0, false
@@ -149,7 +160,7 @@ seg_dist2 :: proc(a, b, p: [2]f32) -> f32 {
 terrain_floor_level :: proc(t: ^Terrain, p: [2]f32, y: f32) -> (level: f32, inside, ok: bool) {
 	level = y
 	for fl in t.floors {
-		if fl.count < FLOOR_MIN_VERTS {
+		if !fl.flatten || fl.count < FLOOR_MIN_VERTS {
 			continue
 		}
 		d := poly_signed_dist(floor_verts(t, fl), p)
@@ -237,7 +248,7 @@ terrain_floor_heights :: proc(t: ^Terrain, f: ^Terrain_Field) -> []f32 {
 // --- editing -----------------------------------------------------------------
 
 // Append a pad. The outline is copied; the caller keeps its own.
-floor_add :: proc(t: ^Terrain, verts: [][2]f32, y: f32, opts := Floor_Opts{}) -> int {
+floor_add :: proc(t: ^Terrain, verts: [][2]f32, y: f32, opts := Floor_Opts{flatten = true}) -> int {
 	if len(verts) < FLOOR_MIN_VERTS {
 		return -1
 	}

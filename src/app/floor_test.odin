@@ -1,7 +1,8 @@
 package main
 
-// A floor is a ceiling on the ground, with one exception (geo/floor.odin). These
-// pin the rule from both sides: what it may lower, and what it must leave alone.
+// A floor that flattens is a ceiling on the ground, with one exception
+// (geo/floor.odin). These pin the rule from both sides — what it may lower and
+// what it must leave alone — and that each arg acts on its own.
 
 import "core:os"
 import "core:slice"
@@ -168,7 +169,7 @@ a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 	defer geo.terrain_delete(&terrain)
 	// A square well clear of the road, so nothing but the pad can reject it.
 	pad := [][2]f32{{30, 100}, {60, 100}, {60, 200}, {30, 200}}
-	fi := geo.floor_add(&terrain, pad, 0, {no_trees = true})
+	fi := geo.floor_add(&terrain, pad, 0, {flatten = true, no_trees = true})
 
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
@@ -228,6 +229,7 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	testing.expect_value(t, back.terrain.floors[0].falloff, f32(3))
 	testing.expect_value(t, back.terrain.floors[0].no_trees, true)
 	testing.expect_value(t, back.terrain.floors[0].no_cover, false)
+	testing.expect_value(t, back.terrain.floors[0].flatten, true)
 	testing.expect(
 		t,
 		slice.equal(geo.floor_verts(&back.terrain, back.terrain.floors[0]), square),
@@ -273,6 +275,42 @@ water_on_a_floor_round_trips_and_stands_above_its_bed :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(back.terrain.floors), 1)
 	testing.expect_value(t, back.terrain.floors[0].water, true)
 	testing.expect_value(t, back.terrain.floors[0].water_depth, f32(2.5))
+	// This one only floods: the arg it was made without must stay off.
+	testing.expect_value(t, back.terrain.floors[0].flatten, false)
+}
+
+// The args are independent. A pad with everything but `flatten` leaves the
+// ground exactly where it found it, and still clears and floods it.
+@(test)
+a_pad_that_does_not_flatten_leaves_the_ground_alone :: proc(t: ^testing.T) {
+	terrain := geo.TERRAIN_DEFAULTS
+	terrain.enabled = true
+	defer geo.terrain_delete(&terrain)
+	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
+	fi := geo.floor_add(
+		&terrain, square, 10,
+		{no_trees = true, no_cover = true, water = true, water_depth = 2},
+	)
+
+	_, _, ok := geo.terrain_floor_level(&terrain, {20, 20}, 25)
+	testing.expect(t, !ok, "a pad that does not flatten still held a level")
+
+	f: geo.Terrain_Field
+	defer geo.terrain_field_delete(&f)
+	append(&f.pts, test_field_point(20, 20, 25))
+	append(&f.pts, test_field_point(21, 20, 2))
+	append(&f.tris, [3]u32{0, 0, 1})
+	ys := geo.terrain_floor_heights(&terrain, &f)
+	testing.expect_value(t, ys[0], f32(25)) // not cut
+	testing.expect_value(t, ys[1], f32(2))  // not lifted
+
+	testing.expect(
+		t, geo.terrain_floor_clears(&terrain, {20, 20}, .Trees),
+		"a pad that does not flatten stopped clearing its trees",
+	)
+	level, wet := geo.floor_water_level(terrain.floors[fi])
+	testing.expect(t, wet, "a pad that does not flatten stopped holding water")
+	testing.expect_value(t, level, f32(12))
 }
 
 // A dry pad is the default, and a pad flooded with no depth would lie flush
@@ -309,32 +347,6 @@ a_concave_floor_triangulates_inside_itself_only :: proc(t: ^testing.T) {
 		area += up / 2
 	}
 	testing.expect_value(t, area, f32(1200))
-}
-
-// A pad written before trees and ground cover answered separately: one
-// `clear_veg` key, and it meant both.
-@(test)
-a_floor_written_before_the_split_clears_both :: proc(t: ^testing.T) {
-	doc := doc_defaults()
-	defer geo.terrain_delete(&doc.terrain)
-	defer geo.spline_free(&doc.spline)
-	seed_spline(&doc.spline)
-	doc.terrain.enabled = true
-	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
-	geo.floor_add(&doc.terrain, square, 12)
-
-	road := road_block(&doc)
-	testing.expect_value(t, len(road.floors), 1)
-	// The file as it was written then, keys and all.
-	road.floors[0].no_trees, road.floors[0].no_cover = false, false
-	road.floors[0].clear_veg = true
-
-	if _, ok := doc_load_road(&doc, road); !ok {
-		testing.fail_now(t, "could not read the road back")
-	}
-	testing.expect_value(t, len(doc.terrain.floors), 1)
-	testing.expect_value(t, doc.terrain.floors[0].no_trees, true)
-	testing.expect_value(t, doc.terrain.floors[0].no_cover, true)
 }
 
 // A road that predates the block opens with no pads, whatever the document held.

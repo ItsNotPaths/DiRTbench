@@ -41,6 +41,10 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
+// v10 makes flattening one floor arg among the rest: a pad carries `flatten`
+// beside `no_trees`, `no_cover` and `water`, so an outline can flood or clear
+// ground it never levels. Every floor key is written every time, and the
+// `clear_veg` key a pre-split pad used is gone.
 // v9 lifts cliffs off the control points into `road.guards`, which is also
 // where snow banks and gutters live. Every `cliff_*` and `span_*` key on a road
 // point is gone, and a v8 venue that used them is converted by hand.
@@ -50,7 +54,7 @@ VENUE_FORMAT :: "dirtbench.venue"
 // v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
 // or older venue: the tool was not released, and the venues that existed were
 // converted by hand.
-VENUE_VERSION :: 9
+VENUE_VERSION :: 10
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens

@@ -678,10 +678,13 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	draw_floor_section(ed)
 }
 
-// What a pad does besides cutting the ground (geo.Floor_Opts). One widget for
-// the pad being drawn and the pad selected, so the args you set before drawing
-// are the ones you change afterwards, under the same names.
+// What a pad does (geo.Floor_Opts). One widget for the pad being drawn and the
+// pad selected, so the args you set before drawing are the ones you change
+// afterwards, under the same names.
 draw_floor_opts :: proc(o: ^geo.Floor_Opts) -> (changed: bool) {
+	if ui.igCheckbox("flatten", &o.flatten) {
+		changed = true
+	}
 	if ui.igCheckbox("no trees", &o.no_trees) {
 		changed = true
 	}
@@ -748,8 +751,8 @@ SEL_ROWS := [Sel_Kind]f32{
 	.None       = 2,
 	.Point      = 8,
 	.Node       = 3,
-	.Floor      = 10,
-	.Floor_Vert = 10,
+	.Floor      = 11,
+	.Floor_Vert = 11,
 	.Prop       = 7,
 }
 
@@ -786,8 +789,8 @@ draw_selection_block :: proc(ed: ^Editor) {
 	}
 }
 
-// Flat pads (geo/floor.odin). A pad is a ceiling on the ground, so the only
-// numbers it carries are the height it holds and how far out it blends.
+// Pads (geo/floor.odin). The args say what one does; the only numbers it
+// carries are the height it works at and how far out it blends.
 draw_floor_selection :: proc(ed: ^Editor) {
 	fi := selected_floor(ed)
 	if fi < 0 {
