@@ -285,16 +285,17 @@ veg_field_make :: proc(
 // outside it. With the terrain off the test still runs; only Y falls back to the
 // caller's own.
 veg_field_y :: proc(vf: ^Veg_Field, p: [2]f32) -> (y: f32, inside: bool) {
-	y, _, inside = veg_field_ground(vf, p, VEG_CLEAR)
+	y, _, inside = veg_field_ground(vf, p, VEG_CLEAR, .Trees)
 	return
 }
 
 // The same answer with the caller's own clearance, and `su` alongside it.
 // Ground cover grows much closer in than a tree may stand — a tree needs room
 // for its trunk and its canopy, grass needs the verge — so the clearance is
-// the caller's to pick rather than one constant for both.
+// the caller's to pick rather than one constant for both. `what` is the same
+// split again: a pad may clear the trees standing on it and keep its grass.
 veg_field_ground :: proc(
-	vf: ^Veg_Field, p: [2]f32, clear: f32,
+	vf: ^Veg_Field, p: [2]f32, clear: f32, what: Floor_Clears,
 ) -> (
 	y, su: f32, inside: bool,
 ) {
@@ -306,10 +307,10 @@ veg_field_ground :: proc(
 	if !pr.ok || pr.su <= clear || pr.su > vf.reach {
 		return 0, su, false
 	}
-	// A pad that clears its own foliage is off the terrain as far as the scatter
-	// is concerned, which is the same answer as the road corridor gets. Tested
+	// A pad that clears this scatter is off the terrain as far as it is
+	// concerned, which is the same answer as the road corridor gets. Tested
 	// before the height work below, so a rejected candidate costs less, not more.
-	if terrain_floor_clears_veg(vf.t, p) {
+	if terrain_floor_clears(vf.t, p, what) {
 		return 0, su, false
 	}
 	if !vf.heights {

@@ -134,7 +134,12 @@ Stage_Floor :: struct {
 	y:         f32,
 	falloff:   f32,
 	points:    [][2]f32,
-	clear_veg: bool,
+	no_trees:  bool,
+	no_cover:  bool,
+	// What the two above used to be, when a pad cleared both or neither. Read
+	// so a venue written before the split keeps its pads; never written, so it
+	// leaves every new file as soon as that venue is saved again.
+	clear_veg: bool `json:"clear_veg,omitempty"`,
 }
 
 // One hand-placed prop. The library is named rather than numbered: a venue's
@@ -280,10 +285,11 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 		floors := make([]Stage_Floor, len(terrain.floors), allocator)
 		for f, i in terrain.floors {
 			floors[i] = {
-				y         = f.y,
-				falloff   = f.falloff,
-				points    = geo.floor_verts(terrain, f),
-				clear_veg = f.clear_veg,
+				y        = f.y,
+				falloff  = f.falloff,
+				points   = geo.floor_verts(terrain, f),
+				no_trees = f.no_trees,
+				no_cover = f.no_cover,
 			}
 		}
 		road.floors = floors
@@ -445,9 +451,12 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 		clear(&terrain.floors)
 		clear(&terrain.floor_pts)
 		for f in road.floors {
-			if i := geo.floor_add(terrain, f.points, f.y); i >= 0 {
+			opts := geo.Floor_Opts {
+				no_trees = f.no_trees || f.clear_veg,
+				no_cover = f.no_cover || f.clear_veg,
+			}
+			if i := geo.floor_add(terrain, f.points, f.y, opts); i >= 0 {
 				terrain.floors[i].falloff = clamp(f.falloff, 0, geo.TERRAIN_REACH_MAX)
-				terrain.floors[i].clear_veg = f.clear_veg
 			}
 		}
 	}

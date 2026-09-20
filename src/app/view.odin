@@ -159,6 +159,10 @@ Editor :: struct {
 	// as world points, so the corners keep the heights they were picked at.
 	floor_draw:    [dynamic]gfx.Vector3,
 	floor_drawing: bool,
+	floor_shut:    bool, // the cursor is on the first corner: the next click closes
+	// What a new pad is drawn with. Window state, like guard_kind: the document
+	// does not remember which args you reached for last.
+	floor_opts:    geo.Floor_Opts,
 	show_demo:     bool,
 	show_gen:      bool, // the Stage generator panel; toggled from the menubar
 	show_targets:  bool, // the Export targets panel
@@ -387,6 +391,9 @@ view_defaults :: proc() -> Editor {
 			.Object   = prop_browser_defaults(),
 		},
 		prop_last = .Object,
+		// Both on: the pad most people draw is a levelled patch to stand
+		// something on, and what grew there is in the way.
+		floor_opts = {no_trees = true, no_cover = true},
 	}
 }
 

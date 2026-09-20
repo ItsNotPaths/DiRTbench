@@ -17,6 +17,12 @@ import "../gfx"
 // Handle size for an outline vertex, and the slack a click on the outline gets.
 FLOOR_HANDLE_R :: 1.6
 
+// How much wider the first corner's handle is while the outline is open. The
+// outline closes by clicking it, so it has to be the easier of two corners to
+// hit when they sit on top of each other — the last corner placed is often
+// right beside it.
+FLOOR_SHUT_R :: FLOOR_HANDLE_R * 2
+
 // --- selection ----------------------------------------------------------------
 
 // The selected pad, or -1. Validated: a delete or a load can leave the selection
@@ -60,6 +66,17 @@ floor_draw_begin :: proc(ed: ^Editor) {
 floor_draw_cancel :: proc(ed: ^Editor) {
 	clear(&ed.floor_draw)
 	ed.floor_drawing = false
+	ed.floor_shut = false
+}
+
+// Whether the ray is on the first corner with enough corners behind it to make
+// a pad. This is the close: there is no button, and a shape shuts where it was
+// started, the way it reads on screen.
+floor_draw_shuts :: proc(ed: ^Editor, ray: gfx.Ray) -> bool {
+	if len(ed.floor_draw) < geo.FLOOR_MIN_VERTS {
+		return false
+	}
+	return gfx.GetRayCollisionSphere(ray, ed.floor_draw[0], FLOOR_SHUT_R).hit
 }
 
 // Close the outline into a pad. Its height is the mean of the ground it was
@@ -79,7 +96,7 @@ floor_draw_close :: proc(ed: ^Editor) {
 	}
 	y /= f32(len(ed.floor_draw))
 
-	i := geo.floor_add(&ed.doc.terrain, verts, y)
+	i := geo.floor_add(&ed.doc.terrain, verts, y, ed.floor_opts)
 	if i < 0 {
 		return
 	}
@@ -95,6 +112,7 @@ floor_draw_input :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_mouse, ui_keys: bool
 	if !ed.floor_drawing {
 		return false
 	}
+	ed.floor_shut = !nav && !ui_mouse && floor_draw_shuts(ed, ray)
 	if !ui_keys {
 		if gfx.IsKeyPressed(.ESCAPE) {
 			floor_draw_cancel(ed)
@@ -108,11 +126,11 @@ floor_draw_input :: proc(ed: ^Editor, ray: gfx.Ray, nav, ui_mouse, ui_keys: bool
 	if nav || ui_mouse {
 		return true
 	}
-	if gfx.IsMouseButtonPressed(.RIGHT) {
-		floor_draw_close(ed)
-		return true
-	}
 	if gfx.IsMouseButtonPressed(.LEFT) {
+		if ed.floor_shut {
+			floor_draw_close(ed)
+			return true
+		}
 		if len(ed.floor_draw) >= geo.FLOOR_MAX_VERTS {
 			set_status(&ed.status, fmt.tprintf("a floor holds %d corners", geo.FLOOR_MAX_VERTS), false)
 			return true
@@ -279,11 +297,18 @@ draw_floors :: proc(ed: ^Editor) {
 		}
 	}
 
-	// The outline being drawn: open, and at the heights it was picked at.
+	// The outline being drawn: open, and at the heights it was picked at. The
+	// first corner wears the closing edge as soon as the cursor is on it, so
+	// the shape you would get is on screen before the click that takes it.
 	for k in 0 ..< len(ed.floor_draw) {
 		gfx.DrawSphereEx(ed.floor_draw[k], FLOOR_HANDLE_R, 3, 4, FLOOR_SEL_COL)
 		if k > 0 {
 			gfx.DrawLine3D(ed.floor_draw[k - 1], ed.floor_draw[k], FLOOR_SEL_COL)
 		}
+	}
+	if ed.floor_shut {
+		first, last := ed.floor_draw[0], ed.floor_draw[len(ed.floor_draw) - 1]
+		gfx.DrawSphereEx(first, FLOOR_SHUT_R, 3, 4, FLOOR_VERT_COL)
+		gfx.DrawLine3D(last, first, FLOOR_VERT_COL)
 	}
 }

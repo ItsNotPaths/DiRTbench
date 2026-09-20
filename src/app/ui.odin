@@ -678,6 +678,19 @@ draw_terrain_mesh_section :: proc(ed: ^Editor) {
 	draw_floor_section(ed)
 }
 
+// What a pad does besides cutting the ground (geo.Floor_Opts). One widget for
+// the pad being drawn and the pad selected, so the args you set before drawing
+// are the ones you change afterwards, under the same names.
+draw_floor_opts :: proc(o: ^geo.Floor_Opts) -> (changed: bool) {
+	if ui.igCheckbox("no trees", &o.no_trees) {
+		changed = true
+	}
+	if ui.igCheckbox("no ground cover", &o.no_cover) {
+		changed = true
+	}
+	return
+}
+
 // Drawing a floor, and the count of them. What one selected floor is worth
 // tweaking lives in the selection block.
 draw_floor_section :: proc(ed: ^Editor) {
@@ -686,11 +699,8 @@ draw_floor_section :: proc(ed: ^Editor) {
 	if ed.floor_drawing {
 		ui.im_text(fmt.ctprintf("%d corners placed", len(ed.floor_draw)))
 		ui.im_text("click the ground for each corner")
-		ui.im_text("Enter or RMB closes it, Esc drops it")
-		if ui.im_button("Close") {
-			floor_draw_close(ed)
-		}
-		ui.im_same_line()
+		ui.im_text("click the first corner to close it, Esc drops it")
+		draw_floor_opts(&ed.floor_opts)
 		if ui.im_button("Cancel") {
 			floor_draw_cancel(ed)
 		}
@@ -702,6 +712,7 @@ draw_floor_section :: proc(ed: ^Editor) {
 	}
 	ui.im_same_line()
 	ui.im_text(fmt.ctprintf("%d placed", len(t.floors)))
+	draw_floor_opts(&ed.floor_opts)
 	if selected_floor(ed) < 0 {
 		ui.im_text_colored(DIM_COL, "click one to select it")
 	}
@@ -717,8 +728,8 @@ SEL_ROWS := [Sel_Kind]f32{
 	.None       = 2,
 	.Point      = 8,
 	.Node       = 3,
-	.Floor      = 7,
-	.Floor_Vert = 7,
+	.Floor      = 8,
+	.Floor_Vert = 8,
 	.Prop       = 7,
 }
 
@@ -774,7 +785,7 @@ draw_floor_selection :: proc(ed: ^Editor) {
 	if ui.igSliderFloat("falloff", &f.falloff, 0, 64, "%.0f m", ui.IM_SLIDER_NONE) {
 		mark_terrain_dirty(ed.doc)
 	}
-	if ui.igCheckbox("clear foliage", &f.clear_veg) {
+	if draw_floor_opts(&f.opts) {
 		mark_terrain_dirty(ed.doc)
 	}
 	ui.im_text_colored(DIM_COL, "RMB an edge adds a corner, Del removes")

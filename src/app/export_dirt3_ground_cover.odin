@@ -16,7 +16,7 @@ package main
 //
 // Where the cover goes is `veg_field_y`'s answer, the same test that decides
 // whether a tree may stand somewhere: on the terrain, past `VEG_CLEAR` from
-// every road corridor, inside `reach_m`, off any pad that clears vegetation.
+// every road corridor, inside `reach_m`, off any pad that clears its cover.
 // `su` is measured **from the verge seam**, and the seam is the outer end of
 // the gutter, bank and cliff stack, so all three are excluded by construction
 // rather than by filtering triangles on their material.
@@ -177,7 +177,7 @@ d3_ground_cover_samples :: proc(
 	for col in 0 ..< cols {
 		for row in 0 ..< rows {
 			p := [2]f32{lo[0] + f32(col)*pitch, lo[1] + f32(row)*pitch}
-			y, su, inside := geo.veg_field_ground(vf, p, D3_GC_CLEAR_M)
+			y, su, inside := geo.veg_field_ground(vf, p, D3_GC_CLEAR_M, .Cover)
 			if !inside { continue }
 			ground[{col, row}] = {y = y, su = su}
 		}

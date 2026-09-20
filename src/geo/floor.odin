@@ -48,11 +48,24 @@ Floor :: struct {
 	first, count: int,
 	y:            f32,
 	falloff:      f32,
-	// Whether the scatter skips this pad. On by default: a pad is levelled
-	// ground to put something on, and trees standing in one is the common case,
-	// not the exception. The outline alone, not the falloff band — the band is a
-	// blend into the hillside and the hillside keeps its trees.
-	clear_veg:    bool,
+	using opts:   Floor_Opts,
+}
+
+// What a pad does besides cutting the ground. Args rather than one fixed
+// behaviour: a levelled patch that keeps its grass is as ordinary as one
+// scraped bare, and the author is the one who knows which this is.
+//
+// Each claims the outline alone, never the falloff band — the band is a blend
+// into the hillside, and the hillside keeps what it grows.
+Floor_Opts :: struct {
+	no_trees: bool,
+	no_cover: bool,
+}
+
+// Which of a pad's two scatters is being asked about.
+Floor_Clears :: enum {
+	Trees,
+	Cover,
 }
 
 floor_verts :: proc(t: ^Terrain, f: Floor) -> [][2]f32 {
@@ -133,10 +146,11 @@ terrain_floor_level :: proc(t: ^Terrain, p: [2]f32, y: f32) -> (level: f32, insi
 	return
 }
 
-// Whether a pad claims this spot for itself, foliage and all.
-terrain_floor_clears_veg :: proc(t: ^Terrain, p: [2]f32) -> bool {
+// Whether a pad claims this spot from one of the scatters.
+terrain_floor_clears :: proc(t: ^Terrain, p: [2]f32, what: Floor_Clears) -> bool {
 	for fl in t.floors {
-		if !fl.clear_veg || fl.count < FLOOR_MIN_VERTS {
+		on := what == .Trees ? fl.no_trees : fl.no_cover
+		if !on || fl.count < FLOOR_MIN_VERTS {
 			continue
 		}
 		if poly_signed_dist(floor_verts(t, fl), p) <= 0 {
@@ -200,17 +214,17 @@ terrain_floor_heights :: proc(t: ^Terrain, f: ^Terrain_Field) -> []f32 {
 // --- editing -----------------------------------------------------------------
 
 // Append a pad. The outline is copied; the caller keeps its own.
-floor_add :: proc(t: ^Terrain, verts: [][2]f32, y: f32) -> int {
+floor_add :: proc(t: ^Terrain, verts: [][2]f32, y: f32, opts := Floor_Opts{}) -> int {
 	if len(verts) < FLOOR_MIN_VERTS {
 		return -1
 	}
 	n := min(len(verts), FLOOR_MAX_VERTS)
 	f := Floor {
-		first     = len(t.floor_pts),
-		count     = n,
-		y         = y,
-		falloff   = FLOOR_FALLOFF,
-		clear_veg = true,
+		first   = len(t.floor_pts),
+		count   = n,
+		y       = y,
+		falloff = FLOOR_FALLOFF,
+		opts    = opts,
 	}
 	append(&t.floor_pts, ..verts[:n])
 	append(&t.floors, f)

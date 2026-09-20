@@ -150,8 +150,9 @@ editing_one_outline_leaves_the_others_whole :: proc(t: ^testing.T) {
 }
 
 // A pad that clears its foliage is off the terrain as far as the scatter is
-// concerned — the same answer the road corridor gets — and the flag is the only
-// thing that decides it.
+// concerned — the same answer the road corridor gets — and the arg is the only
+// thing that decides it. Trees and ground cover answer separately: a levelled
+// patch may keep its grass and lose the trees standing in it.
 @(test)
 a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 	sp: geo.Spline
@@ -167,7 +168,7 @@ a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 	defer geo.terrain_delete(&terrain)
 	// A square well clear of the road, so nothing but the pad can reject it.
 	pad := [][2]f32{{30, 100}, {60, 100}, {60, 200}, {30, 200}}
-	fi := geo.floor_add(&terrain, pad, 0)
+	fi := geo.floor_add(&terrain, pad, 0, {no_trees = true})
 
 	ribbon := geo.build_ribbon(sp, geo.SAMPLES_PER_SEG, context.allocator)
 	defer delete(ribbon)
@@ -184,9 +185,17 @@ a_floor_can_clear_the_foliage_standing_on_it :: proc(t: ^testing.T) {
 	_, plantable = geo.veg_field_y(&vf, beside_it)
 	testing.expect(t, plantable, "the ground beside the pad lost its trees too")
 
-	terrain.floors[fi].clear_veg = false
+	// Its cover was never cleared, so the same spot still grows grass.
+	_, _, covered := geo.veg_field_ground(&vf, on_pad, D3_GC_CLEAR_M, .Cover)
+	testing.expect(t, covered, "a pad that clears only its trees took the grass too")
+
+	terrain.floors[fi].no_trees = false
 	_, plantable = geo.veg_field_y(&vf, on_pad)
-	testing.expect(t, plantable, "the flag is off and the pad still refused a tree")
+	testing.expect(t, plantable, "the arg is off and the pad still refused a tree")
+
+	terrain.floors[fi].no_cover = true
+	_, _, covered = geo.veg_field_ground(&vf, on_pad, D3_GC_CLEAR_M, .Cover)
+	testing.expect(t, !covered, "a pad that clears its cover still grew grass")
 }
 
 @(test)
@@ -199,7 +208,8 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
 	i := geo.floor_add(&doc.terrain, square, 12)
 	doc.terrain.floors[i].falloff = 3
-	doc.terrain.floors[i].clear_veg = false
+	doc.terrain.floors[i].no_trees = true
+	doc.terrain.floors[i].no_cover = false
 
 	path := "/tmp/claude-1000/dirtbench-floor-roundtrip.json"
 	defer os.remove(path)
@@ -216,7 +226,8 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(back.terrain.floors), 1)
 	testing.expect_value(t, back.terrain.floors[0].y, f32(12))
 	testing.expect_value(t, back.terrain.floors[0].falloff, f32(3))
-	testing.expect_value(t, back.terrain.floors[0].clear_veg, false)
+	testing.expect_value(t, back.terrain.floors[0].no_trees, true)
+	testing.expect_value(t, back.terrain.floors[0].no_cover, false)
 	testing.expect(
 		t,
 		slice.equal(geo.floor_verts(&back.terrain, back.terrain.floors[0]), square),
@@ -228,6 +239,32 @@ floors_round_trip_through_road_json :: proc(t: ^testing.T) {
 		testing.fail_now(t, "could not read the road back twice")
 	}
 	testing.expect_value(t, len(back.terrain.floors), 1)
+}
+
+// A pad written before trees and ground cover answered separately: one
+// `clear_veg` key, and it meant both.
+@(test)
+a_floor_written_before_the_split_clears_both :: proc(t: ^testing.T) {
+	doc := doc_defaults()
+	defer geo.terrain_delete(&doc.terrain)
+	defer geo.spline_free(&doc.spline)
+	seed_spline(&doc.spline)
+	doc.terrain.enabled = true
+	square := [][2]f32{{0, 0}, {40, 0}, {40, 40}, {0, 40}}
+	geo.floor_add(&doc.terrain, square, 12)
+
+	road := road_block(&doc)
+	testing.expect_value(t, len(road.floors), 1)
+	// The file as it was written then, keys and all.
+	road.floors[0].no_trees, road.floors[0].no_cover = false, false
+	road.floors[0].clear_veg = true
+
+	if _, ok := doc_load_road(&doc, road); !ok {
+		testing.fail_now(t, "could not read the road back")
+	}
+	testing.expect_value(t, len(doc.terrain.floors), 1)
+	testing.expect_value(t, doc.terrain.floors[0].no_trees, true)
+	testing.expect_value(t, doc.terrain.floors[0].no_cover, true)
 }
 
 // A road that predates the block opens with no pads, whatever the document held.
