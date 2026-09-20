@@ -63,6 +63,9 @@ Venues_Screen :: struct {
 	upload:       Upload_Form,
 	browse_open:  bool,   // whether the browse window is up
 	browse:       Browse_Form,
+	// The game folder, as the top line shows it. Seeded from the config and
+	// edited in place by ImGui, so a half-typed path survives a reload.
+	game_path:    [512]u8,
 	rows:         [dynamic]Name_Row,
 	// Re-read `venues` between frames. Reloading mid-frame frees the array the
 	// row loop is walking.
@@ -71,6 +74,7 @@ Venues_Screen :: struct {
 
 venues_screen_init :: proc(ps: ^Venues_Screen) {
 	venues_screen_reload(ps)
+	set_buf(ps.game_path[:], install_dir_configured())
 }
 
 venues_screen_delete :: proc(ps: ^Venues_Screen) {
@@ -130,6 +134,7 @@ draw_venues_screen :: proc(app: ^App) {
 	}
 	defer ui.igEnd()
 
+	draw_game_path(app)
 	draw_recovery_rows(app)
 
 	if !vs.found {
@@ -268,16 +273,53 @@ draw_recovery_row :: proc(app: ^App, set: Recovery_Set, i: int) -> Recovery_Answ
 	return .None
 }
 
+// The top line: where the game is. Every row below it is read out of this one
+// folder, so it is the first thing on the screen and not a menu item.
+//
+// The path is committed on Enter or by the native picker, never per keystroke:
+// each commit writes the config and re-scans the install.
+@(private = "file")
+draw_game_path :: proc(app: ^App) {
+	ps := &app.screen
+	if picked, ok := gfx.FolderPicked(); ok {
+		game_path_commit(app, picked)
+	}
+
+	ui.im_text("Game folder")
+	ui.im_same_line()
+	ui.igSetNextItemWidth(ui.igGetContentRegionAvail().x - PICK_BUTTON_W)
+	if ui.igInputText(
+		"##game_path", raw_data(ps.game_path[:]), len(ps.game_path),
+		ui.IM_INPUT_TEXT_ENTER_RETURNS_TRUE, nil, nil,
+	) {
+		game_path_commit(app, buf_text(ps.game_path[:]))
+	}
+	ui.im_same_line()
+	if ui.im_button("Choose\u2026##game_path") {
+		gfx.ShowFolderDialog(&app.window, buf_text(ps.game_path[:]))
+	}
+	ui.igSeparator()
+}
+
+// The picker button and the space before it, which the input box gives up.
+@(private = "file")
+PICK_BUTTON_W :: 86
+
+// Remember a picked or typed folder and re-scan. The box shows the trimmed
+// path, which is what was written, rather than what was picked.
+@(private = "file")
+game_path_commit :: proc(app: ^App, picked: string) {
+	root, msg, ok := install_dir_set(&app.install, picked)
+	set_buf(app.screen.game_path[:], root)
+	set_status(&app.status, msg, ok)
+	app.screen.reload_pending = true
+}
+
 @(private = "file")
 draw_no_install :: proc(vs: ^Install_Scan) {
 	ui.im_text_colored(WARN_COL, fmt.ctprintf("No Dirt 3 install: %s", vs.status))
-	ui.igSpacing()
-	ui.im_text("Point the tool at the game with a line like:")
-	ui.im_text_colored(
-		DIM_COL,
-		fmt.ctprintf("  %s = /path/to/DiRT 3 Complete Edition", D3_INSTALL_KEY),
-	)
-	ui.im_text(fmt.ctprintf("in %s", conf_path()))
+	ui.im_text_colored(DIM_COL, "The folder above is the one holding dirt3_game.exe.")
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("It is remembered in %s", conf_path()))
 	ui.igSpacing()
 	if ui.im_button("Rescan") {
 		install_scan_rescan(vs)

@@ -11,6 +11,7 @@ package main
 
 import "core:fmt"
 import "core:os"
+import "core:path/filepath"
 import "core:strings"
 import d3 "../d3"
 
@@ -86,6 +87,65 @@ install_scan_status_text :: proc(vs: ^Install_Scan) -> string {
 d3_install_dir :: proc(allocator := context.temp_allocator) -> (dir: string, ok: bool) {
 	dir, ok = conf_get(D3_INSTALL_KEY, allocator)
 	return dir, ok && os.is_dir(dir)
+}
+
+// What the config says, checked or not. The path box shows this, including a
+// path that has since been unplugged: a blank box would read as "never set".
+install_dir_configured :: proc(allocator := context.temp_allocator) -> string {
+	dir, _ := conf_get(D3_INSTALL_KEY, allocator)
+	return dir
+}
+
+// How far above a picked path the game directory may sit. Deep enough for a
+// pick inside tracks/locations/<location>/<venue>.
+@(private = "file")
+INSTALL_CLIMB :: 6
+
+// A picked path trimmed to the game directory: the executable becomes its own
+// folder, and a folder inside the tree climbs out to the one holding the
+// database. A path with no game above it comes back as it went in, so the scan
+// can say what is wrong with what was actually picked.
+install_root_trim :: proc(path: string, allocator := context.temp_allocator) -> string {
+	dir := path
+	if !os.is_dir(dir) {
+		dir = filepath.dir(dir)
+	}
+	climbed := dir
+	for _ in 0 ..< INSTALL_CLIMB {
+		db, _ := filepath.join({climbed, d3.DATABASE_SUBPATH}, context.temp_allocator)
+		if os.exists(db) {
+			return strings.clone(climbed, allocator)
+		}
+		parent := filepath.dir(climbed)
+		if parent == climbed {
+			break
+		}
+		climbed = parent
+	}
+	return strings.clone(dir, allocator)
+}
+
+// Point the tool at a picked path: trim it to the game directory, remember it,
+// and re-scan. The trimmed path comes back for the box to show, and `msg` is
+// the line for the status bar either way.
+install_dir_set :: proc(
+	vs: ^Install_Scan, picked: string, allocator := context.temp_allocator,
+) -> (root, msg: string, ok: bool) {
+	clean := strings.trim_space(picked)
+	// An emptied box forgets where the game is, rather than remembering ".".
+	if clean == "" {
+		if msg, ok = conf_unset(D3_INSTALL_KEY); !ok {
+			return
+		}
+		install_scan_rescan(vs)
+		return "", install_scan_status_text(vs), false
+	}
+	root = install_root_trim(clean, allocator)
+	if msg, ok = conf_set(D3_INSTALL_KEY, root); !ok {
+		return
+	}
+	install_scan_rescan(vs)
+	return root, install_scan_status_text(vs), vs.found
 }
 
 // --- headless ----------------------------------------------------------------
