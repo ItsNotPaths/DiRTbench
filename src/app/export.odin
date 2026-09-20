@@ -103,11 +103,12 @@ export_dirt3_tracksplit :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !template_ok {
 		return template_msg, false
 	}
-	// Dropped below the route's own surface. Both files cover the same ground —
-	// stock does too, on all 103 routes that ship a real view-cell tree — and
-	// stock's per-cell mask draws only one of them. A single all-visible cell
-	// cannot choose, so the two would z-fight; sinking the LOD lets the route
-	// win everywhere it reaches. Remove this once the VIS has real cells.
+	// Dropped below the route's own surface. Both files cover the same ground,
+	// so the two would z-fight; sinking the LOD lets the route win everywhere
+	// it reaches. The VIS mask is not the replacement: on finland route_0 stock
+	// culls the venue's tiles and the route's together, 73.6% against 72.1% at
+	// 400-800 m, rather than choosing between them. This stays until the two
+	// meshes stop covering the same ground.
 	network := collision_from_mesh(job.venue.mesh, job.venue.order, context.temp_allocator)
 	for &triangle in network {
 		for &point in triangle.Points {
