@@ -1399,7 +1399,9 @@ pick_terrain_node :: proc(pos: []gfx.Vector3, active: []bool, radius: f32, ray: 
 
 // World controls have no artificial along-road adjacency, so only handles are
 // drawn; connecting them would reintroduce misleading crossings at hairpins.
-draw_terrain_nodes :: proc(t: ^Terrain, pos: []gfx.Vector3, active, affected: []bool, selected: int) {
+draw_terrain_nodes :: proc(
+	t: ^Terrain, pos: []gfx.Vector3, active: []bool, weights: []f32, selected: int,
+) {
 	if len(pos) == 0 {
 		return
 	}
@@ -1410,12 +1412,11 @@ draw_terrain_nodes :: proc(t: ^Terrain, pos: []gfx.Vector3, active, affected: []
 			continue
 		}
 		hcol := gfx.Color{150, 230, 180, 255}
+		if i < len(weights) && weights[i] > 0 {
+			hcol = gfx.color_mix(hcol, {255, 190, 80, 255}, weights[i])
+		}
 		if i == selected {
 			hcol = {255, 120, 60, 255}
-		} else if i < len(affected) {
-			if affected[i] {
-				hcol = {255, 190, 80, 255}
-			}
 		}
 		gfx.DrawSphereEx(pos[i], radius, 3, 4, hcol)
 	}

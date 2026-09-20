@@ -8,12 +8,17 @@ package main
 // does to it is the brush's own business, and the two never touch the same
 // thing: a Selection is a terrain node or a road point, never both.
 //
-// Terrain takes whatever is inside a radius on the ground, all of it equally.
-// The road measures along the road instead — a hairpin folds back on itself, so
-// a radius would catch the far side of it — and falls off across that distance,
-// which is what turns a pull upward into a ramp rather than a step.
+// Both brushes weigh what they hold: full at the anchor, tapering to none at
+// the edge of the reach, which is what turns a pull into a ramp rather than a
+// step. They differ only in how far apart two things are. Terrain measures
+// across the ground; the road measures along the road, because a hairpin folds
+// back on itself and a radius would catch the far side of it.
+//
+// Shift makes either brush rigid for as long as it is held: everything it holds
+// takes the whole edit, so a shaped stretch can be moved without reshaping it.
 
 import "core:fmt"
+import "core:math"
 import "../geo"
 import "../ui"
 import "../gfx"
@@ -35,6 +40,7 @@ Brush :: struct {
 	radius:       f32,
 	radius_start: f32,
 	mouse_y:      f32,
+	rigid:        bool, // shift: every weight in the brush counts as a whole one
 }
 
 // What the caller owes the brush this frame. Each is one thing to do, so a
@@ -55,6 +61,7 @@ brush_step :: proc(
 ) -> (act: Brush_Act, dy: f32) {
 	left := gfx.IsMouseButtonDown(.LEFT)
 	right := gfx.IsMouseButtonDown(.RIGHT)
+	b.rigid = gfx.IsKeyDown(.LEFT_SHIFT) || gfx.IsKeyDown(.RIGHT_SHIFT)
 
 	// RMB joining the drag starts sizing, and may join again mid-move to
 	// re-size without dropping what is held. Movement before the first join is
@@ -99,6 +106,15 @@ brush_sizing :: proc(act: Brush_Act) -> bool {
 	return act == .Enter || act == .Select || act == .Snap
 }
 
+// What one thing the brush holds takes of the anchor's edit. Rigid is a flat
+// share, so the brush moves what it holds as a block and reshapes nothing.
+brush_share :: proc(b: Brush, w: f32) -> f32 {
+	if !b.rigid {
+		return w
+	}
+	return w > 0 ? 1 : 0
+}
+
 // The live brush's reach and what it has hold of, over the viewport. Only one
 // can be live, so there is only ever one line.
 brush_overlay :: proc(ed: ^Editor) {
@@ -106,8 +122,8 @@ brush_overlay :: proc(ed: ^Editor) {
 	switch {
 	case ed.terrain_brush.phase != .None:
 		n := 0
-		for on in ed.terrain_brush_mask {
-			if on {
+		for w in ed.terrain_brush_weight {
+			if w > 0 {
 				n += 1
 			}
 		}
@@ -130,24 +146,29 @@ brush_overlay :: proc(ed: ^Editor) {
 
 terrain_brush_clear :: proc(ed: ^Editor) {
 	ed.terrain_brush.phase = .None
-	clear(&ed.terrain_brush_mask)
+	clear(&ed.terrain_brush_weight)
 	clear(&ed.terrain_brush_offsets)
 }
 
+// How much of the anchor's edit each control takes, by distance across the
+// ground. The falloff is the same envelope the road brush uses, so one slider
+// shapes both: at a taper of 1 the brush is a dome, at 0 a hard-edged cylinder.
 terrain_brush_select :: proc(ed: ^Editor, node_pos: []gfx.Vector3, selected: int) {
-	resize(&ed.terrain_brush_mask, len(node_pos))
-	for &affected in ed.terrain_brush_mask {
-		affected = false
+	resize(&ed.terrain_brush_weight, len(node_pos))
+	for &w in ed.terrain_brush_weight {
+		w = 0
 	}
 	if selected < 0 || selected >= len(node_pos) {
 		return
 	}
 	centre := node_pos[selected]
-	r2 := ed.terrain_brush.radius * ed.terrain_brush.radius
+	r := ed.terrain_brush.radius
+	taper := r * clamp(ed.brush_taper, 0, 1)
 	for p, i in node_pos {
 		dx, dz := p.x - centre.x, p.z - centre.z
-		ed.terrain_brush_mask[i] = i == selected || dx * dx + dz * dz <= r2
+		ed.terrain_brush_weight[i] = geo.span_envelope(math.sqrt(dx * dx + dz * dz), r * 2, taper)
 	}
+	ed.terrain_brush_weight[selected] = 1 // a zero radius is a single-control brush
 }
 
 terrain_brush_snapshot :: proc(ed: ^Editor) {
@@ -157,13 +178,16 @@ terrain_brush_snapshot :: proc(ed: ^Editor) {
 	}
 }
 
-// Every masked control back to its snapshot height, plus dy. The bounds hold
-// against a rebuild that resized the controls under a live brush.
+// Every held control back to its snapshot height, plus its share of dy. The
+// bounds hold against a rebuild that resized the controls under a live brush.
 terrain_brush_apply :: proc(ed: ^Editor, dy: f32) {
 	for &c, i in ed.doc.terrain.controls {
-		if i < len(ed.terrain_brush_mask) && i < len(ed.terrain_brush_offsets) &&
-		   ed.terrain_brush_mask[i] {
-			c.offset = ed.terrain_brush_offsets[i] + dy
+		if i >= len(ed.terrain_brush_weight) || i >= len(ed.terrain_brush_offsets) {
+			break
+		}
+		w := brush_share(ed.terrain_brush, ed.terrain_brush_weight[i])
+		if w > 0 {
+			c.offset = ed.terrain_brush_offsets[i] + dy * w
 		}
 	}
 	mark_terrain_dirty(ed.doc)
@@ -258,8 +282,8 @@ road_brush_resolve :: proc(ed: ^Editor) {
 // the stage search use, so the brush runs past a fork into both branches and
 // over a weld into the road it closes, and never catches the far side of a
 // hairpin the way a radius would. The falloff is the cliff envelope: a plateau
-// with smoothstepped shoulders, so `taper` at 1 is a pure ramp and at 0 is the
-// hard-edged cylinder the terrain brush cuts.
+// with smoothstepped shoulders, so `taper` at 1 is a pure ramp and at 0 is a
+// hard edge.
 road_brush_select :: proc(ed: ^Editor, anchor: int) {
 	sp := &ed.doc.spline
 	resize(&ed.road_brush_weight, len(sp.points))
@@ -272,7 +296,7 @@ road_brush_select :: proc(ed: ^Editor, anchor: int) {
 	ed.road_brush_anchor_id = geo.point_id(sp^, anchor)
 	r := ed.road_brush.radius
 	dist := geo.graph_reach(sp^, anchor, r)
-	taper := r * clamp(ed.road_brush_taper, 0, 1)
+	taper := r * clamp(ed.brush_taper, 0, 1)
 	for d, i in dist {
 		ed.road_brush_weight[i] = geo.span_envelope(d, r * 2, taper)
 	}
@@ -335,11 +359,13 @@ road_brush_move :: proc(ed: ^Editor, anchor: int, to: gfx.Transform) {
 
 	for i in 0 ..< n {
 		sp.points[i].xform.translation = ed.road_brush_snap[i].pos +
-			shift * ed.road_brush_weight[i]
+			shift * brush_share(ed.road_brush, ed.road_brush_weight[i])
 	}
 	for i in 0 ..< n {
 		was := ed.road_brush_snap[i]
-		rot := was.rot * gfx.QuaternionSlerp(1, turn, ed.road_brush_weight[i])
+		rot := was.rot * gfx.QuaternionSlerp(
+			1, turn, brush_share(ed.road_brush, ed.road_brush_weight[i]),
+		)
 		// A point with no edge either side has no slope to be turned onto.
 		if now := road_point_tangent(sp^, i);
 		   gfx.Vector3Length(was.fwd) > 1e-5 && gfx.Vector3Length(now) > 1e-5 {

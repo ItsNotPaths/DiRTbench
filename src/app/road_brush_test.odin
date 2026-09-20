@@ -58,7 +58,7 @@ road_brush_free :: proc(ed: ^Editor, doc: ^Venue_Doc) {
 @(test)
 road_brush_falls_off_along_the_road :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6) // 0..100 m
-	ed := Editor{doc = &doc, road_brush = {radius = 60}, road_brush_taper = 1}
+	ed := Editor{doc = &doc, road_brush = {radius = 60}, brush_taper = 1}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -81,12 +81,12 @@ road_brush_falls_off_along_the_road :: proc(t: ^testing.T) {
 	testing.expect_value(t, ed.road_brush_weight[1], f32(0))
 }
 
-// Falloff at 0 is the hard edge the terrain brush cuts: everything in reach
-// takes the whole move, everything past it takes none.
+// Falloff at 0 is a hard edge: everything in reach takes the whole move,
+// everything past it takes none.
 @(test)
 road_brush_taper_zero_is_a_hard_edge :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 50}, road_brush_taper = 0}
+	ed := Editor{doc = &doc, road_brush = {radius = 50}, brush_taper = 0}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -102,7 +102,7 @@ road_brush_taper_zero_is_a_hard_edge :: proc(t: ^testing.T) {
 @(test)
 road_brush_reaches_over_a_weld :: proc(t: ^testing.T) {
 	doc := road_ring_fixture(6) // six 21 m edges
-	ed := Editor{doc = &doc, road_brush = {radius = 50}, road_brush_taper = 0}
+	ed := Editor{doc = &doc, road_brush = {radius = 50}, brush_taper = 0}
 	defer road_brush_free(&ed, &doc)
 
 	// Unwelded the ring is still a chain, so the far end is five edges away.
@@ -124,7 +124,7 @@ road_brush_reaches_over_a_weld :: proc(t: ^testing.T) {
 @(test)
 road_brush_move_is_weighted_and_absolute :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 50}, road_brush_taper = 0}
+	ed := Editor{doc = &doc, road_brush = {radius = 50}, brush_taper = 0}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -147,13 +147,38 @@ road_brush_move_is_weighted_and_absolute :: proc(t: ^testing.T) {
 	testing.expect_value(t, doc.spline.points[0].xform.translation.y, f32(0))
 }
 
+// Shift moves the selection as a block: the shape of the road inside the brush
+// comes through the move unchanged, and the weights are left alone so letting
+// go of shift goes straight back to a weighted move.
+@(test)
+road_brush_rigid_moves_the_block :: proc(t: ^testing.T) {
+	doc := road_brush_fixture(6)
+	ed := Editor{doc = &doc, road_brush = {radius = 100, rigid = true}, brush_taper = 1}
+	defer road_brush_free(&ed, &doc)
+
+	road_brush_select(&ed, 0)
+	road_brush_snapshot(&ed)
+	testing.expect(t, ed.road_brush_weight[2] < 1, "the selection should still be weighted")
+
+	road_brush_drag(&ed, 0, {5, 10, 0})
+	for i in 0 ..< 5 {
+		testing.expect_value(t, doc.spline.points[i].xform.translation.y, f32(10))
+		testing.expect_value(t, doc.spline.points[i].xform.translation.x, f32(5))
+	}
+	testing.expect_value(t, doc.spline.points[5].xform.translation.y, f32(0))
+
+	ed.road_brush.rigid = false
+	road_brush_drag(&ed, 0, {5, 10, 0})
+	testing.expect(t, doc.spline.points[2].xform.translation.y < 10, "shift should be over")
+}
+
 // The point of the falloff: a climb whose control points are pitched into it,
 // rather than one that flattens at every point and pulses the gradient between
 // them. The pitch each point ends at is the slope of the road through it.
 @(test)
 road_brush_pitches_the_points_it_lifts :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 100}, road_brush_taper = 1}
+	ed := Editor{doc = &doc, road_brush = {radius = 100}, brush_taper = 1}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -197,7 +222,7 @@ point_roll :: proc(p: geo.Point) -> f32 {
 @(test)
 road_brush_keeps_the_bank_it_found :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 100}, road_brush_taper = 1}
+	ed := Editor{doc = &doc, road_brush = {radius = 100}, brush_taper = 1}
 	defer road_brush_free(&ed, &doc)
 
 	bank := f32(math.to_radians(f32(20)))
@@ -224,7 +249,7 @@ road_brush_keeps_the_bank_it_found :: proc(t: ^testing.T) {
 @(test)
 road_brush_lifts_a_lone_point :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(1)
-	ed := Editor{doc = &doc, road_brush = {radius = 50}, road_brush_taper = 1}
+	ed := Editor{doc = &doc, road_brush = {radius = 50}, brush_taper = 1}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -240,7 +265,7 @@ road_brush_lifts_a_lone_point :: proc(t: ^testing.T) {
 @(test)
 road_brush_shares_a_turn_in_each_points_own_frame :: proc(t: ^testing.T) {
 	doc := road_ring_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 80}, road_brush_taper = 1}
+	ed := Editor{doc = &doc, road_brush = {radius = 80}, brush_taper = 1}
 	defer road_brush_free(&ed, &doc)
 
 	road_brush_select(&ed, 0)
@@ -276,7 +301,7 @@ road_brush_shares_a_turn_in_each_points_own_frame :: proc(t: ^testing.T) {
 @(test)
 road_brush_selection_drops_when_it_stops_naming_its_road :: proc(t: ^testing.T) {
 	doc := road_brush_fixture(6)
-	ed := Editor{doc = &doc, road_brush = {radius = 50}, road_brush_taper = 0}
+	ed := Editor{doc = &doc, road_brush = {radius = 50}, brush_taper = 0}
 	defer road_brush_free(&ed, &doc)
 
 	live :: proc(ed: ^Editor) -> bool {

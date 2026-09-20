@@ -13,13 +13,6 @@ GRID_SLICES :: 256
 
 GRID_SPACING :: 32
 
-color_mix :: proc(a, b: gfx.Color, t: f32) -> (out: gfx.Color) {
-	for i in 0 ..< 4 {
-		out[i] = u8(f32(a[i]) + (f32(b[i]) - f32(a[i])) * clamp(t, 0, 1))
-	}
-	return
-}
-
 // --- Picking ----------------------------------------------------------------
 
 ray_ground :: proc(ray: gfx.Ray) -> (hit: gfx.Vector3, ok: bool) {
@@ -165,7 +158,7 @@ draw_handles :: proc(sp: geo.Spline, selected: int, weights: []f32 = nil) {
 		gfx.DrawLine3D(l, r, {200, 210, 225, 255}) // rung
 		hcol := gfx.Color{120, 200, 255, 255}
 		if i < len(weights) && weights[i] > 0 {
-			hcol = color_mix(hcol, {255, 190, 80, 255}, weights[i])
+			hcol = gfx.color_mix(hcol, {255, 190, 80, 255}, weights[i])
 		}
 		if i == selected {
 			hcol = {255, 120, 60, 255}
@@ -216,7 +209,7 @@ draw_venue_scene :: proc(
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
 	draw_world(ed.doc, ed.wireframe)
 	draw_handles(ed.doc.spline, selected_point(ed), ed.road_brush_weight[:])
-	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_mask[:], sel_node)
+	geo.draw_terrain_nodes(&ed.doc.terrain, node_pos, node_active, ed.terrain_brush_weight[:], sel_node)
 	draw_floors(ed)
 	if pi := selected_prop(ed); pi >= 0 {
 		draw_prop_box(ed.doc, ed.doc.props[pi], {255, 140, 70, 255})

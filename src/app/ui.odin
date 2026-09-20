@@ -418,9 +418,10 @@ draw_inspector_body :: proc(ed: ^Editor) {
 	// Window state, not document state: how a brush falls off is how this window
 	// is being driven, and nothing in the venue remembers it.
 	ui.igSliderFloat(
-		"road brush falloff", &ed.road_brush_taper, 0, 1, "%.2f", ui.IM_SLIDER_NONE,
+		"brush falloff", &ed.brush_taper, 0, 1, "%.2f", ui.IM_SLIDER_NONE,
 	)
 	ui.im_text_colored(DIM_COL, "1 ramps the whole reach, 0 moves it as a block")
+	ui.im_text_colored(DIM_COL, "hold shift while dragging to move it as a block")
 
 	draw_guards_section(ed)
 	draw_terrain_section(ed)
@@ -431,10 +432,11 @@ draw_inspector_body :: proc(ed: ^Editor) {
 	ui.im_text("LMB select point or terrain node")
 	ui.im_text("Terrain node: RMB+LMB drag sizes the brush, release RMB to raise/lower")
 	ui.im_text("Road point: RMB+LMB drag sizes a selection, then drag the gizmo to move it all")
-	ui.im_text("  the falloff above shares the move out; clicking away drops the selection")
+	ui.im_text("  the falloff above shares the move out, Shift moves it as a block")
+	ui.im_text("  clicking away drops the selection")
 	ui.im_text("Floors: draw one from the Terrain panel; Del removes a corner")
 	ui.im_text("Props: pick one in the Objects or Ornaments panel, B places, Del removes")
-	ui.im_text("Shift+drag gizmo extrudes a point")
+	ui.im_text("Shift+drag gizmo extrudes a point, unless a brush selection stands")
 	ui.im_text("RMB insert on road / append on ground")
 	ui.im_text("DEL remove")
 	ui.im_text("Alt+LMB pan, Alt+RMB orbit, wheel zoom")

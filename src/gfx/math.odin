@@ -9,6 +9,14 @@ Quaternion :: quaternion128
 Matrix     :: #row_major matrix[4, 4]f32
 Color      :: distinct [4]u8
 
+// a to b, channel by channel.
+color_mix :: proc(a, b: Color, t: f32) -> (out: Color) {
+	for i in 0 ..< 4 {
+		out[i] = u8(f32(a[i]) + (f32(b[i]) - f32(a[i])) * clamp(t, 0, 1))
+	}
+	return
+}
+
 Transform :: struct {
 	translation: Vector3,
 	rotation:    Quaternion,

@@ -138,14 +138,14 @@ Editor :: struct {
 	gizmo_hovered: bool,
 	gizmo_mode:    Gizmo_Mode,
 	// The two brushes (brush.odin). Each holds the shared gesture state plus
-	// what only it selects: terrain a flat mask over the controls, the road a
-	// weight per control point and the transforms a move is measured from.
+	// what only it selects: a weight per terrain control or per road point, and
+	// for the road the transforms a move is measured from.
+	brush_taper:          f32, // share of either reach spent tapering, 0..1
 	terrain_brush:        Brush,
 	terrain_brush_anchor: f32, // the anchor's offset, held still while sizing
-	terrain_brush_mask:   [dynamic]bool,
+	terrain_brush_weight: [dynamic]f32,
 	terrain_brush_offsets: [dynamic]f32,
 	road_brush:           Brush,
-	road_brush_taper:     f32, // share of the reach spent tapering, 0..1
 	road_brush_anchor:    gfx.Transform,
 	road_brush_anchor_id: int, // the point the weights hang off, by id; -1 for none
 	road_brush_weight:    [dynamic]f32,
@@ -383,7 +383,7 @@ view_defaults :: proc() -> Editor {
 	return Editor{
 		cam = {target = {10, 3, 48}, distance = 110, yaw = 0.6, pitch = 0.6},
 		preview_speed = 30, // ~108 km/h
-		road_brush_taper = 1, // all taper, so the default road brush is a ramp
+		brush_taper = 1, // all taper, so a fresh brush is a ramp
 		road_brush_anchor_id = -1,
 		route_sel = -1,
 		prop_browse = {
@@ -526,6 +526,11 @@ try_extrude :: proc(ed: ^Editor, nav, ui_mouse: bool) {
 	}
 	shift := gfx.IsKeyDown(.LEFT_SHIFT) || gfx.IsKeyDown(.RIGHT_SHIFT)
 	if !shift || !gfx.IsMouseButtonPressed(.LEFT) || selected_point(ed) < 0 {
+		return
+	}
+	// With a brush selection standing, shift is the rigid-move modifier and
+	// there is a run of road under the gizmo, not one point to grow from.
+	if len(ed.road_brush_weight) > 0 {
 		return
 	}
 	ed.sel = {kind = .Point, idx = geo.extrude_point(&ed.doc.spline, ed.sel.idx)}

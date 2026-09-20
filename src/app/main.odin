@@ -105,7 +105,7 @@ doc_delete :: proc(doc: ^Venue_Doc) {
 
 // This window's own allocations. The document is not one of them.
 view_delete :: proc(ed: ^Editor) {
-	delete(ed.terrain_brush_mask)
+	delete(ed.terrain_brush_weight)
 	delete(ed.terrain_brush_offsets)
 	delete(ed.road_brush_weight)
 	delete(ed.road_brush_snap)
