@@ -102,6 +102,9 @@ Export_Job :: struct {
 	// Where the setup screen's service grid stands, from the stage's setup pin.
 	// Unset puts it on the start grid, which is where it always was.
 	Service:      Maybe(Route_Sample),
+	// Standing water, one body per flooded pad. Empty writes nothing and
+	// leaves the route's water files alone; see d3_write_niwater.
+	Water:        []D3_Water_Body,
 }
 
 // The names the editor calls this package by.
@@ -128,6 +131,8 @@ Placement_Read :: d3_placement_read
 Placement_Layout :: d3_placement_layout
 Placement_Relocate :: d3_placement_relocate
 Placement_Xml_Build :: d3_placement_xml_build
+Water_Body :: D3_Water_Body
+Niwater_Build :: d3_niwater_build
 Ground_Cover_Template :: d3_ground_cover_template
 Ground_Cover_Build :: d3_ground_cover_build
 Ground_Cover_Xml :: d3_ground_cover_xml

@@ -230,18 +230,26 @@ export_dirt3 :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	if !camera_ok {
 		return camera_msg, false
 	}
+	// Static water carries no vis tag, so this can sit after track.vis without
+	// anything to census. It still runs with no water at all: see
+	// d3_write_niwater.
+	water_msg, water_ok := d3_write_niwater(job)
+	if !water_ok {
+		return fmt.tprintf("niwater: %s", water_msg), false
+	}
 	omit_msg, omit_ok := d3_omit_stale_route_files(job)
 	if !omit_ok {
 		return omit_msg, false
 	}
 	return fmt.tprintf(
-		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; cameras: %s; %s",
+		"%s; track.jpk: %s; routesplit.pssg: %s; track.vis: %s; grids.pssg: %s; cameras: %s; niwater: %s; %s",
 		track_msg,
 		collision_msg,
 		visual_msg,
 		vis_msg,
 		grid_msg,
 		camera_msg,
+		water_msg,
 		omit_msg,
 	), true
 }
