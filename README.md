@@ -68,6 +68,7 @@ instead. glTF always goes there, because the game cannot read it.
 
 - The [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding)
   team, for the database schema and for years of work on the Ego formats.
+- [Petar](https://github.com/ptasev) Especially for decades of pssg RE and ego-engine-modding work before me. 
 - [ssor0](https://github.com/ssor0), for the PSSG/vis/general format knowledge.
 
 ## License
