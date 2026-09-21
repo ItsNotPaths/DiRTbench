@@ -16,6 +16,12 @@
 #include <cstdlib>
 #include <vector>
 
+// delaunator.hpp leans on libstdc++ pulling these in through other headers:
+// it uses std::tie with no <tuple>, and std::runtime_error with <exception>
+// rather than <stdexcept>. MSVC obliges with neither.
+#include <stdexcept>
+#include <tuple>
+
 #include "delaunator.hpp"
 
 extern "C" {
