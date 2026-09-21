@@ -25,6 +25,8 @@ First run writes a `dirtbench.conf` and tells you where. On Linux that is
 `~/.config/dirtbench/`, on Windows your AppData. Put the game's path in it or 
 fill in the top line in the applet:
 
+**LINUX**: you need to `chmod +x <binary>` because computers are miserable and can't work simply.
+
 ```
 install_dir = /path/to/DiRT 3 Complete Edition
 ```
@@ -67,8 +69,6 @@ instead. glTF always goes there, because the game cannot read it.
 - The [Ego-Engine-Modding](https://github.com/EgoEngineModding/Ego-Engine-Modding)
   team, for the database schema and for years of work on the Ego formats.
 - [ssor0](https://github.com/ssor0), for the PSSG/vis/general format knowledge.
-- [Deuterium, the Sentient Mattress](https://www.youtube.com/@DeuteriumtheSentientMattress/videos),
-  for the co-driver voice.
 
 ## License
 
