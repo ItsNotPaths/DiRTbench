@@ -877,9 +877,7 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	if load_msg, loaded := doc_load_road(doc, p.road); !loaded {
 		return load_msg, false
 	}
-	routes_free(&doc.routes)
-	doc.routes = venue_routes(p^)
-	doc.next_route = p.next_route
+	doc_take_routes(doc, p^)
 	doc.shot = p.shot
 	delete(doc.open_venue)
 	delete(doc.venue_name)

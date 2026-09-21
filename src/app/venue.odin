@@ -693,6 +693,7 @@ venue_compile_route :: proc(
 			return out, load_msg, false
 		}
 		doc_set_base(doc, p.base)
+		doc_take_routes(doc, p)
 		return geo.compile_stage(doc.spline, route.start, route.finish, route.pins[:], allocator)
 	}
 	return out, fmt.tprintf("%s has no stage named %q", p.id, route_id), false
@@ -757,6 +758,15 @@ route_rename :: proc(
 	}
 	delete(routes[i].name, allocator)
 	routes[i].name = strings.clone(name, allocator)
+}
+
+// Put the venue's stage list on the document. Every path that exports a stage
+// needs it: the setup pin lives here, and a document without the list exports
+// as if no pin were placed.
+doc_take_routes :: proc(doc: ^Venue_Doc, p: Venue) {
+	routes_free(&doc.routes)
+	doc.routes = venue_routes(p)
+	doc.next_route = p.next_route
 }
 
 // The venue's stage list, cloned for the editor to hold and edit.
@@ -883,6 +893,7 @@ venue_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 		return load_msg, false
 	}
 	doc_set_base(&doc, p.base)
+	doc_take_routes(&doc, p)
 
 	done := make([dynamic]string, context.temp_allocator)
 	for route in p.routes {
