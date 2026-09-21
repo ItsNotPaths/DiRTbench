@@ -365,6 +365,14 @@ swap_doc :: proc(set_dir: string, doc: Recovery_Doc) -> (msg: string, ok: bool) 
 	return "", true
 }
 
+// A rename that crossed a filesystem. The two platforms spell it differently
+// and neither name exists on the other.
+when ODIN_OS == .Windows {
+	CROSS_DEVICE :: os.Platform_Error.NOT_SAME_DEVICE
+} else {
+	CROSS_DEVICE :: os.Platform_Error.EXDEV
+}
+
 // Move one file, across filesystems if it has to. A rename cannot half-finish,
 // so it is what this reaches for first; a set folder pointed at another drive
 // is the case that makes the copy necessary, and there a copy is the only move
@@ -375,7 +383,7 @@ move_file :: proc(from, to: string) -> (msg: string, ok: bool) {
 	if err == nil {
 		return "", true
 	}
-	if err != os.Platform_Error.EXDEV {
+	if err != CROSS_DEVICE {
 		return fmt.tprintf("could not move %s: %v", from, err), false
 	}
 	if cerr := os.copy_file(to, from); cerr != nil {
