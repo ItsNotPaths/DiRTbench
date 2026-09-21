@@ -40,7 +40,7 @@ PALETTE_FILE :: "palette.txt"
 PALETTE_EXT :: ".txt"
 
 // The palettes that ship with the tool, one per base-eligible stock venue.
-// Baked rather than installed beside the binary, for the same reason the
+// Baked rather than installed as a file, for the same reason the
 // co-driver clips are: a release is one file to copy, and a palette cannot be
 // half-installed.
 PALETTES := #load_directory("../../assets/d3/palettes")

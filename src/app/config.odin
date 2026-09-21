@@ -52,21 +52,26 @@ config_next :: proc(it: ^Config_Iter) -> (key, val: string, ok: bool) {
 	return "", "", false
 }
 
-// `dirtbench.conf` beside the executable, falling back to the current directory
-// so a tool run out of a checkout still finds one.
+// `dirtbench.conf` in the platform's config directory, falling back to the
+// current directory so a tool run out of a checkout still finds one.
 conf_path :: proc(allocator := context.temp_allocator) -> string {
-	beside, _ := filepath.join({data_dir(context.temp_allocator), CONF_NAME}, allocator)
-	if os.exists(beside) {
-		return beside
+	settled, _ := filepath.join({config_root(context.temp_allocator), CONF_NAME}, allocator)
+	if os.exists(settled) {
+		return settled
 	}
 	return strings.clone(CONF_NAME, allocator)
 }
 
-// First run: the template beside the binary, so the file every message names
-// exists. An existing config is left exactly as it is.
+// First run: the template in the config directory, so the file every message
+// names exists. Nothing of ours is there yet, so the directory comes first. An
+// existing config is left exactly as it is.
 conf_ensure :: proc(allocator := context.temp_allocator) -> (path: string, made: bool) {
 	path = conf_write_path(allocator)
 	if os.exists(path) {
+		return path, false
+	}
+	dir := filepath.dir(path)
+	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
 		return path, false
 	}
 	return path, os.write_entire_file(path, CONF_TEMPLATE) == nil
@@ -87,8 +92,8 @@ conf_get :: proc(key: string, allocator := context.temp_allocator) -> (val: stri
 	return
 }
 
-// Where a write goes: the file `conf_get` reads when there is one, and beside
-// the executable when there is not. Never the bare fallback name, which would
+// Where a write goes: the file `conf_get` reads when there is one, and the
+// config directory when there is not. Never the bare fallback name, which would
 // drop a second config into whatever directory the tool was started from.
 @(private = "file")
 conf_write_path :: proc(allocator := context.temp_allocator) -> string {
@@ -96,7 +101,7 @@ conf_write_path :: proc(allocator := context.temp_allocator) -> string {
 	if os.exists(existing) {
 		return strings.clone(existing, allocator)
 	}
-	joined, _ := filepath.join({data_dir(context.temp_allocator), CONF_NAME}, allocator)
+	joined, _ := filepath.join({config_root(context.temp_allocator), CONF_NAME}, allocator)
 	return joined
 }
 

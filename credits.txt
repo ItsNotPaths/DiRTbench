@@ -14,10 +14,6 @@ Third-party data, checked in and embedded:
     github.com/EgoEngineModding/Ego-Engine-Modding,
     src/EgoDatabaseEditor/schema/schemaDirt3.xml
 
-  assets/pacenotes/*.ogg              Deuterium, the Sentient Mattress
-    The co-driver voice, recorded for dirtbench.
-    youtube.com/@DeuteriumtheSentientMattress
-
 Our own, but describing DiRT 3, and embedded:
   assets/d3/codriver/*.txt
     What each recording in a venue's stock speech bank says. Clip ids are the
@@ -27,6 +23,19 @@ Our own, but describing DiRT 3, and embedded:
   assets/d3/palettes/*.txt
     Which stock texture and collision names a venue's road, ground and tarmac
     use. Names only, no texture payload.
+
+Not embedded, and not in the repository:
+  pacenotes/*.ogg                     Deuterium, the Sentient Mattress
+    The co-driver voice, recorded for dirtbench. Read at startup from a
+    `pacenotes` directory beside the binary, if one is there. Without it the
+    pace-note preview stays quiet and the rest of the tool works.
+    youtube.com/@DeuteriumtheSentientMattress
+
+  assets/d3/moosylvania-materials.pssg
+  assets/d3/water-materials.pssg
+    DiRT 3 shader metadata and texture names cut out of two stock venues, kept
+    as test fixtures. No texture or geometry payload. Reached only from
+    _test.odin files, which `odin build` does not compile.
 
 dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art
 comes out of the player's own install at export time, into content-packs/.

@@ -90,7 +90,7 @@ conf_apply_removing_an_absent_key_changes_nothing :: proc(t: ^testing.T) {
 	testing.expect_value(t, after, before)
 }
 
-// First run has no config at all. The template goes beside the binary, and a
+// First run has no config at all. The template goes in the config root, and a
 // second run leaves it alone — the file is the user's once it exists.
 @(test)
 conf_ensure_writes_the_template_once :: proc(t: ^testing.T) {

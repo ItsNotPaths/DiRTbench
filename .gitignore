@@ -14,7 +14,8 @@ out/
 # several of them write into a real game directory.
 tools/
 
-# Recorded co-driver lines. Committed separately, with their credit.
+# Recorded co-driver lines. Not embedded and not shipped: the binary reads a
+# `pacenotes` directory beside itself at startup, if one is there.
 assets/pacenotes/*
 !assets/pacenotes/.gitkeep
 

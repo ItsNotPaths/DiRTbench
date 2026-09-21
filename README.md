@@ -31,7 +31,8 @@ the tree must be clean, and HEAD must be pushed.
 
 ## Point it at the game
 
-Put a `dirtbench.conf` next to the binary
+First run writes a `dirtbench.conf` and tells you where. On Linux that is
+`~/.config/dirtbench/`, on Windows your AppData. Put the game's path in it:
 
 ```
 install_dir = /path/to/DiRT 3 Complete Edition
@@ -83,3 +84,24 @@ Both are compiled into the binary; `dirtbench --notice` prints them.
 
 dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art is
 taken out of your own install at export time.
+
+The co-driver voice is not in the binary either. Put the `.ogg` clips in a
+`pacenotes` directory beside `dirtbench` and the pace-note preview uses them;
+without it the preview stays quiet and nothing else changes.
+
+## Where it keeps things
+
+Your work goes in the platform's own directories, not beside the binary, which
+on Windows is somewhere you may not be able to write. On Linux that is
+`~/.local/share/dirtbench` for maps and venues, `~/.config/dirtbench` for the
+config, and `~/.cache/dirtbench` for content packs and debug exports — the last
+of which is safe to delete at any time.
+
+Set `DIRTBENCH_HOME` to put all three under one directory instead:
+
+```
+DIRTBENCH_HOME=./build ./build/dirtbench
+```
+
+which is also how to run it portably, or how to keep a development build out of
+a release build's work.

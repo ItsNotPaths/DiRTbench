@@ -59,8 +59,8 @@ venue_deploy_dir :: proc(
 //
 // Base art is hardlinked: it is 127 MB of it, and it already sits on the game's
 // own filesystem. A content pack's own art is copied, because
-// `build/content-packs/` sits beside the binary and a hardlink cannot cross a
-// filesystem.
+// the pack cache is on whatever volume the user's home is and a hardlink cannot
+// cross a filesystem.
 @(private = "file")
 Place_Mode :: enum {
 	Link,

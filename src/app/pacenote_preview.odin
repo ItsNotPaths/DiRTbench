@@ -5,26 +5,37 @@ package main
 // knows nothing about the editor, the filesystem or SDL audio.
 
 import "core:math"
+import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import "../gfx"
 import "../geo"
 
-// The recorded co-driver clips, baked into the binary. About 1.2 MB of Ogg
-// Vorbis across 84 files, which is cheaper than a directory that can go missing:
-// a release is one file to copy, and a clip cannot be half-installed.
-PACE_CLIPS := #load_directory("../../assets/pacenotes")
-
-// Decode every clip into a map keyed by basename. Keys are cloned (persistent);
-// pace_audio_unload frees them.
+// Decode every clip in the `pacenotes` directory beside the binary into a map
+// keyed by basename.
+// Keys are cloned (persistent); pace_audio_unload frees them.
+//
+// The clips are read at startup, not embedded: they are someone else's
+// recordings and a release must be able to ship without them. An empty map is
+// an ordinary state — every caller already asks before it plays.
 pace_audio_load :: proc() -> map[string]gfx.Sound {
 	clips := make(map[string]gfx.Sound)
-	for file in PACE_CLIPS {
-		if filepath.ext(file.name) != ".ogg" {
+	dir := pacenotes_dir()
+	infos, err := os.read_all_directory_by_path(dir, context.temp_allocator)
+	if err != nil {
+		return clips
+	}
+	for info in infos {
+		if info.type != .Regular || filepath.ext(info.name) != ".ogg" {
 			continue
 		}
-		stem := strings.trim_suffix(file.name, ".ogg")
-		clips[strings.clone(stem)] = gfx.LoadSoundFromMemory(file.data)
+		path, _ := filepath.join({dir, info.name}, context.temp_allocator)
+		data, rerr := os.read_entire_file(path, context.temp_allocator)
+		if rerr != nil {
+			continue
+		}
+		stem := strings.trim_suffix(info.name, ".ogg")
+		clips[strings.clone(stem)] = gfx.LoadSoundFromMemory(data)
 	}
 	return clips
 }
