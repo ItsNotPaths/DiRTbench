@@ -83,9 +83,17 @@ jobs:
             mkdir -p build && mv "$found" build/dirtbench.exe
           fi
 
+      # bash reports a loader failure as 127, the same code it uses for a
+      # missing file, and says nothing else. dumpbin names what the binary
+      # actually wants, and cmd prints the real error when bash will not.
       - name: Check it runs
         run: |
-          ./build/dirtbench.exe --version
+          dumpbin -nologo -dependents build/dirtbench.exe || true
+          if ! ./build/dirtbench.exe --version; then
+            echo "bash could not run it; asking cmd for the real message"
+            cmd //c "build\\dirtbench.exe --version"
+            exit 1
+          fi
           ./build/dirtbench.exe --notice | head -3
 
       # What the binary embeds, beside it, so a download carries its notices.
