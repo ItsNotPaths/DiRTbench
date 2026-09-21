@@ -7,9 +7,27 @@
 ## Build
 
 ```
-./download-deps.sh      # once: fetches and builds vendor/
+./download-deps.sh      # once: fetches and builds vendor/, for ./build.sh
+./build.sh              # every test suite
+
 ./release.sh --local    # -> build/dirtbench
 ```
+
+`release.sh` builds in a container (`docker/Dockerfile`, AlmaLinux 8) rather
+than on your machine. glibc is never forward compatible, so a binary linked on
+a current distribution starts only on a current distribution; building on 2.28
+gives one that runs everywhere newer. It needs `docker` and `glslc`, keeps its
+own `vendor-alma8/`, and refuses to finish if the glibc floor comes out wrong.
+
+## Release
+
+```
+./release.sh --public --version 0.1.0 --notes "notes here"
+```
+
+Runs the `release` workflow on GitHub, which builds in the same image and
+publishes a tarball. The version must match `VERSION` in `src/app/notice.odin`,
+the tree must be clean, and HEAD must be pushed.
 
 ## Point it at the game
 

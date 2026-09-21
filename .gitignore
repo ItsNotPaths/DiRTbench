@@ -1,4 +1,7 @@
 vendor/
+# The release build's own vendor archives, compiled on glibc 2.28. Kept apart
+# from vendor/ so a host-built archive can never raise the floor of a release.
+vendor-alma8/
 build/
 
 # Byte-level format notes, the plan and the handoff roadmaps. Derived from

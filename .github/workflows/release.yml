@@ -1,0 +1,98 @@
+name: release
+
+# Launched by ./release.sh --public --version <x.y.z> --notes <text>, which
+# checks that the version matches src/app/notice.odin and that HEAD is pushed.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, without the leading v"
+        required: true
+      notes:
+        description: "Release notes"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The build image cannot run glslc: it needs glibc 2.38 and the image is
+      # 2.28. SPIR-V is host-independent, so the shaders are built out here.
+      - name: Install glslc
+        run: sudo apt-get update && sudo apt-get install -y glslc
+
+      - name: Build shaders
+        run: ./build-shaders.sh
+
+      # SDL takes minutes to compile and nothing about it changes between
+      # releases, so the vendor directory is cached on the dep scripts.
+      - name: Cache vendor
+        uses: actions/cache@v4
+        with:
+          path: vendor-alma8
+          key: vendor-alma8-${{ hashFiles('download-deps.sh', 'csrc/*.cpp') }}
+
+      - name: Build image
+        run: docker build -t dirtbench-build docker
+
+      - name: Build
+        run: |
+          mkdir -p build vendor-alma8
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            -v "$PWD":/src -v "$PWD/vendor-alma8":/src/vendor \
+            -e HOME=/tmp \
+            dirtbench-build -c '
+              set -euo pipefail
+              cd /src
+              ./download-deps.sh
+              CXX_RUNTIME="$(c++ -print-file-name=libstdc++.a)"
+              GCC_RUNTIME="$(cc -print-libgcc-file-name)"
+              GCC_EH_RUNTIME="$(cc -print-file-name=libgcc_eh.a)"
+              odin build src/app -o:speed -out:build/dirtbench \
+                -extra-linker-flags:"-L/src/vendor/sdl3 $CXX_RUNTIME $GCC_RUNTIME $GCC_EH_RUNTIME"
+              strip --strip-all build/dirtbench
+            '
+
+      # A binary asking for a symbol version the image cannot have means the
+      # link happened outside it. That binary starts on the runner and nowhere
+      # a user is, so it must not become a release.
+      - name: Check the glibc floor
+        run: |
+          floor=$(objdump -T build/dirtbench | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "glibc floor: $floor"
+          case "$floor" in
+            GLIBC_2.[0-9]|GLIBC_2.[12][0-9]) ;;
+            *) echo "::error::floor is $floor; the link did not happen in the image"; exit 1 ;;
+          esac
+
+      - name: Check the version it reports
+        run: |
+          got=$(./build/dirtbench --version | awk '{print $2}')
+          [ "$got" = "${{ inputs.version }}" ] \
+            || { echo "::error::binary says $got, release says ${{ inputs.version }}"; exit 1; }
+
+      # What the binary embeds, next to it, so a download carries its notices.
+      - name: Stage the artifact
+        run: |
+          dir=dirtbench-${{ inputs.version }}-linux-x86_64
+          mkdir -p "$dir"
+          cp build/dirtbench LICENSE credits.txt README.md "$dir/"
+          tar czf "$dir.tar.gz" "$dir"
+          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ inputs.version }}" \
+            --title "dirtbench ${{ inputs.version }}" \
+            --notes "${{ inputs.notes }}" \
+            --target "$GITHUB_SHA" \
+            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz \
+            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
