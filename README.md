@@ -19,28 +19,11 @@ a current distribution starts only on a current distribution; building on 2.28
 gives one that runs everywhere newer. It needs `docker` and `glslc`, keeps its
 own `vendor-alma8/`, and refuses to finish if the glibc floor comes out wrong.
 
-## Release
-
-```
-./release.sh --public --version 0.1.0 --notes "notes here"
-```
-
-Runs the `release` workflow on GitHub, which builds in the same image and
-publishes one executable per platform, unarchived. The tree must be clean,
-HEAD must be pushed, and the version must not already be released.
-
-Nothing in the source carries a version number. The build stamps it, along with
-the commit, so `dirtbench --version` says exactly what a binary is:
-
-```
-dirtbench 0.2.0 (7ef0ac9)     a release
-dirtbench dev (c64e2dc-dirty) a local build, from edited files
-```
-
 ## Point it at the game
 
 First run writes a `dirtbench.conf` and tells you where. On Linux that is
-`~/.config/dirtbench/`, on Windows your AppData. Put the game's path in it:
+`~/.config/dirtbench/`, on Windows your AppData. Put the game's path in it or 
+fill in the top line in the applet:
 
 ```
 install_dir = /path/to/DiRT 3 Complete Edition
@@ -96,24 +79,3 @@ needs nothing beside it.
 
 dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art is
 taken out of your own install at export time.
-
-The co-driver voice is not in the binary either. Put the `.ogg` clips in a
-`pacenotes` directory beside `dirtbench` and the pace-note preview uses them;
-without it the preview stays quiet and nothing else changes.
-
-## Where it keeps things
-
-Your work goes in the platform's own directories, not beside the binary, which
-on Windows is somewhere you may not be able to write. On Linux that is
-`~/.local/share/dirtbench` for maps and venues, `~/.config/dirtbench` for the
-config, and `~/.cache/dirtbench` for content packs and debug exports — the last
-of which is safe to delete at any time.
-
-Set `DIRTBENCH_HOME` to put all three under one directory instead:
-
-```
-DIRTBENCH_HOME=./build ./build/dirtbench
-```
-
-which is also how to run it portably, or how to keep a development build out of
-a release build's work.
