@@ -32,14 +32,16 @@ win_args() {
 
 # One object from one source. Same arguments either way; the flags differ.
 #
-# -MD matches SDL's CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL. cl defaults to
-# -MT, and a runtime mismatch does not fail until the final link.
+# -MT is the static CRT, which is what Odin links on Windows: the final link
+# pulls libucrt.lib, not ucrt.lib. Every object in the binary has to agree, and
+# a mismatch does not fail until that link, as `__imp_`-prefixed unresolved
+# externals.
 compile_obj() {
     local out="$1" src="$2"; shift 2
     if $WINDOWS; then
         local inc=()
         mapfile -t inc < <(win_args "$@")
-        cl -nologo -std:c++14 -O2 -MD -GR- -c \
+        cl -nologo -std:c++14 -O2 -MT -GR- -c \
             -Fo"$(cygpath -w "$out")" "${inc[@]}" "$(cygpath -w "$src")"
     else
         c++ -std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti -c -o "$out" "$@" "$src"
@@ -152,10 +154,10 @@ SDL_CMAKE_FLAGS=(
     -DSDL_X11_XTEST=OFF -DSDL_TEST_LIBRARY=OFF
 )
 
-# MSVC picks its runtime per configuration, and every object in the final link
-# has to agree. Odin's Windows target is the non-debug dynamic CRT.
+# Every object in the final link has to agree on the runtime, and Odin links the
+# static one. See compile_obj.
 if $WINDOWS; then
-    SDL_CMAKE_FLAGS+=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL)
+    SDL_CMAKE_FLAGS+=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded)
 fi
 
 sdl_config() { echo "$SDL_VERSION ${SDL_CMAKE_FLAGS[*]}"; }
@@ -332,7 +334,7 @@ fetch_delaunay() {
     echo "  compiling $DELAUNAY_LIB_NAME..."
     local obj="$DELAUNAY_DEST/dirt_delaunay_shim.$OBJ_EXT"
     if $WINDOWS; then
-        cl -nologo -std:c++14 -O2 -MD -EHsc -GR- -c \
+        cl -nologo -std:c++14 -O2 -MT -EHsc -GR- -c \
             -Fo"$(cygpath -w "$obj")" \
             -I"$(cygpath -w "$DELAUNAY_DEST")" \
             "$(cygpath -w "$ROOT/csrc/dirt_delaunay_shim.cpp")"

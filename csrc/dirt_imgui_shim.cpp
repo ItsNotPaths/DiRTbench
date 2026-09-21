@@ -29,6 +29,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+// MSVC spells it _strdup; plain strdup is a deprecated alias that only resolves
+// through OLDNAMES.lib.
+#ifdef _MSC_VER
+#define dirt_strdup _strdup
+#else
+#define dirt_strdup strdup
+#endif
+
 extern "C" {
 
 // Returns the new context, or null. It is left current.
@@ -88,7 +96,7 @@ void dirtImGuiSetIniFilename(void* c, const char* name) {
     char** slot = dirt_ini_slot(ctx);
     if (slot == nullptr) return;
     free(*slot);
-    *slot = name ? strdup(name) : nullptr;
+    *slot = name ? dirt_strdup(name) : nullptr;
 
     ImGuiContext* prev = ImGui::GetCurrentContext();
     ImGui::SetCurrentContext(ctx);
