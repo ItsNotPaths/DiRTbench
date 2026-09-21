@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,13 +93,40 @@ jobs:
           tar czf "$dir.tar.gz" "$dir"
           sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz
+            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
+
+  # One definition of the Windows build, in windows.yml, called from here.
+  windows:
+    uses: ./.github/workflows/windows.yml
+    with:
+      version: ${{ inputs.version }}
+
+  # Nothing is published until both platforms have built. A release that went
+  # out with half of what it promised is the whole reason this job exists.
+  publish:
+    needs: [linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: What is being published
+        run: ls -la dist
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ inputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "dirtbench ${{ inputs.version }}" \
             --notes "${{ inputs.notes }}" \
             --target "$GITHUB_SHA" \
-            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz \
-            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
+            dist/*

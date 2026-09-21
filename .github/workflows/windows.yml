@@ -1,14 +1,19 @@
 name: windows
 
-# The Windows build, still being brought up. Push-triggered on its own branch so
-# the failures stay off main and out of the releases page. Once it goes green it
-# folds into release.yml as a second job.
+# The Windows half of a release, and the only definition of it: release.yml
+# calls this rather than restating the steps, so the two cannot drift.
+# `workflow_dispatch` runs it alone, which is how it gets brought up without
+# cutting a release.
 #
-# No container here: the glibc problem that forces release.yml into AlmaLinux 8
-# does not exist on Windows, so this builds natively on the runner.
+# No container here: the glibc problem that forces the Linux build into
+# AlmaLinux 8 does not exist on Windows, so this builds natively on the runner.
 on:
-  push:
-    branches: [windows-build]
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: false
+        default: dev
   workflow_dispatch:
 
 jobs:
@@ -64,7 +69,7 @@ jobs:
       - name: Build
         run: |
           odin build src/app -o:speed -out:build/dirtbench.exe \
-            -define:DIRTBENCH_VERSION="${DIRTBENCH_VERSION:-dev}" \
+            -define:DIRTBENCH_VERSION="${{ inputs.version || 'dev' }}" \
             -define:DIRTBENCH_COMMIT="${GITHUB_SHA::7}" \
             -extra-linker-flags:"/LIBPATH:$(cygpath -w "$PWD/vendor/sdl3") /LIBPATH:$(cygpath -w "$PWD/vendor/imgui") /LIBPATH:$(cygpath -w "$PWD/vendor/delaunay") kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib setupapi.lib shell32.lib"
 
@@ -73,7 +78,18 @@ jobs:
           ./build/dirtbench.exe --version
           ./build/dirtbench.exe --notice | head -3
 
+      # What the binary embeds, beside it, so a download carries its notices.
+      - name: Stage the artifact
+        run: |
+          dir=dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64
+          mkdir -p "$dir"
+          cp build/dirtbench.exe LICENSE credits.txt README.md "$dir/"
+          7z a "$dir.zip" "$dir" > /dev/null
+          sha256sum "$dir.zip" > "$dir.zip.sha256"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: dirtbench-windows-x86_64
-          path: build/dirtbench.exe
+          name: windows
+          path: |
+            dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.zip
+            dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.zip.sha256
