@@ -56,12 +56,22 @@ jobs:
           # The zip's top-level directory name is not stable across releases.
           root=$(find odin-dist -maxdepth 2 -name odin.exe -printf '%h\n' | head -1)
           echo "$(cygpath -w "$root")" >> "$GITHUB_PATH"
+          echo "ODIN_ROOT=$root" >> "$GITHUB_ENV"
 
       - name: Shaders
         run: ./build-shaders.sh
 
       - name: Dependencies
         run: ./download-deps.sh
+
+      # vendor:sdl3 does `foreign import lib { "SDL3.lib" }` — a bare name, and
+      # Odin's own vendor directory holds an import library for SDL3.dll that
+      # wins the search. Linking that makes the exe need the DLL beside it. Our
+      # SDL3.lib is the static build, so it goes in that slot.
+      - name: Static SDL for the Odin binding
+        run: |
+          ls -la "$ODIN_ROOT/vendor/sdl3/" | grep -i sdl3 || true
+          cp vendor/sdl3/SDL3.lib "$ODIN_ROOT/vendor/sdl3/SDL3.lib"
 
       # Static SDL3 pulls in the Win32 libraries it wraps. A shared build would
       # carry them itself; linked by hand, they have to be named. The list is
@@ -88,7 +98,13 @@ jobs:
       # actually wants, and cmd prints the real error when bash will not.
       - name: Check it runs
         run: |
-          dumpbin -nologo -dependents build/dirtbench.exe || true
+          dumpbin -nologo -dependents build/dirtbench.exe
+          # A DLL beside the binary is the thing this whole build exists to
+          # avoid, so a link that reintroduces one must not pass quietly.
+          if dumpbin -nologo -dependents build/dirtbench.exe | grep -qi 'SDL3.dll'; then
+            echo "::error::linked against SDL3.dll; the static SDL3.lib did not win"
+            exit 1
+          fi
           if ! ./build/dirtbench.exe --version; then
             echo "bash could not run it; asking cmd for the real message"
             cmd //c "build\\dirtbench.exe --version"
