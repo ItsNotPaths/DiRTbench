@@ -280,9 +280,7 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 		// The root must always split at least once: Dirt 3 selects collision
 		// through the archive's entry-name grid, and a whole route collapsed
 		// to one root .vcqtc entry loads and validates fine but the game never
-		// finds it — the car falls through everything. Below-threshold input
-		// (a small custom stage, unlike any stock route) used to hit exactly
-		// that shape silently.
+		// finds it — the car falls through everything.
 		if c.level>0 && !d3_partition_should_split(input,c.tris) { append(&leaves,qi); continue }
 		if c.level>=16 { return nil,fmt.tprintf("%s still exceeds a chunk limit at level 16",c.name),false }
 		mid:=(c.lo+c.hi)/2

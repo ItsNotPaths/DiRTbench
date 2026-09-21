@@ -103,7 +103,7 @@ Venue_Route :: struct {
 	pins:   [dynamic]geo.Road_Marker,
 	// Where the setup screen stands: the pre-race service area, with the car on
 	// show and the tuning menu over it. Optional — unplaced, the export leaves
-	// it on the start grid, which is where it always used to be.
+	// it on the start grid.
 	setup:  geo.Road_Marker,
 }
 
