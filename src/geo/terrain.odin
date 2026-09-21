@@ -43,11 +43,6 @@ package geo
 import "core:math"
 import "../gfx"
 
-// Vertex colours, since the material is unlit (see mesh.odin). Slope picks
-// between them: flat ground is grass, a steep face is the rock under it.
-TERRAIN_FLAT :: gfx.Color{86, 112, 68, 255}
-TERRAIN_STEEP :: gfx.Color{112, 104, 92, 255}
-
 // Controls sculpt broad landforms; `cell_m` separately decides how finely the
 // resulting field is triangulated.
 TERRAIN_REACH_MAX :: 400.0
@@ -172,22 +167,6 @@ terrain_invalidate :: proc(t: ^Terrain) {
 	terrain_sculpt_load(t, nil)
 }
 
-// Back to defaults, sculpt dropped. Assigning TERRAIN_DEFAULTS wholesale would
-// drop the control allocation with it.
-terrain_reset :: proc(t: ^Terrain) {
-	d := TERRAIN_DEFAULTS
-	t.enabled = d.enabled
-	t.reach_m, t.blend_m, t.cell_m, t.row_m = d.reach_m, d.blend_m, d.cell_m, d.row_m
-	t.warp_m = d.warp_m
-	t.detach = d.detach
-	terrain_invalidate(t)
-	// The pads go with it. terrain_invalidate deliberately keeps them: they are
-	// world-space and owe the road nothing, so replacing the spline must not
-	// throw away ground the user shaped by hand.
-	clear(&t.floors)
-	clear(&t.floor_pts)
-}
-
 // The control set, for saving. **Every control, not only the moved ones.**
 //
 // terrain_control_add adopts the offset of the nearest old control within
@@ -294,6 +273,17 @@ Terrain_Leg :: struct {
 	seam_y: f32,
 	w:      f32, // normalised blend weight
 	side:   int,
+}
+
+// XZ bounds of a sample set.
+sample_bounds :: proc(fs: []Field_Sample) -> (lo, hi: [2]f32) {
+	lo = {max(f32), max(f32)}
+	hi = {min(f32), min(f32)}
+	for s in fs {
+		lo[0] = min(lo[0], s.p[0]);  lo[1] = min(lo[1], s.p[1])
+		hi[0] = max(hi[0], s.p[0]);  hi[1] = max(hi[1], s.p[1])
+	}
+	return
 }
 
 field_samples :: proc(
@@ -900,12 +890,7 @@ terrain_field_build :: proc(
 	}
 
 	fs := field_samples(ribbon, arc, ds, roughness)
-	lo := [2]f32{max(f32), max(f32)}
-	hi := [2]f32{min(f32), min(f32)}
-	for s in fs {
-		lo[0] = min(lo[0], s.p[0]);  lo[1] = min(lo[1], s.p[1])
-		hi[0] = max(hi[0], s.p[0]);  hi[1] = max(hi[1], s.p[1])
-	}
+	lo, hi := sample_bounds(fs)
 	limit := t.reach_m + 64
 
 	// Grow the cell rather than allocate without bound on a huge stage.
@@ -1182,10 +1167,6 @@ field_y :: proc(t: ^Terrain, v: Terrain_Point) -> f32 {
 		return v.y
 	}
 	return terrain_world_height(t, {v.x, v.z}, v.legs, v.n)
-}
-
-field_point :: proc(t: ^Terrain, v: Terrain_Point) -> gfx.Vector3 {
-	return {v.x, field_y(t, v), v.z}
 }
 
 // How far the apron drops, and how far out it leans per metre of drop. Short

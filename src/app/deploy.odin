@@ -572,7 +572,8 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	), true
 }
 
-venue_deploy_preflight_headless :: proc(key: string) -> bool {
+// Shared scaffold for the --venue-* commands: find, act, print, exit code.
+venue_action_headless :: proc(key: string, action: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)) -> bool {
 	vs: Install_Scan
 	install_scan_init(&vs)
 	defer install_scan_delete(&vs)
@@ -582,37 +583,7 @@ venue_deploy_preflight_headless :: proc(key: string) -> bool {
 		return false
 	}
 	defer venue_free(p)
-	msg, ok = venue_deploy_preflight(&vs, p)
-	fmt.println(msg)
-	return ok
-}
-
-venue_deploy_headless :: proc(key: string) -> bool {
-	vs: Install_Scan
-	install_scan_init(&vs)
-	defer install_scan_delete(&vs)
-	p, msg, ok := venue_find(key)
-	if !ok {
-		fmt.println(msg)
-		return false
-	}
-	defer venue_free(p)
-	msg, ok = venue_publish(&vs, p)
-	fmt.println(msg)
-	return ok
-}
-
-venue_revert_headless :: proc(key: string) -> bool {
-	vs: Install_Scan
-	install_scan_init(&vs)
-	defer install_scan_delete(&vs)
-	p, msg, ok := venue_find(key)
-	if !ok {
-		fmt.println(msg)
-		return false
-	}
-	defer venue_free(p)
-	msg, ok = venue_revert(&vs, p)
+	msg, ok = action(&vs, p)
 	fmt.println(msg)
 	return ok
 }

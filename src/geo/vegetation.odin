@@ -256,12 +256,7 @@ veg_field_make :: proc(
 		return {}
 	}
 	fs := field_samples(ribbon, arc, ds, roughness)
-	lo := [2]f32{max(f32), max(f32)}
-	hi := [2]f32{min(f32), min(f32)}
-	for s in fs {
-		lo[0] = min(lo[0], s.p[0]);  lo[1] = min(lo[1], s.p[1])
-		hi[0] = max(hi[0], s.p[0]);  hi[1] = max(hi[1], s.p[1])
-	}
+	lo, hi := sample_bounds(fs)
 	hash := hash_build(fs, lo, hi, max(t.cell_m * 2, 8))
 	near := terrain_near_other(t, fs, hash)
 	reach := t.enabled ? t.reach_m : VEG_REACH_NO_TERRAIN
@@ -602,12 +597,9 @@ VEG_TRUNK_COL :: gfx.Color{92, 66, 44, 210} // a muted bark brown, mostly opaque
 // Build the cached scatter into a triangle soup, to be uploaded once per rebuild
 // and drawn like the road and the ground.
 //
-// Not the immediate-mode overlay it used to be. That batch is a fixed buffer
-// shared with every handle and node in the frame, and one tree costs upward of a
-// hundred vertices, so a dense stage filled it: the trees at the tail of the
-// ribbon — whole branches of the road graph — drew nothing, and so did the
-// handles queued behind them. A mesh has no such ceiling and is not rebuilt every
-// frame.
+// Not the immediate-mode overlay: that batch is a fixed buffer shared with every
+// handle in the frame, and a dense stage's trees overflow it and silently drop
+// draws. A mesh has no such ceiling and is not rebuilt every frame.
 //
 // Viewport only. The export places real props (see Prop_Kind), so the Mat_Id here
 // is never read by a target. Low slice counts keep the soup small, and the shapes
