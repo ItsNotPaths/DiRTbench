@@ -496,11 +496,6 @@ resolve_detach :: proc(sp: Spline, ribbon: []Cross_Section, o: Detach_Opts) {
 	}
 }
 
-// side 0 = the verge on the ribbon's `left` end (+right), side 1 = the other.
-verge_size :: proc(cs: Cross_Section, side: int, kind: Guard_Kind) -> f32 {
-	return cs.verge[side][kind].size
-}
-
 // A point on the profile: metres outward from the road edge, metres up from it.
 // `up` is the road frame's, so a banked road banks its verges with it.
 Verge_Point :: [2]f32
@@ -810,8 +805,7 @@ ROAD_CHANGE_M :: 8.0
 
 DEFAULT_LOOK :: Look {
 	// Loose is brown and paved is a dark neutral grey, far enough apart to tell
-	// at a glance across a whole stage. They used to sit 20 levels apart in the
-	// same grey, which read as one colour and made the surface invisible.
+	// at a glance across a whole stage.
 	road          = {138, 114, 84, 255},
 	road_paved    = {74, 76, 82, 255},
 	terrain       = {86, 112, 68, 255},

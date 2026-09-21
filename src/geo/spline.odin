@@ -109,9 +109,8 @@ Guard_Kind :: enum u8 {
 // anchor (`at`), by the same graph walk the stage search uses, so it carries
 // past a fork into both branches and over a weld into the road it closes.
 //
-// This is deliberately not a per-control-point number. Shaping a run that
-// covers five nodes used to mean editing five copies of the same slider set and
-// keeping them in step by hand; one guard is one slider set.
+// Deliberately not a per-control-point number: one guard is one slider set,
+// not a copy per node kept in step by hand.
 Guard :: struct {
 	// Stable identity, handed out by guard_add and never reused, so the
 	// inspector can hold on to a guard across an edit that reorders the list.
@@ -178,10 +177,6 @@ is_linear :: proc(sp: Spline) -> bool {
 	// graph sampler the only correct one.
 	for p, i in sp.points { if p.parent != i - 1 || p.weld >= 0 { return false } }
 	return true
-}
-
-has_weld :: proc(sp: Spline, idx: int) -> bool {
-	return idx >= 0 && idx < len(sp.points) && sp.points[idx].weld >= 0
 }
 
 // Close a loop: a second edge out of `from` into `to`. Refused when the two are
@@ -403,11 +398,6 @@ guard_remove :: proc(sp: ^Spline, idx: int) {
 	if idx >= 0 && idx < len(sp.guards) {
 		ordered_remove(&sp.guards, idx)
 	}
-}
-
-guard_index :: proc(sp: Spline, id: int) -> int {
-	for g, i in sp.guards { if g.id == id { return i } }
-	return -1
 }
 
 // How far a guard's shape carries from its anchor, in metres of road.

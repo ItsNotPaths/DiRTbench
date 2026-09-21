@@ -473,29 +473,6 @@ find_target :: proc(id: string) -> (^Export_Target, bool) {
 	return nil, false
 }
 
-// --- shelling out ------------------------------------------------------------
-
-// Run a command to completion and capture its output. Returns the tool's own
-// stderr on failure, which is where its diagnostics go.
-run_tool :: proc(exe: string, args: ..string) -> (out: string, ok: bool) {
-	cmd := make([dynamic]string, context.temp_allocator)
-	append(&cmd, exe)
-	append(&cmd, ..args)
-
-	state, stdout, stderr, err := os.process_exec({command = cmd[:]}, context.temp_allocator)
-	if err != nil {
-		return fmt.tprintf("could not run %s: %v", filepath.base(exe), err), false
-	}
-	if !state.exited || state.exit_code != 0 {
-		detail := strings.trim_space(string(stderr))
-		if detail == "" {
-			detail = strings.trim_space(string(stdout))
-		}
-		return fmt.tprintf("%s exit %d: %s", filepath.base(exe), state.exit_code, detail), false
-	}
-	return strings.trim_space(string(stdout)), true
-}
-
 // --- building the job --------------------------------------------------------
 
 // One spline's geometry, built the way the viewport builds it: the ribbon, the

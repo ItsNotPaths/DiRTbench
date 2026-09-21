@@ -138,9 +138,6 @@ Ens_Parse :: d3_ens_parse
 Ens_Emit :: d3_ens_emit
 Ens_Placement_Transform :: d3_ens_placement_transform
 Placement_Build :: d3_placement_build
-Placement_Read :: d3_placement_read
-Placement_Layout :: d3_placement_layout
-Placement_Relocate :: d3_placement_relocate
 Placement_Xml_Build :: d3_placement_xml_build
 Water_Body :: D3_Water_Body
 Niwater_Build :: d3_niwater_build

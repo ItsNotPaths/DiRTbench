@@ -505,10 +505,6 @@ shade_face :: proc(col: Color, normal: Vector3) -> Color {
 	return {u8(f32(col.r) * lit), u8(f32(col.g) * lit), u8(f32(col.b) * lit), col.a}
 }
 
-DrawCylinderEx :: proc(start, end: Vector3, start_radius, end_radius: f32, sides: i32, color: Color) {
-	CylinderEx(batch_sink(), start, end, start_radius, end_radius, sides, color)
-}
-
 CylinderEx :: proc(
 	sink: Tri_Sink,
 	start, end: Vector3,
