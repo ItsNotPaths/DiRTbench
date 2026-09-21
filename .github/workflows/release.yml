@@ -47,6 +47,8 @@ jobs:
             --user "$(id -u):$(id -g)" \
             -v "$PWD":/src -v "$PWD/vendor-alma8":/src/vendor \
             -e HOME=/tmp \
+            -e DIRTBENCH_VERSION="${{ inputs.version }}" \
+            -e DIRTBENCH_COMMIT="${GITHUB_SHA::7}" \
             dirtbench-build -c '
               set -euo pipefail
               cd /src
@@ -55,6 +57,8 @@ jobs:
               GCC_RUNTIME="$(cc -print-libgcc-file-name)"
               GCC_EH_RUNTIME="$(cc -print-file-name=libgcc_eh.a)"
               odin build src/app -o:speed -out:build/dirtbench \
+                -define:DIRTBENCH_VERSION="$DIRTBENCH_VERSION" \
+                -define:DIRTBENCH_COMMIT="$DIRTBENCH_COMMIT" \
                 -extra-linker-flags:"-L/src/vendor/sdl3 $CXX_RUNTIME $GCC_RUNTIME $GCC_EH_RUNTIME"
               strip --strip-all build/dirtbench
             '
@@ -71,11 +75,14 @@ jobs:
             *) echo "::error::floor is $floor; the link did not happen in the image"; exit 1 ;;
           esac
 
-      - name: Check the version it reports
+      # The stamp is the whole point: a binary that cannot say which commit it
+      # came from is not worth publishing.
+      - name: Check what it says it is
         run: |
-          got=$(./build/dirtbench --version | awk '{print $2}')
-          [ "$got" = "${{ inputs.version }}" ] \
-            || { echo "::error::binary says $got, release says ${{ inputs.version }}"; exit 1; }
+          ./build/dirtbench --version
+          want="dirtbench ${{ inputs.version }} (${GITHUB_SHA::7})"
+          got=$(./build/dirtbench --version)
+          [ "$got" = "$want" ] || { echo "::error::got '$got', wanted '$want'"; exit 1; }
 
       # What the binary embeds, next to it, so a download carries its notices.
       - name: Stage the artifact

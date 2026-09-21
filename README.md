@@ -26,8 +26,16 @@ own `vendor-alma8/`, and refuses to finish if the glibc floor comes out wrong.
 ```
 
 Runs the `release` workflow on GitHub, which builds in the same image and
-publishes a tarball. The version must match `VERSION` in `src/app/notice.odin`,
-the tree must be clean, and HEAD must be pushed.
+publishes a tarball. The tree must be clean, HEAD must be pushed, and the
+version must not already be released.
+
+Nothing in the source carries a version number. The build stamps it, along with
+the commit, so `dirtbench --version` says exactly what a binary is:
+
+```
+dirtbench 0.2.0 (7ef0ac9)     a release
+dirtbench dev (c64e2dc-dirty) a local build, from edited files
+```
 
 ## Point it at the game
 

@@ -25,13 +25,16 @@ EOF
 
 die() { echo "$*" >&2; exit 1; }
 
-# --- what the source says the version is -------------------------------------
+# --- what a binary says it is ------------------------------------------------
 
-# One home for the version, src/app/notice.odin. --public states it too, and
-# the two must agree: a tag that does not match what `dirtbench --version`
-# prints is worse than no tag.
-source_version() {
-    sed -n 's/^VERSION :: "\(.*\)"$/\1/p' src/app/notice.odin
+# The commit, which is the only thing that says exactly what a binary holds. A
+# build from edited files is marked, because a dirty tree reporting a clean
+# commit is a lie the next person has no way to catch.
+build_commit() {
+    local id
+    id="$(git rev-parse --short HEAD 2>/dev/null)" || { echo unknown; return; }
+    [ -z "$(git status --porcelain)" ] || id="$id-dirty"
+    echo "$id"
 }
 
 # --- the build ---------------------------------------------------------------
@@ -50,6 +53,8 @@ build_in_container() {
         -v "$PWD":/src \
         -v "$VENDOR_ALMA":/src/vendor \
         -e HOME=/tmp \
+        -e DIRTBENCH_VERSION="${1:-dev}" \
+        -e DIRTBENCH_COMMIT="$(build_commit)" \
         "$IMAGE" -c '
 set -euo pipefail
 cd /src
@@ -58,6 +63,8 @@ CXX_RUNTIME="$(c++ -print-file-name=libstdc++.a)"
 GCC_RUNTIME="$(cc -print-libgcc-file-name)"
 GCC_EH_RUNTIME="$(cc -print-file-name=libgcc_eh.a)"
 odin build src/app -o:speed -out:build/dirtbench \
+    -define:DIRTBENCH_VERSION="$DIRTBENCH_VERSION" \
+    -define:DIRTBENCH_COMMIT="$DIRTBENCH_COMMIT" \
     -extra-linker-flags:"-L/src/vendor/sdl3 $CXX_RUNTIME $GCC_RUNTIME $GCC_EH_RUNTIME"
 strip --strip-all build/dirtbench
 '
@@ -78,8 +85,9 @@ check_floor() {
 do_build() {
     ./build-shaders.sh
     build_image
-    build_in_container
+    build_in_container "${1:-dev}"
     check_floor
+    ./build/dirtbench --version
     echo "build/dirtbench"
 }
 
@@ -109,11 +117,15 @@ case "$mode" in
         command -v gh >/dev/null || die "gh is not installed"
         gh auth status >/dev/null 2>&1 || die "gh is not logged in; run: gh auth login"
 
-        want="$(source_version)"
-        [ "$version" = "$want" ] || die "--version $version, but src/app/notice.odin says $want"
+        # Shape only. The number is whatever this release is called; nothing in
+        # the source claims one, so there is nothing to disagree with.
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "--version wants x.y.z, got $version"
 
         [ -z "$(git status --porcelain)" ] || die "the working tree is dirty; commit first"
-        git rev-parse "v$version" >/dev/null 2>&1 && die "tag v$version already exists"
+        # Ask the remote, not the local tags: a release cut from another machine
+        # leaves no tag here, and the build would run for ten minutes before
+        # `gh release create` refused it.
+        gh release view "v$version" >/dev/null 2>&1 && die "v$version is already released"
 
         head="$(git rev-parse HEAD)"
         git fetch -q origin
