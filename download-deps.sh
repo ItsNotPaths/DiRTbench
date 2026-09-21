@@ -16,11 +16,31 @@ case "$(uname -s)" in
     *)                    WINDOWS=false ;;
 esac
 
+# MSVC accepts `-` for its options as well as `/`, and `-` is what to use from
+# a bash on Windows: an argument starting with `/` gets rewritten into a path
+# before cl ever sees it. The paths *inside* an option are not rewritten, so
+# those have to be converted by hand.
+win_args() {
+    local a
+    for a in "$@"; do
+        case "$a" in
+            -I*) printf '%s\n' "-I$(cygpath -w "${a#-I}")" ;;
+            *)   printf '%s\n' "$a" ;;
+        esac
+    done
+}
+
 # One object from one source. Same arguments either way; the flags differ.
+#
+# -MD matches SDL's CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL. cl defaults to
+# -MT, and a runtime mismatch does not fail until the final link.
 compile_obj() {
     local out="$1" src="$2"; shift 2
     if $WINDOWS; then
-        cl //nologo //std:c++14 //O2 //EHsc- //GR- //c //Fo:"$out" "$@" "$src"
+        local inc=()
+        mapfile -t inc < <(win_args "$@")
+        cl -nologo -std:c++14 -O2 -MD -GR- -c \
+            -Fo"$(cygpath -w "$out")" "${inc[@]}" "$(cygpath -w "$src")"
     else
         c++ -std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti -c -o "$out" "$@" "$src"
     fi
@@ -31,7 +51,9 @@ archive() {
     local out="$1"; shift
     rm -f "$out"
     if $WINDOWS; then
-        lib //nologo //OUT:"$out" "$@"
+        local objs=() o
+        for o in "$@"; do objs+=("$(cygpath -w "$o")"); done
+        lib -nologo -OUT:"$(cygpath -w "$out")" "${objs[@]}"
     else
         ar rcs "$out" "$@"
     fi
@@ -310,8 +332,10 @@ fetch_delaunay() {
     echo "  compiling $DELAUNAY_LIB_NAME..."
     local obj="$DELAUNAY_DEST/dirt_delaunay_shim.$OBJ_EXT"
     if $WINDOWS; then
-        cl //nologo //std:c++14 //O2 //EHsc //GR- //c //Fo:"$obj" \
-            -I"$DELAUNAY_DEST" "$ROOT/csrc/dirt_delaunay_shim.cpp"
+        cl -nologo -std:c++14 -O2 -MD -EHsc -GR- -c \
+            -Fo"$(cygpath -w "$obj")" \
+            -I"$(cygpath -w "$DELAUNAY_DEST")" \
+            "$(cygpath -w "$ROOT/csrc/dirt_delaunay_shim.cpp")"
     else
         c++ -std=c++11 -O2 -fPIC -fno-rtti -I"$DELAUNAY_DEST" -c -o "$obj" \
             "$ROOT/csrc/dirt_delaunay_shim.cpp"
