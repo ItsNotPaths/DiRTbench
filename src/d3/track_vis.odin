@@ -625,31 +625,16 @@ d3_vis_census_build :: proc(
 	)
 	if !objects_ok { return nil, objects_msg, false }
 
+	// Every tag declares exactly what section 3 holds. 103 of the 104 stock
+	// routes do, and the game walks each tag's sub-range by this count: a slot
+	// declared past what we wrote is never filled, keeps whatever the fresh
+	// allocation held, and is freed anyway at teardown.
+	//
+	// Tag 2 is the one real exception. Dynamic ENS drawables take a
+	// registration slot without receiving a box, so the count has to cover
+	// their instance ids — ours, never a donor's.
 	floor: [16]u32
-	donor_msg := "no donor to floor the header counts against"
-	if donor := d3_stock_path(route_dir, "track.vis"); donor != "" {
-		data, read_err := os.read_entire_file(donor, context.temp_allocator)
-		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", donor, read_err), false }
-		counts, counts_ok := d3_vis_read_header_tag_counts(data)
-		if !counts_ok { return nil, fmt.tprintf("%s: too short to hold a Dirt 3 VIS header", donor), false }
-		// We write both PSSGs and both placement files, so tags 0, 2 and 3 are
-		// counted from what we wrote. The donor's count is still the floor on
-		// tag 2: dynamic ENS drawables consume registration slots that receive
-		// no box, and the game sizes its allocations off the header count.
-		//
-		// Tag 1 joins them once we write `grass.grs`: flooring it to the
-		// donor's cell count would declare cells our own file does not have.
-		for tag in 0..<16 {
-			if tag == 0 || tag == 3 { continue }
-			if tag == 1 && ground_cover { continue }
-			floor[tag] = counts[tag]
-		}
-		donor_msg = fmt.tprintf("tags 2, 4..15 floored against %s", filepath.base(donor))
-	}
-	// Our own dynamic entities on top of that. They receive no tag-2 box, so
-	// the census above cannot see them, but their `instanceID` still has to
-	// fall inside the count the header declares.
-	ens_msg := "no objects.ens to floor tag 2 against"
+	ens_msg := "no objects.ens to size tag 2 against"
 	if ens_path, _ := filepath.join({route_dir, "objects.ens"}, context.temp_allocator);
 	   os.exists(ens_path) {
 		data, read_err := os.read_entire_file(ens_path, context.temp_allocator)
@@ -657,13 +642,13 @@ d3_vis_census_build :: proc(
 		nodes, parsed := d3_ens_parse(data, context.temp_allocator)
 		if !parsed { return nil, "objects.ens did not parse, so tag 2 cannot be sized", false }
 		span := d3_ens_instance_id_span(nodes)
-		floor[2] = max(floor[2], span)
-		ens_msg = fmt.tprintf("tag 2 floored to %d for %d ens instance ids", floor[2], span)
+		floor[2] = span
+		ens_msg = fmt.tprintf("tag 2 sized to %d ens instance ids", span)
 	}
 
 	built, build_msg, built_ok := d3_vis_build(objects, band, floor, allocator)
 	if !built_ok { return nil, build_msg, false }
-	return built, fmt.tprintf("%s; %s; %s; %s", objects_msg, donor_msg, ens_msg, build_msg), true
+	return built, fmt.tprintf("%s; %s; %s", objects_msg, ens_msg, build_msg), true
 }
 
 // Runs after both PSSGs are written, because it censuses them.
