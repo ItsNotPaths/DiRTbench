@@ -11,7 +11,12 @@ import "core:testing"
 // The lake is load-bearing twice over. `pssg_types` scans the tree rather than
 // the schema, so a donor with no geometry cannot say what a DATABLOCKSTREAM is;
 // and it gives these tests a stock body to watch being dropped.
-D3_FIXTURE_WATER :: #load("../../assets/d3/water-materials.pssg")
+//
+// Not in the repository, for the same reason as the Moosylvania fixture: see
+// credits.txt. The load survives its absence and the tests report it.
+D3_FIXTURE_WATER :: #load("../../assets/d3/water-materials.pssg", []u8) or_else []u8{}
+
+WATER_FIXTURE_MISSING :: "assets/d3/water-materials.pssg is not in the repository; see credits.txt"
 
 // A square, wound so the two triangles face +Y like every stock water face.
 test_water_square :: proc(name: string, y, half: f32, allocator := context.allocator) -> D3_Water_Body {

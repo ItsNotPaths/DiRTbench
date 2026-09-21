@@ -14,13 +14,6 @@ import "core:fmt"
 import "core:strconv"
 import "core:strings"
 
-// A shader template with no venue behind it, for the tests and for the debug
-// converters that run without a venue open. Provenance: shader metadata read
-// out of the Moosylvania fixture venue, carrying no texture or geometry
-// payload. See credits.txt. A real export refuses to run on this.
-D3_FIXTURE_MATERIALS :: #load("../../assets/d3/moosylvania-materials.pssg")
-D3_FIXTURE_ID :: "fixture"
-
 // The two files a pack is made of.
 D3_PROFILE_FILE :: "profile.txt"
 D3_MATERIALS_FILE :: "materials.pssg"
@@ -309,16 +302,3 @@ d3_profile_defaults :: proc() -> (profile: D3_Venue_Profile) {
 	return
 }
 
-// The venue-less profile. Tests and the debug converters use it; a stage export
-// takes the open venue's profile instead.
-d3_profile_fixture :: proc() -> (profile: D3_Venue_Profile, msg: string, ok: bool) {
-	profile = d3_profile_defaults()
-	profile.id = D3_FIXTURE_ID
-	profile.template = transmute([]u8)D3_FIXTURE_MATERIALS
-	profile.lod = "lod"
-	profile.batch = "batchmaterial"
-	for material in Draw_Material { profile.visual[material] = "dirt_pebbles_01" }
-	profile.visual[.Terrain] = "grass_01"
-	msg, ok = d3_profile_complete(profile)
-	return
-}

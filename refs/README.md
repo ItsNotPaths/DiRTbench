@@ -57,6 +57,13 @@ do not check the whole file out, because that commit also split `main.odin`.
 they call the package names directly (`d3.d3_collision_read`), which compiles
 because nothing in `scratch.odin` is marked `@(private)`.
 
+**`scratch.odin` also calls `d3_profile_fixture`**, which now lives in
+`src/d3/venue_profile_test.odin` along with `D3_FIXTURE_MATERIALS` and
+`D3_FIXTURE_ID`. `odin build` skips `_test.odin` files, which is the point: it
+keeps the Moosylvania shader metadata out of a release binary. Reinstating
+`scratch.odin` means moving those three declarations back into
+`venue_profile.odin`.
+
 A file compiles as soon as its set is back under `src/` — there is no build flag
 to unset, with one exception: both app probes call
 `venue_tracksplit_collision`, which no longer returns a ribbon, and both use

@@ -15,6 +15,12 @@ tools/
 assets/pacenotes/*
 !assets/pacenotes/.gitkeep
 
+# DiRT 3 shader metadata, cut out of two stock venues and kept as test
+# fixtures. Not ours to redistribute, and no release binary carries them: they
+# are reached only from _test.odin files, which `odin build` skips. Without
+# them the d3 suite reports the fixtures as missing and the build still works.
+assets/d3/*-materials.pssg
+
 # Machine-local settings: where the game is installed, and anything else that
 # differs per machine. Often a path inside a Proton prefix. Grammar and keys are
 # in src/app/config.odin.

@@ -3,6 +3,45 @@ package d3
 import "core:strings"
 import "core:testing"
 
+// Shader metadata cut out of the stock Moosylvania venue: no texture or
+// geometry payload, and see credits.txt. It lives in a _test.odin file so that
+// `odin build` cannot put DiRT 3 bytes in a release binary. Reinstating
+// refs/d3/scratch.odin means moving this back.
+//
+// Not in the repository, so the load has to survive its absence: a clone
+// without it still builds, and the tests below report it instead of failing
+// somewhere inside a parser.
+D3_FIXTURE_MATERIALS :: #load("../../assets/d3/moosylvania-materials.pssg", string) or_else ""
+D3_FIXTURE_ID :: "fixture"
+
+FIXTURE_MISSING :: "assets/d3/moosylvania-materials.pssg is not in the repository; see credits.txt"
+
+// The canary. Most of the d3 suite builds on one of the two DiRT 3 fixtures,
+// so on a clone without them a great many tests fail at once; this one names
+// the reason. Both files come out of a real install — see credits.txt.
+@(test)
+the_dirt3_fixtures_are_here :: proc(t: ^testing.T) {
+	testing.expect(t, len(D3_FIXTURE_MATERIALS) > 0, FIXTURE_MISSING)
+	testing.expect(t, len(D3_FIXTURE_WATER) > 0, WATER_FIXTURE_MISSING)
+}
+
+// The venue-less profile. A stage export takes the open venue's profile
+// instead, and refuses to run on this one.
+d3_profile_fixture :: proc() -> (profile: D3_Venue_Profile, msg: string, ok: bool) {
+	if len(D3_FIXTURE_MATERIALS) == 0 {
+		return {}, FIXTURE_MISSING, false
+	}
+	profile = d3_profile_defaults()
+	profile.id = D3_FIXTURE_ID
+	profile.template = transmute([]u8)D3_FIXTURE_MATERIALS
+	profile.lod = "lod"
+	profile.batch = "batchmaterial"
+	for material in Draw_Material { profile.visual[material] = "dirt_pebbles_01" }
+	profile.visual[.Terrain] = "grass_01"
+	msg, ok = d3_profile_complete(profile)
+	return
+}
+
 @(test)
 fixture_dirt3_profile_is_self_contained :: proc(t: ^testing.T) {
 	profile, msg, ok := d3_profile_fixture()
