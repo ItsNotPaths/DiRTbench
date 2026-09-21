@@ -31,8 +31,17 @@ jobs:
           )
           set >> "%GITHUB_ENV%"
 
+      # glslc comes from the Vulkan SDK. choco installs it and then says the
+      # shell has to be reopened before PATH catches up, which a job step never
+      # does — so the install directory goes on GITHUB_PATH by hand. The version
+      # is part of the path, so it is found rather than hardcoded.
       - name: Install the Vulkan SDK
-        run: choco install vulkan-sdk -y --no-progress
+        run: |
+          choco install vulkan-sdk -y --no-progress
+          sdk=$(ls -d /c/VulkanSDK/*/ | sort -V | tail -1)
+          echo "found $sdk"
+          ls "${sdk}Bin/glslc.exe"
+          cygpath -w "${sdk}Bin" >> "$GITHUB_PATH"
 
       - name: Odin
         run: |
