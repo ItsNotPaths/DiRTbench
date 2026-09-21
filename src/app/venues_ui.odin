@@ -276,8 +276,10 @@ draw_recovery_row :: proc(app: ^App, set: Recovery_Set, i: int) -> Recovery_Answ
 // The top line: where the game is. Every row below it is read out of this one
 // folder, so it is the first thing on the screen and not a menu item.
 //
-// The path is committed on Enter or by the native picker, never per keystroke:
-// each commit writes the config and re-scans the install.
+// The path is committed when the box loses focus — on Enter, on a click
+// elsewhere, or by the native picker — never per keystroke: each commit writes
+// the config and re-scans the install. Enter alone is not enough, because a
+// pasted path followed by a click reads as "the tool ignored me".
 @(private = "file")
 draw_game_path :: proc(app: ^App) {
 	ps := &app.screen
@@ -288,10 +290,11 @@ draw_game_path :: proc(app: ^App) {
 	ui.im_text("Game folder")
 	ui.im_same_line()
 	ui.igSetNextItemWidth(ui.igGetContentRegionAvail().x - PICK_BUTTON_W)
-	if ui.igInputText(
+	ui.igInputText(
 		"##game_path", raw_data(ps.game_path[:]), len(ps.game_path),
-		ui.IM_INPUT_TEXT_ENTER_RETURNS_TRUE, nil, nil,
-	) {
+		ui.IM_INPUT_TEXT_NONE, nil, nil,
+	)
+	if ui.igIsItemDeactivatedAfterEdit() {
 		game_path_commit(app, buf_text(ps.game_path[:]))
 	}
 	ui.im_same_line()
