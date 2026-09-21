@@ -31,6 +31,14 @@ CONF_NAME :: "dirtbench.conf"
 // commented rather than empty so the grammar is beside the keys.
 CONF_TEMPLATE :: #load("../../assets/dirtbench.conf.default")
 
+// Where ImGui saves the project manager's window layout, and the layout a first
+// run starts from. Both are here because ImGui's own default is a bare
+// `imgui.ini`, which it writes into whatever directory the tool was started
+// from — a file beside the binary is exactly what a single-file release must
+// not need.
+LAYOUT_NAME :: "imgui.ini"
+LAYOUT_TEMPLATE :: #load("../../assets/imgui.ini.default")
+
 // A line with no `=` comes back as the whole line in `key` with an empty `val`.
 // Callers reject that as a malformed entry rather than guessing at it.
 Config_Iter :: struct {
@@ -67,14 +75,29 @@ conf_path :: proc(allocator := context.temp_allocator) -> string {
 // existing config is left exactly as it is.
 conf_ensure :: proc(allocator := context.temp_allocator) -> (path: string, made: bool) {
 	path = conf_write_path(allocator)
+	return path, file_ensure(path, CONF_TEMPLATE)
+}
+
+// The same for the window layout, which is machine-local for the same reason
+// and shipped the same way. The path comes back for ImGui to save into; it is
+// never read by us.
+layout_ensure :: proc(allocator := context.temp_allocator) -> (path: string) {
+	path, _ = filepath.join({config_root(context.temp_allocator), LAYOUT_NAME}, allocator)
+	file_ensure(path, LAYOUT_TEMPLATE)
+	return path
+}
+
+// `data` at `path` when nothing is there yet, parents and all: on a first run
+// none of the directories above it exist either. Says whether it wrote.
+@(private = "file")
+file_ensure :: proc(path: string, data: []u8) -> bool {
 	if os.exists(path) {
-		return path, false
+		return false
 	}
-	dir := filepath.dir(path)
-	if err := os.make_directory_all(dir); err != nil && err != os.General_Error.Exist {
-		return path, false
+	if err := os.make_directory_all(filepath.dir(path)); err != nil && err != os.General_Error.Exist {
+		return false
 	}
-	return path, os.write_entire_file(path, CONF_TEMPLATE) == nil
+	return os.write_entire_file(path, data) == nil
 }
 
 // One key out of the config. Absent file and absent key are the same answer.

@@ -26,8 +26,8 @@ own `vendor-alma8/`, and refuses to finish if the glibc floor comes out wrong.
 ```
 
 Runs the `release` workflow on GitHub, which builds in the same image and
-publishes a tarball. The tree must be clean, HEAD must be pushed, and the
-version must not already be released.
+publishes one executable per platform, unarchived. The tree must be clean,
+HEAD must be pushed, and the version must not already be released.
 
 Nothing in the source carries a version number. The build stamps it, along with
 the commit, so `dirtbench --version` says exactly what a binary is:
@@ -62,7 +62,9 @@ replaces is copied to `<file>.orig`. A later export never touches that copy, so
 
 ```
 dirtbench --version
-dirtbench --notice                          # licence and third-party credits
+dirtbench --license                         # the licence
+dirtbench --credits                         # third-party code and data
+dirtbench --readme                          # this file
 dirtbench --venues                          # your venues
 dirtbench --venue-new <id> --base <venue> [--name <shown>]
 dirtbench --venue-deploy <id> [--apply]
@@ -88,7 +90,9 @@ instead. glTF always goes there, because the game cannot read it.
 ## License
 
 MIT, see `LICENSE`. Third-party code and data are listed in `credits.txt`.
-Both are compiled into the binary; `dirtbench --notice` prints them.
+Both are compiled into the binary, with this file: `dirtbench --license`,
+`--credits` and `--readme` print them. The download is one executable and
+needs nothing beside it.
 
 dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art is
 taken out of your own install at export time.

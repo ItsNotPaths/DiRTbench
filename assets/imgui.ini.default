@@ -1,0 +1,15 @@
+[Window][Project manager]
+Pos=0,22
+Size=936,1004
+
+[Window][Install_Scan]
+Pos=0,22
+Size=930,925
+
+[Window][upload_window]
+Pos=102,398
+Size=685,424
+
+[Window][browse_window]
+Pos=141,100
+Size=520,560

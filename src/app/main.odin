@@ -207,6 +207,10 @@ main :: proc() {
 	}
 	gfx.SetWindowImGui(&app.window, app.imgui)
 	defer ui.imgui_backend_shutdown(app.imgui)
+	// Before the first frame, which is when ImGui reads the layout. Ours rather
+	// than ImGui's default, which is a bare `imgui.ini` in whatever directory the
+	// tool was started from.
+	ui.imgui_backend_set_ini(app.imgui, fmt.ctprint(layout_ensure()))
 
 	// One audio device and one clip bank for the process. Decoding the pace-note
 	// clips again per editor window would be the same bytes three times over.

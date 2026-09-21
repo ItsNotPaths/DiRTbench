@@ -25,8 +25,16 @@ run_cli :: proc() -> (handled: bool) {
 		version_print()
 		os.exit(0)
 	}
-	if len(args) >= 1 && args[0] == "--notice" {
-		notice_print()
+	if len(args) >= 1 && args[0] == "--license" {
+		license_print()
+		os.exit(0)
+	}
+	if len(args) >= 1 && args[0] == "--credits" {
+		credits_print()
+		os.exit(0)
+	}
+	if len(args) >= 1 && args[0] == "--readme" {
+		readme_print()
 		os.exit(0)
 	}
 	if len(args) >= 2 && args[0] == "--pacenotes" {

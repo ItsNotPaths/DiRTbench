@@ -110,20 +110,15 @@ jobs:
             cmd //c "build\\dirtbench.exe --version"
             exit 1
           fi
-          ./build/dirtbench.exe --notice | head -3
+          ./build/dirtbench.exe --license | head -3
 
-      # What the binary embeds, beside it, so a download carries its notices.
-      - name: Stage the artifact
-        run: |
-          dir=dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64
-          mkdir -p "$dir"
-          cp build/dirtbench.exe LICENSE credits.txt README.md "$dir/"
-          7z a "$dir.zip" "$dir" > /dev/null
-          sha256sum "$dir.zip" > "$dir.zip.sha256"
+      # The release asset is the .exe itself. See release.yml for why there is
+      # no archive and no checksum file. The extension has to survive, or the
+      # download will not start.
+      - name: Name the artifact
+        run: mv build/dirtbench.exe "dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: |
-            dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.zip
-            dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.zip.sha256
+          path: dirtbench-${{ inputs.version || 'dev' }}-windows-x86_64.exe

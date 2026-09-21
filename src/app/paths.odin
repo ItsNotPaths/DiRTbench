@@ -9,6 +9,7 @@ package main
 // `core:os` already knows both.
 //
 //     <config>/dirtbench.conf      machine-local settings (config.odin)
+//     <config>/imgui.ini           the project manager's window layout
 //     <data>/maps/                 loose road documents
 //     <data>/maps/crash-backups/   autosaves (recovery.odin)
 //     <data>/venues/               our venues, one directory each

@@ -84,21 +84,18 @@ jobs:
           got=$(./build/dirtbench --version)
           [ "$got" = "$want" ] || { echo "::error::got '$got', wanted '$want'"; exit 1; }
 
-      # What the binary embeds, next to it, so a download carries its notices.
-      - name: Stage the artifact
-        run: |
-          dir=dirtbench-${{ inputs.version }}-linux-x86_64
-          mkdir -p "$dir"
-          cp build/dirtbench LICENSE credits.txt README.md "$dir/"
-          tar czf "$dir.tar.gz" "$dir"
-          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      # The release asset is the binary itself, under a name that says which
+      # platform it is for. No archive: there is one file, and unpacking it to
+      # get one file is a step for nothing. No checksum either — the release
+      # page prints a digest beside every asset. The licence, the credits and
+      # the README are compiled in; see src/app/notice.odin.
+      - name: Name the artifact
+        run: mv build/dirtbench dirtbench-${{ inputs.version }}-linux-x86_64
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: |
-            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz
-            dirtbench-${{ inputs.version }}-linux-x86_64.tar.gz.sha256
+          path: dirtbench-${{ inputs.version }}-linux-x86_64
 
   # One definition of the Windows build, in windows.yml, called from here.
   windows:

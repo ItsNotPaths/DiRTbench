@@ -30,9 +30,8 @@ assets/d3/*-materials.pssg
 # in src/app/config.odin.
 dirtbench.conf
 
-# ImGui writes its window layout next to the running binary. Per-machine state,
-# not project config; a committed copy pins everyone's panels to whoever ran the
-# editor last.
+# The layout now lives in the config directory (assets/imgui.ini.default is the
+# shipped one), but an older build may still have dropped this here.
 imgui.ini
 
 # Rendered previews of parsed game data, regenerated from a real install.
