@@ -13,6 +13,7 @@ package main
 
 import "core:fmt"
 import "../geo"
+import "../net"
 import "../ui"
 import "../gfx"
 
@@ -184,6 +185,7 @@ editor_close :: proc(app: ^App, ed: ^Editor) {
 }
 
 main :: proc() {
+	net.user_agent = "DiRTbench/" + VERSION + " (+https://github.com/ItsNotPaths/DiRTbench)"
 	if run_cli() {
 		return
 	}

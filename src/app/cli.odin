@@ -21,6 +21,14 @@ import "../gfx"
 // without ever opening a window. Anything else falls through to the editor.
 run_cli :: proc() -> (handled: bool) {
 	args := os.args[1:]
+	if len(args) >= 1 && args[0] == "--version" {
+		version_print()
+		os.exit(0)
+	}
+	if len(args) >= 1 && args[0] == "--notice" {
+		notice_print()
+		os.exit(0)
+	}
 	if len(args) >= 2 && args[0] == "--pacenotes" {
 		pacenotes_headless(args[1], len(args) > 2 && args[2] == "--reverse")
 		os.exit(0)

@@ -1,12 +1,32 @@
-Third-party code, fetched by download-deps.sh:
+dirtbench is MIT licensed; see LICENSE. What follows is everything in the
+binary that someone else made.
+
+Third-party code, fetched by download-deps.sh and linked in:
   Dear ImGui + cimgui                 MIT
   ImGuizmo + cimguizmo                MIT
   delaunator-cpp                      MIT
   SDL                                 zlib
 
-Third-party data, checked in:
+Third-party data, checked in and embedded:
   assets/d3/schemaDirt3.xml           Ego-Engine-Modding
     The DiRT 3 database layout. src/d3/database.odin reads database.bin
     through it. Taken as-is from
     github.com/EgoEngineModding/Ego-Engine-Modding,
     src/EgoDatabaseEditor/schema/schemaDirt3.xml
+
+  assets/pacenotes/*.ogg              Deuterium, the Sentient Mattress
+    The co-driver voice, recorded for dirtbench.
+    youtube.com/@DeuteriumtheSentientMattress
+
+Our own, but describing DiRT 3, and embedded:
+  assets/d3/codriver/*.txt
+    What each recording in a venue's stock speech bank says. Clip ids are the
+    game's; the transcriptions are ours, from two whisper passes reconciled by
+    ear. No game audio here, only names and text.
+
+  assets/d3/palettes/*.txt
+    Which stock texture and collision names a venue's road, ground and tarmac
+    use. Names only, no texture payload.
+
+dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art
+comes out of the player's own install at export time, into content-packs/.

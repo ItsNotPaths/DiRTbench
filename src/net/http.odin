@@ -66,7 +66,8 @@ INFO_RESPONSE_CODE :: 2097154
 // What the tool calls itself on the wire. Cloudflare's Browser Integrity Check
 // refuses known scripting-library agents with error 1010 before the request
 // reaches the origin, so this names the tool, not the client underneath it.
-USER_AGENT :: "DiRTbench/1.0 (+https://github.com/ItsNotPaths/DiRTbench)"
+// The build's version belongs to the app, which writes it in at startup.
+user_agent: cstring = "DiRTbench (+https://github.com/ItsNotPaths/DiRTbench)"
 
 GLOBAL_DEFAULT :: 3
 
@@ -292,7 +293,7 @@ request :: proc(
 	tag := make([dynamic]u8, 0, 64, allocator)
 	defer delete(tag)
 	curl.setopt_str(handle, OPT_URL, strings.clone_to_cstring(url, context.temp_allocator))
-	curl.setopt_str(handle, OPT_USERAGENT, USER_AGENT)
+	curl.setopt_str(handle, OPT_USERAGENT, user_agent)
 	curl.setopt_ptr(handle, OPT_WRITEFUNCTION, rawptr(write_cb))
 	curl.setopt_ptr(handle, OPT_WRITEDATA, &body)
 	curl.setopt_ptr(handle, OPT_HEADERFUNCTION, rawptr(header_cb))

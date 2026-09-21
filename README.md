@@ -34,6 +34,8 @@ replaces is copied to `<file>.orig`. A later export never touches that copy, so
 ## Command line
 
 ```
+dirtbench --version
+dirtbench --notice                          # licence and third-party credits
 dirtbench --venues                          # your venues
 dirtbench --venue-new <id> --base <venue> [--name <shown>]
 dirtbench --venue-deploy <id> [--apply]
@@ -59,3 +61,7 @@ instead. glTF always goes there, because the game cannot read it.
 ## License
 
 MIT, see `LICENSE`. Third-party code and data are listed in `credits.txt`.
+Both are compiled into the binary; `dirtbench --notice` prints them.
+
+dirtbench ships no DiRT 3 art, audio, geometry or level data. A venue's art is
+taken out of your own install at export time.
