@@ -17,8 +17,14 @@ package ui
 import "core:c"
 
 // The build scripts place the static C++ runtime after this archive.
-foreign import imgui {
-	"../../vendor/imgui/libimgui.a",
+when ODIN_OS == .Windows {
+	foreign import imgui {
+		"../../vendor/imgui/imgui.lib",
+	}
+} else {
+	foreign import imgui {
+		"../../vendor/imgui/libimgui.a",
+	}
 }
 
 // --- types ------------------------------------------------------------------

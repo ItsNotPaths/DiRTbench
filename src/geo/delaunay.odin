@@ -14,8 +14,14 @@ package geo
 
 import "core:c"
 
-foreign import delaunay_lib {
-	"../../vendor/delaunay/libdelaunay.a",
+when ODIN_OS == .Windows {
+	foreign import delaunay_lib {
+		"../../vendor/delaunay/delaunay.lib",
+	}
+} else {
+	foreign import delaunay_lib {
+		"../../vendor/delaunay/libdelaunay.a",
+	}
 }
 
 @(default_calling_convention = "c")

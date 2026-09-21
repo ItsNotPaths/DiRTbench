@@ -5,6 +5,49 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENDOR="$ROOT/vendor"
 
+# Windows compiles the same sources with MSVC instead of gcc, and names the
+# archives the way `foreign import` asks for them there. Everything else —
+# what is fetched, the pins, the staleness tests — is shared.
+#
+# On Windows this script wants an MSVC environment already set up (vcvars64),
+# because `cl` and `lib` are not on PATH without one.
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) WINDOWS=true ;;
+    *)                    WINDOWS=false ;;
+esac
+
+# One object from one source. Same arguments either way; the flags differ.
+compile_obj() {
+    local out="$1" src="$2"; shift 2
+    if $WINDOWS; then
+        cl //nologo //std:c++14 //O2 //EHsc- //GR- //c //Fo:"$out" "$@" "$src"
+    else
+        c++ -std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti -c -o "$out" "$@" "$src"
+    fi
+}
+
+# One static library from a pile of objects. Replaces whatever was there.
+archive() {
+    local out="$1"; shift
+    rm -f "$out"
+    if $WINDOWS; then
+        lib //nologo //OUT:"$out" "$@"
+    else
+        ar rcs "$out" "$@"
+    fi
+}
+
+# What the archives are called, which is what src/ `foreign import`s.
+if $WINDOWS; then
+    IMGUI_LIB_NAME=imgui.lib
+    DELAUNAY_LIB_NAME=delaunay.lib
+    OBJ_EXT=obj
+else
+    IMGUI_LIB_NAME=libimgui.a
+    DELAUNAY_LIB_NAME=libdelaunay.a
+    OBJ_EXT=o
+fi
+
 # --check reports what is missing or stale and builds nothing. release.sh uses
 # it as its dependency guard.
 CHECK_ONLY=false
@@ -61,7 +104,17 @@ fetch() {
 SDL_VERSION="3.4.16"
 SDL_SRC="$VENDOR/sdl3-src"
 SDL_DEST="$VENDOR/sdl3"
-SDL_A="$SDL_DEST/libSDL3.a"
+# What cmake produces, and what we install it as. Odin's `vendor:sdl3` does
+# `foreign import lib { "SDL3.lib" }` on Windows — a bare name the linker
+# resolves off /LIBPATH — so the static library has to land under that name.
+if $WINDOWS; then
+    SDL_BUILT_NAME=SDL3-static.lib
+    SDL_LIB_NAME=SDL3.lib
+else
+    SDL_BUILT_NAME=libSDL3.a
+    SDL_LIB_NAME=libSDL3.a
+fi
+SDL_A="$SDL_DEST/$SDL_LIB_NAME"
 SDL_STAMP="$SDL_DEST/config.stamp"
 
 # A failed feature probe leaves a misleading cache behind, so configuration is
@@ -76,6 +129,12 @@ SDL_CMAKE_FLAGS=(
     -DSDL_POWER=OFF -DSDL_DIALOG=OFF -DSDL_TRAY=OFF
     -DSDL_X11_XTEST=OFF -DSDL_TEST_LIBRARY=OFF
 )
+
+# MSVC picks its runtime per configuration, and every object in the final link
+# has to agree. Odin's Windows target is the non-debug dynamic CRT.
+if $WINDOWS; then
+    SDL_CMAKE_FLAGS+=(-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreadedDLL)
+fi
 
 sdl_config() { echo "$SDL_VERSION ${SDL_CMAKE_FLAGS[*]}"; }
 
@@ -97,9 +156,14 @@ fetch_sdl() {
     echo "  compiling static SDL3..."
     rm -rf "$SDL_SRC/build"
     cmake -S "$SDL_SRC" -B "$SDL_SRC/build" "${SDL_CMAKE_FLAGS[@]}" >/dev/null
-    cmake --build "$SDL_SRC/build" --parallel >/dev/null
+    cmake --build "$SDL_SRC/build" --config Release --parallel >/dev/null
     mkdir -p "$SDL_DEST"
-    cp "$SDL_SRC/build/libSDL3.a" "$SDL_A"
+    # A multi-config generator (which is what cmake picks on Windows) puts the
+    # library under its configuration rather than beside the cache.
+    local built
+    built="$(find "$SDL_SRC/build" -name "$SDL_BUILT_NAME" -print -quit)"
+    [ -n "$built" ] || { echo "  $SDL_BUILT_NAME was not produced" >&2; exit 1; }
+    cp "$built" "$SDL_A"
     sdl_config > "$SDL_STAMP"
     echo "  done."
 }
@@ -134,7 +198,7 @@ IMGUI_DEST="$VENDOR/imgui"
 
 # A newer backend source or shim must retrigger the build.
 imgui_stale() {
-    local a="$IMGUI_DEST/libimgui.a"
+    local a="$IMGUI_DEST/$IMGUI_LIB_NAME"
     if [ ! -f "$a" ] || [ ! -f "$IMGUI_DEST/backends/imgui_impl_sdlgpu3.cpp" ]; then
         return 0
     fi
@@ -178,25 +242,23 @@ fetch_imgui() {
 
     rm -rf "$tmp"
 
-    echo "  compiling libimgui.a..."
-    local flags=(-std=c++11 -O2 -fPIC -fno-exceptions -fno-rtti
-                 -I"$IMGUI_DEST" -I"$IMGUI_DEST/imgui" -I"$SDL_SRC/include")
+    echo "  compiling $IMGUI_LIB_NAME..."
+    local inc=(-I"$IMGUI_DEST" -I"$IMGUI_DEST/imgui" -I"$SDL_SRC/include")
     local srcs=(imgui/imgui.cpp imgui/imgui_draw.cpp imgui/imgui_tables.cpp
                 imgui/imgui_widgets.cpp imgui/imgui_demo.cpp
                 cimgui.cpp ImGuizmo/src/ImGuizmo.cpp cimguizmo.cpp
                 backends/imgui_impl_sdl3.cpp backends/imgui_impl_sdlgpu3.cpp)
     local objs=()
     for s in "${srcs[@]}"; do
-        local o="$IMGUI_DEST/${s//\//_}.o"
-        c++ "${flags[@]}" -c -o "$o" "$IMGUI_DEST/$s"
+        local o="$IMGUI_DEST/${s//\//_}.$OBJ_EXT"
+        compile_obj "$o" "$IMGUI_DEST/$s" "${inc[@]}"
         objs+=("$o")
     done
     # Our own glue (tracked in csrc/, not vendored) rides in the same archive.
-    c++ "${flags[@]}" -c -o "$IMGUI_DEST/dirt_imgui_shim.o" "$ROOT/csrc/dirt_imgui_shim.cpp"
-    objs+=("$IMGUI_DEST/dirt_imgui_shim.o")
+    compile_obj "$IMGUI_DEST/dirt_imgui_shim.$OBJ_EXT" "$ROOT/csrc/dirt_imgui_shim.cpp" "${inc[@]}"
+    objs+=("$IMGUI_DEST/dirt_imgui_shim.$OBJ_EXT")
 
-    rm -f "$IMGUI_DEST/libimgui.a"
-    ar rcs "$IMGUI_DEST/libimgui.a" "${objs[@]}"
+    archive "$IMGUI_DEST/$IMGUI_LIB_NAME" "${objs[@]}"
     echo "  done."
 }
 
@@ -218,7 +280,7 @@ DELAUNAY_DEST="$VENDOR/delaunay"
 
 # Our shim is the archive's only source, so editing it must rebuild.
 delaunay_stale() {
-    local a="$DELAUNAY_DEST/libdelaunay.a"
+    local a="$DELAUNAY_DEST/$DELAUNAY_LIB_NAME"
     if [ ! -f "$a" ]; then
         return 0
     fi
@@ -243,11 +305,18 @@ fetch_delaunay() {
         rm -rf "$tmp"
     fi
 
-    echo "  compiling libdelaunay.a..."
-    c++ -std=c++11 -O2 -fPIC -fno-rtti -I"$DELAUNAY_DEST" \
-        -c -o "$DELAUNAY_DEST/dirt_delaunay_shim.o" "$ROOT/csrc/dirt_delaunay_shim.cpp"
-    rm -f "$DELAUNAY_DEST/libdelaunay.a"
-    ar rcs "$DELAUNAY_DEST/libdelaunay.a" "$DELAUNAY_DEST/dirt_delaunay_shim.o"
+    # Built *with* exceptions: delaunator throws on degenerate input, and
+    # libimgui is built without them, so the two must not share an archive.
+    echo "  compiling $DELAUNAY_LIB_NAME..."
+    local obj="$DELAUNAY_DEST/dirt_delaunay_shim.$OBJ_EXT"
+    if $WINDOWS; then
+        cl //nologo //std:c++14 //O2 //EHsc //GR- //c //Fo:"$obj" \
+            -I"$DELAUNAY_DEST" "$ROOT/csrc/dirt_delaunay_shim.cpp"
+    else
+        c++ -std=c++11 -O2 -fPIC -fno-rtti -I"$DELAUNAY_DEST" -c -o "$obj" \
+            "$ROOT/csrc/dirt_delaunay_shim.cpp"
+    fi
+    archive "$DELAUNAY_DEST/$DELAUNAY_LIB_NAME" "$obj"
     echo "  done."
 }
 

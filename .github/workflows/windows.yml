@@ -1,0 +1,68 @@
+name: windows
+
+# The Windows build, still being brought up. Push-triggered on its own branch so
+# the failures stay off main and out of the releases page. Once it goes green it
+# folds into release.yml as a second job.
+#
+# No container here: the glibc problem that forces release.yml into AlmaLinux 8
+# does not exist on Windows, so this builds natively on the runner.
+on:
+  push:
+    branches: [windows-build]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # download-deps.sh calls cl and lib, which are not on PATH until vcvars
+      # has run. vswhere finds the install; the edition differs between runner
+      # images, so it must not be hardcoded.
+      - name: MSVC environment
+        shell: cmd
+        run: |
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do (
+            call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          )
+          set >> "%GITHUB_ENV%"
+
+      - name: Install the Vulkan SDK
+        run: choco install vulkan-sdk -y --no-progress
+
+      - name: Odin
+        run: |
+          curl -fsSL -o odin.zip \
+            "https://github.com/odin-lang/Odin/releases/download/dev-2026-08/odin-windows-amd64-dev-2026-08.zip"
+          7z x odin.zip -oodin-dist > /dev/null
+          # The zip's top-level directory name is not stable across releases.
+          root=$(find odin-dist -maxdepth 2 -name odin.exe -printf '%h\n' | head -1)
+          echo "$(cygpath -w "$root")" >> "$GITHUB_PATH"
+
+      - name: Shaders
+        run: ./build-shaders.sh
+
+      - name: Dependencies
+        run: ./download-deps.sh
+
+      # Static SDL3 pulls in the Win32 libraries it wraps. A shared build would
+      # carry them itself; linked by hand, they have to be named. The list is
+      # SDL's own, from sdl_link_dependency(base ...) in its CMakeLists.
+      - name: Build
+        run: |
+          odin build src/app -o:speed -out:build/dirtbench.exe \
+            -extra-linker-flags:"/LIBPATH:$(cygpath -w "$PWD/vendor/sdl3") /LIBPATH:$(cygpath -w "$PWD/vendor/imgui") /LIBPATH:$(cygpath -w "$PWD/vendor/delaunay") kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib setupapi.lib shell32.lib"
+
+      - name: Check it runs
+        run: |
+          ./build/dirtbench.exe --version
+          ./build/dirtbench.exe --notice | head -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dirtbench-windows-x86_64
+          path: build/dirtbench.exe

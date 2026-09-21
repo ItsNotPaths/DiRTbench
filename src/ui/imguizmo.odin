@@ -14,8 +14,14 @@ import "../gfx"
 
 // ImGuizmo lives in the same archive as ImGui. `foreign import` is file-scoped,
 // so this restates the import from imgui.odin rather than sharing it.
-foreign import imgui_lib {
-	"../../vendor/imgui/libimgui.a",
+when ODIN_OS == .Windows {
+	foreign import imgui_lib {
+		"../../vendor/imgui/imgui.lib",
+	}
+} else {
+	foreign import imgui_lib {
+		"../../vendor/imgui/libimgui.a",
+	}
 }
 
 // --- cimguizmo --------------------------------------------------------------

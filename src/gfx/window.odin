@@ -8,7 +8,11 @@ package gfx
 import "core:c"
 import sdl "vendor:sdl3"
 
-foreign import imgui "../../vendor/imgui/libimgui.a"
+when ODIN_OS == .Windows {
+	foreign import imgui "../../vendor/imgui/imgui.lib"
+} else {
+	foreign import imgui "../../vendor/imgui/libimgui.a"
+}
 @(default_calling_convention = "c")
 foreign imgui {
 	dirtImGuiProcessEvent :: proc(event: ^sdl.Event) ---
