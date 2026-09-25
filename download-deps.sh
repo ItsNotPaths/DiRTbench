@@ -348,6 +348,59 @@ fetch_delaunay() {
 
 dep delaunay delaunay_stale fetch_delaunay
 
+# --- libcurl (Windows only) --------------------------------------------------
+# Linux opens the system libcurl at runtime. Windows ships none, so a static one
+# is linked in (src/net/curl_static.odin). Schannel does TLS, which means no
+# OpenSSL and the OS certificate store. HTTP only, no optional libraries.
+if $WINDOWS; then
+    CURL_VERSION="8.22.0"
+    CURL_SRC="$VENDOR/curl-src"
+    CURL_DEST="$VENDOR/curl"
+    CURL_A="$CURL_DEST/libcurl.lib"
+    CURL_STAMP="$CURL_DEST/config.stamp"
+
+    CURL_CMAKE_FLAGS=(
+        -DCMAKE_BUILD_TYPE=Release
+        -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON
+        -DBUILD_CURL_EXE=OFF -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
+        -DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF -DENABLE_CURL_MANUAL=OFF
+        -DHTTP_ONLY=ON
+        -DCURL_USE_SCHANNEL=ON -DCURL_STATIC_CRT=ON
+        -DCURL_USE_LIBPSL=OFF -DUSE_LIBIDN2=OFF -DUSE_NGHTTP2=OFF
+        -DCURL_USE_LIBSSH2=OFF -DCURL_ZLIB=OFF -DCURL_BROTLI=OFF -DCURL_ZSTD=OFF
+    )
+
+    curl_config() { echo "$CURL_VERSION ${CURL_CMAKE_FLAGS[*]}"; }
+
+    curl_stale() {
+        [ ! -f "$CURL_A" ] || [ "$(cat "$CURL_STAMP" 2>/dev/null)" != "$(curl_config)" ]
+    }
+
+    fetch_curl() {
+        if [ ! -d "$CURL_SRC" ] || [ -z "$(ls -A "$CURL_SRC" 2>/dev/null)" ]; then
+            echo "  downloading curl $CURL_VERSION..."
+            mkdir -p "$CURL_SRC"
+            curl -fsSL "https://curl.se/download/curl-${CURL_VERSION}.tar.gz" \
+                | tar xz --strip-components=1 -C "$CURL_SRC" \
+                || { rm -rf "$CURL_SRC"; exit 1; }
+        fi
+
+        echo "  compiling static libcurl..."
+        rm -rf "$CURL_SRC/build"
+        cmake -S "$CURL_SRC" -B "$CURL_SRC/build" "${CURL_CMAKE_FLAGS[@]}" >/dev/null
+        cmake --build "$CURL_SRC/build" --config Release --parallel >/dev/null
+        mkdir -p "$CURL_DEST"
+        local built
+        built="$(find "$CURL_SRC/build" -name libcurl.lib -print -quit)"
+        [ -n "$built" ] || { echo "  libcurl.lib was not produced" >&2; exit 1; }
+        cp "$built" "$CURL_A"
+        curl_config > "$CURL_STAMP"
+        echo "  done."
+    }
+
+    dep curl curl_stale fetch_curl
+fi
+
 if $STALE; then
     echo "run ./download-deps.sh" >&2
     exit 1

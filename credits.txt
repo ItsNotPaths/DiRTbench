@@ -6,6 +6,7 @@ Third-party code, fetched by download-deps.sh and linked in:
   ImGuizmo + cimguizmo                MIT
   delaunator-cpp                      MIT
   SDL                                 zlib
+  libcurl (Windows build only)        curl
 
 Third-party data, checked in and embedded:
   assets/d3/schemaDirt3.xml           Ego-Engine-Modding

@@ -3,19 +3,14 @@ package net
 // The two request shapes dirtbench asks of the network: a multipart POST, which
 // publishes a venue, and a GET, which browses and downloads one.
 //
-// libcurl is opened at runtime rather than linked. The binary depends on libc
-// and libm and nothing else, and `-lcurl` would add libcurl.so.4 plus the ssl,
-// crypto, nghttp2, zstd and brotli it drags behind it. Opening it instead keeps
-// that list empty and makes the dependency optional: a machine without libcurl
-// loses upload and browsing, and keeps the tool.
+// Both go through libcurl. How it arrives differs per platform: curl_dlopen.odin
+// opens the system one at runtime, curl_static.odin links our own build in.
 //
 // Nothing here knows what dirtbench.paths.place wants. The form is the caller's.
 
 import "base:runtime"
 import "core:c"
-import "core:dynlib"
 import "core:strings"
-import "core:sync"
 
 // Where a part's bytes come from. A part is one or the other, never both.
 Form_Field :: struct {
@@ -71,11 +66,9 @@ user_agent: cstring = "DiRTbench (+https://github.com/ItsNotPaths/DiRTbench)"
 
 GLOBAL_DEFAULT :: 3
 
-// curl_easy_setopt and curl_easy_getinfo are variadic in C, and a variadic call
-// cannot be made through one typed pointer. Three aliases of the same symbol,
-// one per argument shape, is the ordinary way to bind them.
+// The libcurl calls this file makes. Each platform's curl_load fills it.
 Curl :: struct {
-	lib: dynlib.Library,
+	ready: bool,
 
 	global_init:  proc "c" (flags: c.long) -> c.int,
 	easy_init:    proc "c" () -> rawptr,
@@ -83,6 +76,8 @@ Curl :: struct {
 	easy_perform: proc "c" (handle: rawptr) -> c.int,
 	easy_strerror: proc "c" (code: c.int) -> cstring,
 
+	// curl_easy_setopt and curl_easy_getinfo are variadic in C, so there is one
+	// typed entry per argument shape.
 	setopt_str:  proc "c" (handle: rawptr, opt: c.int, val: cstring) -> c.int,
 	setopt_long: proc "c" (handle: rawptr, opt: c.int, val: c.long) -> c.int,
 	setopt_ptr:  proc "c" (handle: rawptr, opt: c.int, val: rawptr) -> c.int,
@@ -101,70 +96,14 @@ Curl :: struct {
 	slist_free_all:  proc "c" (list: rawptr),
 }
 
-// The sonames to try, in order. One per platform; the others simply do not open.
-LIB_NAMES :: []string{"libcurl.so.4", "libcurl.so", "libcurl.4.dylib", "libcurl.dylib", "libcurl.dll"}
-
 @(private)
 curl: Curl
-@(private)
-curl_once: sync.Once
-
-// Open libcurl once per process. Every entry point goes through this, so a
-// machine without it answers the same way however it is asked.
-@(private)
-curl_load :: proc() {
-	sync.once_do(&curl_once, proc() {
-		for name in LIB_NAMES {
-			if lib, ok := dynlib.load_library(name); ok {
-				curl.lib = lib
-				break
-			}
-		}
-		if curl.lib == nil {
-			return
-		}
-		bind :: proc(dst: rawptr, name: string) -> bool {
-			addr, found := dynlib.symbol_address(curl.lib, name)
-			if !found {
-				return false
-			}
-			(^rawptr)(dst)^ = addr
-			return true
-		}
-		// Every symbol, or none: a partial binding would fault at the first gap
-		// instead of reporting a missing library.
-		all := bind(&curl.global_init, "curl_global_init") &&
-			bind(&curl.easy_init, "curl_easy_init") &&
-			bind(&curl.easy_cleanup, "curl_easy_cleanup") &&
-			bind(&curl.easy_perform, "curl_easy_perform") &&
-			bind(&curl.easy_strerror, "curl_easy_strerror") &&
-			bind(&curl.setopt_str, "curl_easy_setopt") &&
-			bind(&curl.setopt_long, "curl_easy_setopt") &&
-			bind(&curl.setopt_ptr, "curl_easy_setopt") &&
-			bind(&curl.getinfo_long, "curl_easy_getinfo") &&
-			bind(&curl.mime_init, "curl_mime_init") &&
-			bind(&curl.mime_free, "curl_mime_free") &&
-			bind(&curl.mime_addpart, "curl_mime_addpart") &&
-			bind(&curl.mime_name, "curl_mime_name") &&
-			bind(&curl.mime_data, "curl_mime_data") &&
-			bind(&curl.mime_filedata, "curl_mime_filedata") &&
-			bind(&curl.mime_filename, "curl_mime_filename") &&
-			bind(&curl.mime_type, "curl_mime_type") &&
-			bind(&curl.slist_append, "curl_slist_append") &&
-			bind(&curl.slist_free_all, "curl_slist_free_all")
-		if !all {
-			curl.lib = nil
-			return
-		}
-		curl.global_init(GLOBAL_DEFAULT)
-	})
-}
 
 // Whether this machine can make a request at all. The caller greys its button
 // with this rather than letting the user find out by pressing it.
 available :: proc() -> bool {
 	curl_load()
-	return curl.lib != nil
+	return curl.ready
 }
 
 // --- the request ---------------------------------------------------------------
@@ -245,7 +184,7 @@ request :: proc(
 	err: Error,
 ) {
 	curl_load()
-	if curl.lib == nil {
+	if !curl.ready {
 		return {}, "libcurl is not installed on this machine", .No_Library
 	}
 	handle := curl.easy_init()
