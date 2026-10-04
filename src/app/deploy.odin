@@ -237,7 +237,7 @@ registration_paths :: proc(root: string) -> [3]string {
 // by hand. An older `.rallysculpt-stock` counts.
 @(private = "file")
 ensure_stock_backup :: proc(path: string) -> (msg: string, ok: bool) {
-	for suffix in ([]string{".rallysculpt-stock", ".dirtbench-stock"}) {
+	for suffix in d3.STOCK_DATABASE_SUFFIXES {
 		if os.is_file(fmt.tprintf("%s%s", path, suffix)) {
 			return "", true
 		}
@@ -521,6 +521,9 @@ venue_deploy :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	if !ok {
 		return
 	}
+	if msg, ok = d3.online_server_file_sync(vs.install.root); !ok {
+		return
+	}
 	return fmt.tprintf("%s\ndeployed", venue_deployment_text(deployment)), true
 }
 
@@ -564,12 +567,28 @@ venue_revert :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 			remove_err,
 		), false
 	}
+	if msg, ok = d3.online_server_file_sync(vs.install.root); !ok {
+		return
+	}
 	return fmt.tprintf(
 		"%s\nreverted %s; document remains at %s",
 		summary,
 		p.name,
 		venue_path(dir),
 	), true
+}
+
+online_checksums_blank_headless :: proc() -> bool {
+	vs: Install_Scan
+	install_scan_init(&vs)
+	defer install_scan_delete(&vs)
+	if !vs.found {
+		fmt.println(install_scan_status_text(&vs))
+		return false
+	}
+	msg, ok := d3.online_checksums_blank(vs.install.root)
+	fmt.println(msg)
+	return ok
 }
 
 // Shared scaffold for the --venue-* commands: find, act, print, exit code.

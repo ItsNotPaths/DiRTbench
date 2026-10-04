@@ -56,6 +56,10 @@ run_cli :: proc() -> (handled: bool) {
 	if len(args) >= 1 && args[0] == "--dirt3-venues" {
 		os.exit(install_headless() ? 0 : 1)
 	}
+	// `--online-checksums-blank`: let modded installs race online together.
+	if len(args) == 1 && args[0] == "--online-checksums-blank" {
+		os.exit(online_checksums_blank_headless() ? 0 : 1)
+	}
 	// `--venues`: what is under venues/, and the stage documents each holds.
 	// `--dirt3-pack [<venue>]`: what shaders a venue would give a venue of ours.
 	if len(args) >= 1 && args[0] == "--dirt3-pack" {

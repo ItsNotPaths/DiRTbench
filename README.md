@@ -54,6 +54,7 @@ dirtbench --venues                          # your venues
 dirtbench --venue-new <id> --base <venue> [--name <shown>]
 dirtbench --venue-deploy <id> [--apply]
 dirtbench --venue-revert <id>
+dirtbench --online-checksums-blank          # unlock online play with modded installs
 dirtbench --dirt3-venues                    # the game's venues, and the broken entries
 
 dirtbench --export <stage> --venue <id> [--target gltf|dirt3] [--terrain]
