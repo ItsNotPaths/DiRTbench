@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ./build-shaders.sh
 odin test src/d3
+odin test src/nefs
 odin test src/gfx
 CXX_RUNTIME="$(c++ -print-file-name=libstdc++.a)"
 GCC_RUNTIME="$(cc -print-libgcc-file-name)"
