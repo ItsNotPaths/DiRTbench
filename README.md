@@ -71,6 +71,10 @@ instead. glTF always goes there, because the game cannot read it.
   team, for the database schema and for years of work on the Ego formats.
 - [Petar](https://github.com/ptasev) Especially for decades of pssg RE and ego-engine-modding work before me. 
 - [ssor0](https://github.com/ssor0), for the PSSG/vis/general format knowledge.
+- [ismellyu](https://github.com/ISmellYu), for [Grid2Bypass](https://github.com/ISmellYu/Grid2Bypass),
+  which mapped the code self-check that DiRT 3 shares.
+- [Victor Bush](https://github.com/victorbush), for [NefsEdit](https://github.com/victorbush/ego.nefsedit)
+  and the NeFS archive layout that online play edits.
 
 ## License
 
