@@ -65,7 +65,7 @@ seed_database :: proc(t: ^testing.T) -> (schema: []Schema_Table, db: Database) {
 	_ = row_set_str(models, model, "file_string", "finland_rally")
 	_ = row_set_str(models, model, "route_string", "route_0")
 
-	for name in ([]string{"track_model_conditions", "track_model_surface"}) {
+	for name in RELATED_TABLES {
 		table, _ := database_table(&db, name)
 		row := seed_row(table)
 		_ = row_set_int(table, row, "id", 1)
@@ -133,8 +133,9 @@ revert_of_an_older_venue_leaves_a_newer_one_intact :: proc(t: ^testing.T) {
 
 	// beta owns two models, so both of its cloned child rows must survive and
 	// both of alpha's must be gone: donor 1 + beta 2 per table.
-	testing.expect_value(t, row_count(&db, "track_model_conditions"), 3)
-	testing.expect_value(t, row_count(&db, "track_model_surface"), 3)
+	for name in RELATED_TABLES {
+		testing.expect_value(t, row_count(&db, name), 3)
+	}
 	testing.expect_value(t, row_count(&db, "location"), 2)
 	testing.expect_value(t, row_count(&db, "track"), 2)
 }
@@ -160,8 +161,9 @@ revert_of_both_venues_returns_the_seed :: proc(t: ^testing.T) {
 	testing.expect_value(t, row_count(&db, "location"), 1)
 	testing.expect_value(t, row_count(&db, "track"), 1)
 	testing.expect_value(t, row_count(&db, "track_model"), 1)
-	testing.expect_value(t, row_count(&db, "track_model_conditions"), 1)
-	testing.expect_value(t, row_count(&db, "track_model_surface"), 1)
+	for name in RELATED_TABLES {
+		testing.expect_value(t, row_count(&db, name), 1)
+	}
 
 	again, _, re_encoded := database_encode(db)
 	defer delete(again)

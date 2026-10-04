@@ -219,6 +219,10 @@ clone_model_row :: proc(
 	return
 }
 
+// Per-model rows a stage copies from its source. net_race_tracks puts it in
+// the multiplayer stage picker.
+RELATED_TABLES := [?]string{"track_model_conditions", "track_model_surface", "net_race_tracks"}
+
 // Clone a source location/track/model chain, then one model per requested
 // route. The source route's internal AI and spline identifiers are retained:
 // deployment begins with a byte-for-byte hardlinked copy of that route.
@@ -282,27 +286,18 @@ register_location :: proc(
 		ids.models[i] = model_id
 		append(&source.models.rows, model)
 
-		_, msg, ok = clone_related_rows(
-			db,
-			"track_model_conditions",
-			"track_model_id",
-			source_model_id,
-			model_id,
-			allocator,
-		)
-		if !ok {
-			return
-		}
-		_, msg, ok = clone_related_rows(
-			db,
-			"track_model_surface",
-			"track_model_id",
-			source_model_id,
-			model_id,
-			allocator,
-		)
-		if !ok {
-			return
+		for table_name in RELATED_TABLES {
+			_, msg, ok = clone_related_rows(
+				db,
+				table_name,
+				"track_model_id",
+				source_model_id,
+				model_id,
+				allocator,
+			)
+			if !ok {
+				return
+			}
 		}
 	}
 	return ids, "", true
@@ -310,8 +305,8 @@ register_location :: proc(
 
 // --- unregistration ----------------------------------------------------------
 //
-// The mirror of register_location. A deployment only appends to five tables,
-// so undoing one only subtracts from those five, which is what makes reverts
+// The mirror of register_location. A deployment only appends to six tables,
+// so undoing one only subtracts from those six, which is what makes reverts
 // order-free.
 
 @(private = "file")
@@ -444,7 +439,7 @@ unregister_location :: proc(
 		return ids, fmt.tprintf("%s/%s is not registered", location, venue), false
 	}
 
-	for table_name in ([]string{"track_model_conditions", "track_model_surface"}) {
+	for table_name in RELATED_TABLES {
 		if msg, ok = drop_related_rows(
 			db,
 			table_name,
@@ -528,7 +523,6 @@ add_localized_strings :: proc(
 	return data, "", true
 }
 
-@(private = "file")
 load_registration_database :: proc(
 	path: string,
 ) -> (
