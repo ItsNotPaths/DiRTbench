@@ -301,6 +301,14 @@ draw_game_path :: proc(app: ^App) {
 	if ui.im_button("Choose\u2026##game_path") {
 		gfx.ShowFolderDialog(&app.window, buf_text(ps.game_path[:]))
 	}
+	if app.install.found {
+		if ui.im_button("Unlock online play") {
+			msg, ok := d3.online_checksums_blank(app.install.install.root)
+			set_status(&app.status, msg, ok)
+		}
+		ui.im_same_line()
+		ui.im_text_colored(DIM_COL, "Every player in the lobby needs it, and the same venues deployed.")
+	}
 	ui.igSeparator()
 }
 
