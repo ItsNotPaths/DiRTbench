@@ -25,6 +25,15 @@ Our own, but describing DiRT 3, and embedded:
     Which stock texture and collision names a venue's road, ground and tarmac
     use. Names only, no texture payload.
 
+Work we learned from. No code of theirs is in the binary:
+  Grid2Bypass                         ismellyu
+    The GRID 2 code self-check and its bypass, which mapped the same check in
+    DiRT 3. github.com/ISmellYu/Grid2Bypass
+
+  NefsEdit / NefsLib                  Victor Bush
+    The NeFS archive layout that src/nefs reads and edits, with DiRT 3's
+    public header key. github.com/victorbush/ego.nefsedit
+
 Not embedded, and not in the repository:
   pacenotes/*.ogg                     Deuterium, the Sentient Mattress
     The co-driver voice, recorded for dirtbench. Read at startup from a
