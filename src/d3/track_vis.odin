@@ -199,7 +199,9 @@ d3_vis_cell_mask :: proc(mask: []u8, cell_lo, cell_hi: [3]f32, groups: []D3_Vis_
 }
 
 // Section 2's storage: a token byte, then either a repeated byte or that many
-// verbatim bytes. Runs and literals both stop at 127. Stock gives every leaf a
+// verbatim bytes. Runs and literals both stop at 127, and a 0 token ends the
+// record: the game decodes until it reads one, not until the mask is full, and
+// overruns its mask-sized buffer without it. Stock gives every leaf a
 // record of its own — no two leaves of any stock file share one offset — so
 // identical masks are coded again rather than pointed at twice.
 @(private = "file")
@@ -215,6 +217,7 @@ d3_vis_mask_encode :: proc(out: ^[dynamic]u8, mask: []u8) {
 		literal = at
 	}
 	d3_vis_mask_literal(out, mask[literal:])
+	append(out, 0)
 }
 
 @(private = "file")
@@ -407,16 +410,10 @@ d3_vis_read_tag_boxes :: proc(data: []u8, tag: u32, allocator := context.allocat
 	return out, true
 }
 
-// `header_floor` raises a tag's header count (0x40+tag*4) to at least this
-// value even when `objects` holds fewer of that tag. The game reads that
-// count to size an allocation it fills from its own independently-built
-// per-tag item list, with no bound check against the size. A floor borrowed
-// from a donor file's real count is a safety margin for a tag this codebase
-// cannot yet derive a correct count for on its own.
 // `band` is the route's own drivable surface, the ground a camera follows. It
 // decides where cells are cut and nothing else; an empty one leaves the whole
 // route as a single cell.
-d3_vis_build :: proc(objects, band: []D3_Vis_Object, header_floor := [16]u32{}, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+d3_vis_build :: proc(objects, band: []D3_Vis_Object, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
 	if len(objects) == 0 { return nil, "Dirt 3 VIS needs at least one object", false }
 	if len(objects) > 65535 { return nil, "Dirt 3 VIS has too many objects for one group's box count", false }
 
@@ -483,7 +480,7 @@ d3_vis_build :: proc(objects, band: []D3_Vis_Object, header_floor := [16]u32{}, 
 	binary_patch_u32(&w, 0x14, u32(section_1)); binary_patch_u32(&w, 0x18, u32(section_2))
 	binary_patch_u32(&w, 0x1c, u32(section_3)); binary_patch_u32(&w, 0x2c, u32(section_4))
 	for k in 0..<3 { binary_patch_f32(&w, 0x20+k*4, lo[k]); binary_patch_f32(&w, 0x30+k*4, hi[k]) }
-	for tag in 0..<16 { binary_patch_u32(&w, 0x40+tag*4, max(tag_counts[tag], header_floor[tag])) }
+	for tag in 0..<16 { binary_patch_u32(&w, 0x40+tag*4, tag_counts[tag]) }
 	if !w.ok { return nil, "could not finalize Dirt 3 VIS header", false }
 
 	out = w.data[:]
@@ -625,30 +622,12 @@ d3_vis_census_build :: proc(
 	)
 	if !objects_ok { return nil, objects_msg, false }
 
-	// Every tag declares exactly what section 3 holds. 103 of the 104 stock
-	// routes do, and the game walks each tag's sub-range by this count: a slot
-	// declared past what we wrote is never filled, keeps whatever the fresh
-	// allocation held, and is freed anyway at teardown.
-	//
-	// Tag 2 is the one real exception. Dynamic ENS drawables take a
-	// registration slot without receiving a box, so the count has to cover
-	// their instance ids — ours, never a donor's.
-	floor: [16]u32
-	ens_msg := "no objects.ens to size tag 2 against"
-	if ens_path, _ := filepath.join({route_dir, "objects.ens"}, context.temp_allocator);
-	   os.exists(ens_path) {
-		data, read_err := os.read_entire_file(ens_path, context.temp_allocator)
-		if read_err != nil { return nil, fmt.tprintf("could not read %s: %v", ens_path, read_err), false }
-		nodes, parsed := d3_ens_parse(data, context.temp_allocator)
-		if !parsed { return nil, "objects.ens did not parse, so tag 2 cannot be sized", false }
-		span := d3_ens_instance_id_span(nodes)
-		floor[2] = span
-		ens_msg = fmt.tprintf("tag 2 sized to %d ens instance ids", span)
-	}
-
-	built, build_msg, built_ok := d3_vis_build(objects, band, floor, allocator)
+	// Every tag declares exactly what section 3 holds, tag 2 included: all
+	// 103 stock routes do, and ENS instance ids run past it. A declared slot
+	// nothing fills is freed anyway at teardown.
+	built, build_msg, built_ok := d3_vis_build(objects, band, allocator)
 	if !built_ok { return nil, build_msg, false }
-	return built, fmt.tprintf("%s; %s; %s", objects_msg, ens_msg, build_msg), true
+	return built, fmt.tprintf("%s; %s", objects_msg, build_msg), true
 }
 
 // Runs after both PSSGs are written, because it censuses them.

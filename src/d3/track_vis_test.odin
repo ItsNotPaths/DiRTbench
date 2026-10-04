@@ -191,13 +191,14 @@ vis_build_is_self_contained_and_indexes_every_object :: proc(t: ^testing.T) {
 // byte, clear copies that many. Nothing in the package decodes a track.vis, so
 // the test carries its own.
 @(private = "file")
+// Decodes like the game: until a 0 token, never stopping at the mask size.
 d3_test_vis_mask :: proc(raw: []u8, leaf: int, allocator := context.allocator) -> (mask: []u8, ok: bool) {
 	size := int(binary_load_u32(raw, 0x10))
 	at := int(binary_load_u32(raw, 0x14)) + 6*leaf
 	if binary_load_u16(raw, at) != 0 { return nil, false }
 	from := int(binary_load_u16(raw, at+2)) | int(binary_load_u16(raw, at+4) & 0xff)<<16
 	out := make([dynamic]u8, 0, size, allocator)
-	for len(out) < size && from < len(raw) {
+	for from < len(raw) && raw[from] != 0 {
 		token := raw[from]
 		if token & 0x80 != 0 {
 			for _ in 0..<int(token & 0x7f) { append(&out, raw[from+1]) }
@@ -424,10 +425,10 @@ vis_build_codes_a_mask_longer_than_one_run :: proc(t: ^testing.T) {
 	checked := 0
 	for i in 0..<int(binary_load_u32(raw, 0x04)) {
 		if binary_load_u16(raw, int(binary_load_u32(raw, 0x14))+6*i) != 0 { continue }
+		mask, decoded := d3_test_vis_mask(raw, i, context.temp_allocator)
+		testing.expect(t, decoded, "a mask did not end exactly at mask_bytes"); if !decoded { return }
 		_, hi := d3_test_vis_cell(raw, i)
 		if hi[0] >= 1000-D3_VIS_REACH { continue } // only cells the trees are out of reach of
-		mask, decoded := d3_test_vis_mask(raw, i, context.temp_allocator)
-		testing.expect(t, decoded, "a mask with a long run did not decode"); if !decoded { return }
 		lit := 0
 		for group in groups {
 			for j in 0..<group.boxes {
@@ -575,11 +576,11 @@ vis_census_repeats_grass_cells_as_its_tag_1_boxes :: proc(t: ^testing.T) {
 	}
 }
 
-// Our derived count for a tag we leave out is zero, and the game sizes an
-// allocation from the header count regardless. The file we are replacing is
-// the only honest source for that number.
+// Every tag's header count is exactly what section 3 holds. A donor header or
+// an ENS instance id past the boxes must not raise it: the game frees every
+// declared slot at teardown.
 @(test)
-vis_census_floors_header_counts_against_the_file_it_replaces :: proc(t: ^testing.T) {
+vis_census_header_counts_match_the_file :: proc(t: ^testing.T) {
 	route_dir, venue_dir, made := d3_test_vis_tree(t, d3_test_mesh(context.temp_allocator), d3_test_far_mesh(context.temp_allocator))
 	if !made { return }
 	defer os.remove_all(venue_dir)
@@ -588,12 +589,20 @@ vis_census_floors_header_counts_against_the_file_it_replaces :: proc(t: ^testing
 	binary_store_u32(donor, 0x40+2*4, 291)
 	live, _ := filepath.join({route_dir, "track.vis"}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(live, donor) == nil)
+	ens := `<TEMPLATEENTITYINSTANCE id="a" instanceID="290" uri="#x" />`
+	ens_path, _ := filepath.join({route_dir, "objects.ens"}, context.temp_allocator)
+	testing.expect(t, os.write_entire_file(ens_path, transmute([]u8)ens) == nil)
+
+	objects, _, objects_msg, objects_ok := d3_vis_census_objects(route_dir, venue_dir, false, context.temp_allocator)
+	testing.expect(t, objects_ok, objects_msg); if !objects_ok { return }
+	want: [16]u32
+	for obj in objects { want[obj.tag] += 1 }
 
 	raw, msg, built := d3_vis_census_build(route_dir, venue_dir, allocator = context.allocator)
 	testing.expect(t, built, msg); if !built { return }
 	defer delete(raw)
-	testing.expect_value(t, binary_load_u32(raw, 0x40+2*4), u32(291))
-	testing.expect(t, binary_load_u32(raw, 0x40) > 0, "the census dropped its own tag-0 tiles")
+	for tag in 0 ..< 16 { testing.expect_value(t, binary_load_u32(raw, 0x40+tag*4), want[tag]) }
+	testing.expect(t, want[0] > 0, "the census dropped its own tag-0 tiles")
 }
 
 // Tag-3 ids come from each instance's own id field, not its table position —
