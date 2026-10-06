@@ -6,6 +6,7 @@ package main
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:os"
 import "core:slice"
 import "core:strings"
 import d3 "../d3"
@@ -178,19 +179,33 @@ ARENA_FORM_KEY := [D3_Ens_Form]string {
 	.Dynamic_Entity = "entity",
 }
 
-arena_baseline :: proc(allocator := context.temp_allocator) -> (places: []D3_Place, msg: string, ok: bool) {
+// The baseline placements, and which triangles of the stock track.jpk belong
+// to placements the baseline left out: those are the walls of props that are
+// no longer there.
+arena_baseline :: proc(
+	allocator := context.temp_allocator,
+) -> (places: []D3_Place, jpk_drop: []bool, msg: string, ok: bool) {
 	file: struct {
 		source:     string,
+		// Runs of triangle indices: [first, count].
+		jpk_drop:   [][2]int,
 		placements: []Arena_Baseline_Row,
 	}
 	if err := json.unmarshal(ARENA_BASELINE_JSON, &file, json.DEFAULT_SPECIFICATION, allocator); err != nil {
-		return nil, fmt.tprintf("the baked baseline did not parse: %v", err), false
+		return nil, nil, fmt.tprintf("the baked baseline did not parse: %v", err), false
+	}
+	if n := len(file.jpk_drop); n > 0 {
+		last := file.jpk_drop[n - 1]
+		jpk_drop = make([]bool, last[0] + last[1], allocator)
+		for run in file.jpk_drop {
+			for i in run[0] ..< run[0] + run[1] { jpk_drop[i] = true }
+		}
 	}
 	places = make([]D3_Place, len(file.placements), allocator)
 	for row, i in file.placements {
 		form, known := arena_form_of(row.form)
 		if !known {
-			return nil, fmt.tprintf("baseline row %d has form %q", i, row.form), false
+			return nil, nil, fmt.tprintf("baseline row %d has form %q", i, row.form), false
 		}
 		places[i] = {
 			ref   = {kind = row.trees ? .Trees_Pssg : .Objects_Pssg, name = row.mesh},
@@ -199,7 +214,7 @@ arena_baseline :: proc(allocator := context.temp_allocator) -> (places: []D3_Pla
 			pos   = row.pos,
 		}
 	}
-	return places, "", true
+	return places, jpk_drop, "", true
 }
 
 @(private = "file")
@@ -212,17 +227,26 @@ arena_form_of :: proc(key: string) -> (D3_Ens_Form, bool) {
 
 // --- export -------------------------------------------------------------------
 
-// Every route of a deployed arena: its placement files from the baseline, then
-// `track.vis` over them. Nothing else is written; the ground, the lighting and
-// the game-mode files stay hardlinked to stock route_0.
+// Every route of a deployed arena: its placement files from the baseline,
+// `track.vis` over them, and the stock `track.jpk` without the collision of
+// the props the baseline left out. Nothing else is written; the ground, the
+// lighting and the game-mode files stay hardlinked to stock route_0.
 arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 	_, donor, found := venue_source(vs, p)
 	if !found {
 		return fmt.tprintf("%s/%s is not playable", p.base, p.base_route), false
 	}
-	baseline, baseline_msg, baseline_ok := arena_baseline()
+	baseline, jpk_drop, baseline_msg, baseline_ok := arena_baseline()
 	if !baseline_ok {
 		return baseline_msg, false
+	}
+	stock_jpk, read_err := os.read_entire_file(d3.Stock_Path(donor.dir, "track.jpk"), context.temp_allocator)
+	if read_err != nil {
+		return fmt.tprintf("could not read the stock track.jpk: %v", read_err), false
+	}
+	collision, jpk_msg, jpk_ok := d3.Jpk_Without(stock_jpk, jpk_drop, context.temp_allocator)
+	if !jpk_ok {
+		return fmt.tprintf("track.jpk: %s", jpk_msg), false
 	}
 	installed, deployed := d3.install_venue(&vs.install, venue_dir(p), venue_dir(p))
 	if !deployed {
@@ -255,6 +279,9 @@ arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 		vis_msg, vis_ok := d3.Write_Track_Vis(&job)
 		if !vis_ok {
 			return fmt.tprintf("%s: track.vis: %s", route.id, vis_msg), false
+		}
+		if write_msg, wrote := d3.Write_Out(&job, "track.jpk", collision); !wrote {
+			return fmt.tprintf("%s: track.jpk: %s", route.id, write_msg), false
 		}
 		append(&done, fmt.tprintf("%s (%s; track.vis: %s)", route.id, placed_msg, vis_msg))
 	}

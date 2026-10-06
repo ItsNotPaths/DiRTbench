@@ -63,7 +63,7 @@ an_arena_route_without_a_known_mode_is_refused :: proc(t: ^testing.T) {
 // must come through exactly as the file has it.
 @(test)
 the_baseline_keeps_stock_transforms_whole :: proc(t: ^testing.T) {
-	places, msg, ok := arena_baseline()
+	places, _, msg, ok := arena_baseline()
 	testing.expectf(t, ok, "the baseline did not load: %s", msg)
 	testing.expect(t, len(places) > 0, "the baseline is empty")
 	non_uniform := 0
