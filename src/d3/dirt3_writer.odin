@@ -320,19 +320,26 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 }
 
 // A stock track.jpk with some of its triangles taken out, re-encoded.
+d3_jpk_without :: proc(stock: []u8, drop: []bool, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+	kept, kept_msg, kept_ok := d3_jpk_triangles(stock, drop, context.temp_allocator)
+	if !kept_ok { return nil, kept_msg, false }
+	return d3_track_write(kept, allocator)
+}
+
+// Every triangle of a stock track.jpk but the dropped ones, each once.
 //
 // `drop` names triangles by their index in the order the archive stores them:
 // entry by entry, then triangle by triangle within each chunk. A triangle
 // that crosses a cell edge is stored once per cell and each copy has its own
-// index, so the caller drops every copy. The copies that survive are merged
-// before writing, because the writer stores a triangle in every cell it
-// touches all over again.
-d3_jpk_without :: proc(stock: []u8, drop: []bool, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+// index, so the caller drops every copy. The copies that survive are merged,
+// because the writer stores a triangle in every cell it touches all over
+// again. Surface codes slice `stock`, so they live as long as it does.
+d3_jpk_triangles :: proc(stock: []u8, drop: []bool, allocator := context.allocator) -> (out: []D3_Write_Tri, msg: string, ok: bool) {
 	entries, read := jpak_read(stock, context.temp_allocator)
 	if !read { return nil, "not a JPAK archive", false }
 	Key :: struct { p: [3][3]i32, mat: string, sheet: u8 }
 	seen := make(map[Key]bool, context.temp_allocator)
-	kept := make([dynamic]D3_Write_Tri, context.temp_allocator)
+	kept := make([dynamic]D3_Write_Tri, allocator)
 	index := 0
 	for entry in entries {
 		if !strings.has_suffix(entry.name, ".vcqtc") { continue }
@@ -355,7 +362,8 @@ d3_jpk_without :: proc(stock: []u8, drop: []bool, allocator := context.allocator
 		}
 	}
 	if index < len(drop) {
+		delete(kept)
 		return nil, fmt.tprintf("the drop list names %d triangles and the archive holds %d", len(drop), index), false
 	}
-	return d3_track_write(kept[:], allocator)
+	return kept[:], "", true
 }

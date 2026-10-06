@@ -163,6 +163,8 @@ Camera_Blocks :: d3_camera_blocks
 Write_Out :: d3_write_out
 Write_Track_Vis :: d3_write_track_vis
 Jpk_Without :: d3_jpk_without
+Jpk_Triangles :: d3_jpk_triangles
+Write_Tri :: D3_Write_Tri
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once
 Venue_Profile :: D3_Venue_Profile
