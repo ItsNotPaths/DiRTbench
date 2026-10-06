@@ -65,9 +65,10 @@ prop_picked :: proc(ed: ^Editor, role: Prop_Role) -> (ref: Prop_Ref, ok: bool) {
 
 // Whether a mesh may be placed in this role. Every mesh can be an ornament;
 // only the ones the venue declares an entity type for can be an object. An
-// arena places only what its catalogue lists.
+// arena places only objects, and only what its catalogue lists: an ornament
+// has no collision, and the baseline already dresses the scene.
 prop_role_allowed :: proc(doc: ^Venue_Doc, ref: Prop_Ref, role: Prop_Role) -> bool {
-	if doc.arena.active && !slice.contains(doc.arena.catalogue, ref) {
+	if doc.arena.active && (role == .Ornament || !slice.contains(doc.arena.catalogue, ref)) {
 		return false
 	}
 	return role == .Ornament || prop_has_body(&doc.venue_art, ref)
@@ -101,7 +102,9 @@ draw_props_sections :: proc(ed: ^Editor) {
 		return
 	}
 	draw_prop_role_section(ed, .Object)
-	draw_prop_role_section(ed, .Ornament)
+	if !ed.doc.arena.active {
+		draw_prop_role_section(ed, .Ornament)
+	}
 }
 
 // The one block both sections would otherwise repeat: no base venue, or a
