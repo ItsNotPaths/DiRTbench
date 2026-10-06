@@ -47,6 +47,7 @@ Browse_Listing :: struct {
 	venue_id:     string, // the id the game installs under, and our file name
 	title:        string,
 	author:       string,
+	kind:         string, // "stage" or "arena"; absent from an older site
 	stages:       int,
 	length_m:     int,
 	downloads:    int,
@@ -438,8 +439,14 @@ browse_install :: proc(
 	}
 	// The art is not in the file and never travels: the pack is rebuilt out of
 	// whatever install this machine has. Built now, while a failure still means
-	// "you do not have that game venue" rather than a broken export later.
-	if _, pack_msg, pack_ok := content_pack_profile(vs, p.base); !pack_ok {
+	// "you do not have that game venue" rather than a broken export later. An
+	// arena has no pack, only the stock route it is built on.
+	if venue_kind(p) == .Arena {
+		if _, _, found := venue_source(vs, p); !found {
+			_ = os.remove(venue_path(dir))
+			return name, fmt.tprintf("%s/%s is not in this game", p.base, p.base_route), false
+		}
+	} else if _, pack_msg, pack_ok := content_pack_profile(vs, p.base); !pack_ok {
 		_ = os.remove(venue_path(dir))
 		return name, pack_msg, false
 	}

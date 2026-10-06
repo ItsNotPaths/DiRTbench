@@ -149,7 +149,9 @@ draw_browse_row :: proc(app: ^App, l: Browse_Listing) {
 // measure, not a venue with no stages.
 browse_row_text :: proc(l: Browse_Listing, allocator := context.temp_allocator) -> string {
 	b := strings.builder_make(allocator)
-	if l.stages > 0 {
+	if l.kind == VENUE_KIND_KEY[.Arena] {
+		fmt.sbprintf(&b, "arena, %d routes", l.stages)
+	} else if l.stages > 0 {
 		fmt.sbprintf(&b, "%d stages", l.stages)
 	} else {
 		fmt.sbprint(&b, "stages not measured")

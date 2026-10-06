@@ -156,3 +156,12 @@ only_a_venue_s_own_listing_may_overwrite_it :: proc(t: ^testing.T) {
 	own_upload := Venue{id = "00112233445566aa", name = "pine", source = {slug = "pine-ridge-ab12cd"}}
 	testing.expect(t, !venue_is_copy_of(own_upload, "pine-ridge-ab12cd"))
 }
+
+// An arena has no road to measure, and its row says what it is instead.
+@(test)
+an_arena_listing_reads_as_an_arena :: proc(t: ^testing.T) {
+	text := browse_row_text(Browse_Listing{kind = "arena", stages = 2}, context.allocator)
+	defer delete(text)
+	testing.expect(t, strings.contains(text, "arena, 2 routes"), text)
+	testing.expect(t, !strings.contains(text, "stages"), text)
+}
