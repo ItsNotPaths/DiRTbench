@@ -1,6 +1,6 @@
 package main
 
-// Every `--dirt3-*` / `--venue-*` / `--export` / `--pacenotes` /`--hectic`
+// Every `--dirt3-*` / `--venue-*` / `--export` / `--mesh` / `--pacenotes` /`--hectic`
 // command dirtbench answers with no window: one-shot converters that write into
 // `out/` or into a route directory, never a GUI concern. Each implementation
 // lives beside the thing it drives (install.odin, venue.odin, export.odin);
@@ -44,6 +44,15 @@ run_cli :: proc() -> (handled: bool) {
 	if len(args) >= 2 && args[0] == "--pacenote-fit" {
 		pacenote_fit_headless(args[1], args[2:])
 		os.exit(0)
+	}
+	if len(args) >= 1 && args[0] == "--mesh" {
+		if len(args) != 3 {
+			fmt.println("usage: dirtbench --mesh <venue.json> <out.glb>")
+			os.exit(1)
+		}
+		msg, ok := mesh_headless(args[1], args[2])
+		fmt.println(msg)
+		os.exit(0 if ok else 1)
 	}
 	if len(args) >= 4 && args[0] == "--hectic" {
 		s0, _ := strconv.parse_f64(args[2])

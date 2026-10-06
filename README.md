@@ -60,6 +60,7 @@ dirtbench --dirt3-venues                    # the game's venues, and the broken 
 dirtbench --export <stage> --venue <id> [--target gltf|dirt3] [--terrain]
                            [--debug-out]
 dirtbench --pacenotes <venue> [--reverse]
+dirtbench --mesh <venue.json> <out.glb>     # whole road network as one mesh; no install
 ```
 
 An export goes into the game by default. `--debug-out` writes to `build/out/`

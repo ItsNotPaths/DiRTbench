@@ -21,6 +21,9 @@ package main
 //   - pace notes are ignored. They are a driving-line idea, and nothing in a DCC
 //     tool consumes them.
 //
+// `--mesh` writes the same mesh as one .glb for a game server: the whole road
+// network, no props, each material tagged with its collision surface.
+//
 // Coordinates pass straight through: glTF is right-handed, Y up, metres, and so
 // is the editor. Buffer data is little-endian f32 throughout, which is what the
 // f32 component type (5126) means and what every platform we build for is.
@@ -77,10 +80,13 @@ gltf_push :: proc(buf: ^[dynamic]byte, vals: []f32, comps: int, kind: string) ->
 		kind   = kind,
 	}
 	for f in vals {
-		bits := transmute(u32)f
-		append(buf, u8(bits), u8(bits >> 8), u8(bits >> 16), u8(bits >> 24))
+		gltf_u32(buf, transmute(u32)f)
 	}
 	return v
+}
+
+gltf_u32 :: proc(buf: ^[dynamic]byte, bits: u32) {
+	append(buf, u8(bits), u8(bits >> 8), u8(bits >> 16), u8(bits >> 24))
 }
 
 // Per-component min/max over a VEC3 block. glTF requires these on POSITION, and
@@ -137,25 +143,29 @@ w_str :: proc(b: ^strings.Builder, s: string) {
 	w(b, string(data))
 }
 
-// --- the export --------------------------------------------------------------
 
-export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
-	// The same geometry the props were scattered on, or they import floating.
-	g := export_drawn(job)
-	// One primitive per material actually present, in job order — which is the
-	// order `order` is sorted in, so each group is one contiguous run.
-	used := make([dynamic]geo.Mat_Id, context.temp_allocator)
+// --- the mesh ----------------------------------------------------------------
+
+// One primitive per material present, in `order`, so each is one contiguous
+// run. Three views per primitive: POSITION, NORMAL, TEXCOORD_0.
+Gltf_Buffer :: struct {
+	used:  [dynamic]geo.Mat_Id,
+	bytes: [dynamic]byte,
+	views: [dynamic]Gltf_View,
+}
+
+gltf_buffer :: proc(g: ^Export_Geometry) -> (gb: Gltf_Buffer) {
+	gb.used = make([dynamic]geo.Mat_Id, context.temp_allocator)
+	gb.bytes = make([dynamic]byte, context.temp_allocator)
+	gb.views = make([dynamic]Gltf_View, context.temp_allocator)
 	for mat in geo.Mat_Id {
 		if g.counts[mat] > 0 {
-			append(&used, mat)
+			append(&gb.used, mat)
 		}
 	}
 
-	buf := make([dynamic]byte, context.temp_allocator)
-	views := make([dynamic]Gltf_View, context.temp_allocator) // 3 per primitive: pos, nrm, uv
-
 	run_start := 0
-	for mat in used {
+	for mat in gb.used {
 		n := g.counts[mat]
 		chunk := g.order[run_start:run_start + n]
 		run_start += n
@@ -175,27 +185,33 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 			}
 		}
 
-		pv := gltf_push(&buf, pos[:], 3, "VEC3")
+		pv := gltf_push(&gb.bytes, pos[:], 3, "VEC3")
 		gltf_bounds(&pv, pos[:])
-		append(&views, pv)
-		append(&views, gltf_push(&buf, nrm[:], 3, "VEC3"))
-		append(&views, gltf_push(&buf, uv[:], 2, "VEC2"))
+		append(&gb.views, pv)
+		append(&gb.views, gltf_push(&gb.bytes, nrm[:], 3, "VEC3"))
+		append(&gb.views, gltf_push(&gb.bytes, uv[:], 2, "VEC2"))
 	}
+	return
+}
 
-	bin_name := fmt.tprintf("%s.bin", job.name)
-	bin_path, _ := filepath.join({job.out, bin_name}, context.temp_allocator)
-	if werr := os.write_entire_file(bin_path, buf[:]); werr != nil {
-		return fmt.tprintf("could not write %s: %v", bin_path, werr), false
-	}
-
+// Node 0 is the mesh; one node per prop follows it. An empty `bin_uri` is a
+// .glb, whose buffer is its BIN chunk. `surfaces` tags each material with the
+// collision surface it drives as.
+gltf_json :: proc(
+	gb: ^Gltf_Buffer,
+	name: string,
+	props: []geo.Veg_Instance,
+	look: geo.Look,
+	bin_uri: string,
+	surfaces: bool,
+) -> string {
 	b := strings.builder_make(context.temp_allocator)
 	w(&b, "{\n")
 	w(&b, "\"asset\":{\"version\":\"2.0\",\"generator\":\"dirtbench\"},\n")
 	w(&b, "\"scene\":0,\n")
 
-	// Node 0 is the stage mesh; one node per prop follows it.
 	w(&b, "\"scenes\":[{\"nodes\":[")
-	for i in 0 ..< 1 + len(job.props) {
+	for i in 0 ..< 1 + len(props) {
 		if i > 0 {
 			w(&b, ",")
 		}
@@ -205,9 +221,9 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 
 	w(&b, "\"nodes\":[\n")
 	w(&b, "{\"name\":")
-	w_str(&b, job.name)
+	w_str(&b, name)
 	w(&b, ",\"mesh\":0}")
-	for p in job.props {
+	for p in props {
 		w(&b, ",\n{\"name\":")
 		w_str(&b, fmt.tprintf("%v", p.kind))
 		w(&b, ",\"translation\":")
@@ -222,9 +238,9 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	w(&b, "\n],\n")
 
 	w(&b, "\"meshes\":[{\"name\":")
-	w_str(&b, job.name)
+	w_str(&b, name)
 	w(&b, ",\"primitives\":[\n")
-	for _, i in used {
+	for _, i in gb.used {
 		if i > 0 {
 			w(&b, ",\n")
 		}
@@ -237,26 +253,36 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	w(&b, "\n]}],\n")
 
 	w(&b, "\"materials\":[\n")
-	for mat, i in used {
+	for mat, i in gb.used {
 		if i > 0 {
 			w(&b, ",\n")
 		}
-		c := gltf_material_colour(mat, job.look)
+		c := gltf_material_colour(mat, look)
 		w(&b, "{\"name\":")
 		w_str(&b, fmt.tprintf("%v", mat))
 		w(&b, ",\"doubleSided\":false,\"pbrMetallicRoughness\":{\"baseColorFactor\":")
 		w_floats(&b, f32(c.r) / 255, f32(c.g) / 255, f32(c.b) / 255, 1)
-		w(&b, ",\"metallicFactor\":0.0,\"roughnessFactor\":0.9}}")
+		w(&b, ",\"metallicFactor\":0.0,\"roughnessFactor\":0.9}")
+		if surfaces {
+			w(&b, ",\"extras\":{\"surface\":")
+			w_str(&b, fmt.tprintf("%v", MAT_EXPORT[mat].surface))
+			w(&b, "}")
+		}
+		w(&b, "}")
 	}
 	w(&b, "\n],\n")
 
-	w(&b, "\"buffers\":[{\"uri\":")
-	w_str(&b, bin_name)
-	fmt.sbprintf(&b, ",\"byteLength\":%d", len(buf))
+	w(&b, "\"buffers\":[{")
+	if bin_uri != "" {
+		w(&b, "\"uri\":")
+		w_str(&b, bin_uri)
+		w(&b, ",")
+	}
+	fmt.sbprintf(&b, "\"byteLength\":%d", len(gb.bytes))
 	w(&b, "}],\n")
 
 	w(&b, "\"bufferViews\":[\n")
-	for v, i in views {
+	for v, i in gb.views {
 		if i > 0 {
 			w(&b, ",\n")
 		}
@@ -273,25 +299,40 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	w(&b, "\n],\n")
 
 	w(&b, "\"accessors\":[\n")
-	for v, i in views {
+	for v, i in gb.views {
 		if i > 0 {
 			w(&b, ",\n")
 		}
 		w(&b, "{")
 		fmt.sbprintf(&b, "\"bufferView\":%d,\"componentType\":%d,\"count\":%d,\"type\":", i, GLTF_F32, v.count)
 		w_str(&b, v.kind)
+		// Shortest round-trip form: a validator wants the exact extremes.
 		if v.bounds {
-			w(&b, ",\"min\":")
-			w_floats(&b, v.lo[0], v.lo[1], v.lo[2])
-			w(&b, ",\"max\":")
-			w_floats(&b, v.hi[0], v.hi[1], v.hi[2])
+			fmt.sbprintf(&b, ",\"min\":[%v,%v,%v]", v.lo[0], v.lo[1], v.lo[2])
+			fmt.sbprintf(&b, ",\"max\":[%v,%v,%v]", v.hi[0], v.hi[1], v.hi[2])
 		}
 		w(&b, "}")
 	}
 	w(&b, "\n]\n}\n")
+	return strings.to_string(b)
+}
 
+// --- the export --------------------------------------------------------------
+
+export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
+	// The same geometry the props were scattered on, or they import floating.
+	g := export_drawn(job)
+	gb := gltf_buffer(g)
+
+	bin_name := fmt.tprintf("%s.bin", job.name)
+	bin_path, _ := filepath.join({job.out, bin_name}, context.temp_allocator)
+	if werr := os.write_entire_file(bin_path, gb.bytes[:]); werr != nil {
+		return fmt.tprintf("could not write %s: %v", bin_path, werr), false
+	}
+
+	text := gltf_json(&gb, job.name, job.props, job.look, bin_name, false)
 	gltf_path, _ := filepath.join({job.out, fmt.tprintf("%s.gltf", job.name)}, context.temp_allocator)
-	if werr := os.write_entire_file(gltf_path, transmute([]byte)strings.to_string(b)); werr != nil {
+	if werr := os.write_entire_file(gltf_path, transmute([]byte)text); werr != nil {
 		return fmt.tprintf("could not write %s: %v", gltf_path, werr), false
 	}
 
@@ -300,4 +341,67 @@ export_gltf :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 		prop_note = fmt.tprintf(", %d prop markers", len(job.props))
 	}
 	return fmt.tprintf("exported %d tris%s to %s.gltf", len(g.order), prop_note, job.name), true
+}
+
+// --- .glb --------------------------------------------------------------------
+
+GLB_MAGIC :: 0x46546C67 // "glTF"
+GLB_VERSION :: 2
+GLB_CHUNK_JSON :: 0x4E4F534A
+GLB_CHUNK_BIN :: 0x004E4942
+
+// The binary container: a 12-byte header, then the JSON and BIN chunks, each
+// padded to 4 bytes (JSON with spaces, BIN with zeros).
+glb_bytes :: proc(text: string, bin: []byte) -> []byte {
+	json_pad := (4 - len(text) % 4) % 4
+	bin_pad := (4 - len(bin) % 4) % 4
+	json_len := len(text) + json_pad
+	bin_len := len(bin) + bin_pad
+	out := make([dynamic]byte, 0, 28 + json_len + bin_len, context.temp_allocator)
+	gltf_u32(&out, GLB_MAGIC)
+	gltf_u32(&out, GLB_VERSION)
+	gltf_u32(&out, u32(28 + json_len + bin_len))
+	gltf_u32(&out, u32(json_len))
+	gltf_u32(&out, GLB_CHUNK_JSON)
+	append(&out, text)
+	for _ in 0 ..< json_pad {
+		append(&out, ' ')
+	}
+	gltf_u32(&out, u32(bin_len))
+	gltf_u32(&out, GLB_CHUNK_BIN)
+	append(&out, ..bin)
+	for _ in 0 ..< bin_pad {
+		append(&out, 0)
+	}
+	return out[:]
+}
+
+// `--mesh <venue.json> <out.glb>`: the venue's whole road network as one .glb,
+// for a game server. Reads only the file it is given: no install, no config,
+// no maps/. No props; the server reads `road.props` itself.
+mesh_headless :: proc(venue_path, out_path: string) -> (msg: string, ok: bool) {
+	doc := doc_defaults()
+	defer doc_delete(&doc)
+	if msg, ok = load_road(&doc, venue_path); !ok {
+		return
+	}
+	g, gmsg, built := build_geometry(&doc, doc.spline)
+	defer export_geometry_delete(&g)
+	if !built {
+		return gmsg, false
+	}
+	gb := gltf_buffer(&g)
+	// A fixed name, so the bytes depend on the document and not on its path.
+	text := gltf_json(&gb, "venue", nil, doc.look, "", true)
+	if werr := os.write_entire_file(out_path, glb_bytes(text, gb.bytes[:])); werr != nil {
+		return fmt.tprintf("could not write %s: %v", out_path, werr), false
+	}
+	counts := make([dynamic]string, context.temp_allocator)
+	for mat in gb.used {
+		append(&counts, fmt.tprintf("%v %d", mat, g.counts[mat]))
+	}
+	return fmt.tprintf(
+		"wrote %d tris to %s (%s)",
+		len(g.order), out_path, strings.join(counts[:], ", ", context.temp_allocator),
+	), true
 }
