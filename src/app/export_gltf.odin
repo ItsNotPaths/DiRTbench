@@ -22,7 +22,8 @@ package main
 //     tool consumes them.
 //
 // `--mesh` writes the same mesh as one .glb for a game server: the whole road
-// network, no props, each material tagged with its collision surface.
+// network, no props, each material tagged with its collision surface. The
+// scene's `extras` carry the compiled routes and the tree scatter as numbers.
 //
 // Coordinates pass straight through: glTF is right-handed, Y up, metres, and so
 // is the editor. Buffer data is little-endian f32 throughout, which is what the
@@ -196,7 +197,7 @@ gltf_buffer :: proc(g: ^Export_Geometry) -> (gb: Gltf_Buffer) {
 
 // Node 0 is the mesh; one node per prop follows it. An empty `bin_uri` is a
 // .glb, whose buffer is its BIN chunk. `surfaces` tags each material with the
-// collision surface it drives as.
+// collision surface it drives as. `extras`, a JSON object or "", goes on the scene.
 gltf_json :: proc(
 	gb: ^Gltf_Buffer,
 	name: string,
@@ -204,6 +205,7 @@ gltf_json :: proc(
 	look: geo.Look,
 	bin_uri: string,
 	surfaces: bool,
+	extras := "",
 ) -> string {
 	b := strings.builder_make(context.temp_allocator)
 	w(&b, "{\n")
@@ -217,7 +219,12 @@ gltf_json :: proc(
 		}
 		fmt.sbprintf(&b, "%d", i)
 	}
-	w(&b, "]}],\n")
+	w(&b, "]")
+	if extras != "" {
+		w(&b, ",\"extras\":")
+		w(&b, extras)
+	}
+	w(&b, "}],\n")
 
 	w(&b, "\"nodes\":[\n")
 	w(&b, "{\"name\":")
@@ -376,23 +383,97 @@ glb_bytes :: proc(text: string, bin: []byte) -> []byte {
 	return out[:]
 }
 
+// A compiled route's centreline: every ribbon sample, start line to finish line.
+Mesh_Route :: struct {
+	id, name: string,
+	ribbon:   []geo.Cross_Section,
+}
+
+// Every route of the venue that compiles, and the ids of those that do not.
+mesh_routes :: proc(doc: ^Venue_Doc, routes: []Venue_Route) -> (out: []Mesh_Route, failed: []string) {
+	built := make([dynamic]Mesh_Route, context.temp_allocator)
+	bad := make([dynamic]string, context.temp_allocator)
+	for r in routes {
+		ribbon: []geo.Cross_Section
+		if route_has_markers(r) {
+			if chain, _, ok := geo.compile_stage(doc.spline, r.start, r.finish, r.pins[:], context.temp_allocator); ok {
+				ribbon = geo.build_ribbon(chain, allocator = context.temp_allocator, detach = doc.terrain.detach)
+			}
+		}
+		if len(ribbon) < 2 {
+			append(&bad, r.id)
+			continue
+		}
+		append(&built, Mesh_Route{id = r.id, name = r.name, ribbon = ribbon})
+	}
+	return built[:], bad[:]
+}
+
+// `{"routes":[...],"trees":[...]}`. A route point is [x,y,z,width]; a tree's
+// canopy is "#rrggbb".
+mesh_extras :: proc(routes: []Mesh_Route, trees: []geo.Veg_Instance) -> string {
+	b := strings.builder_make(context.temp_allocator)
+	w(&b, "{\"routes\":[")
+	for r, i in routes {
+		if i > 0 {
+			w(&b, ",")
+		}
+		arc := geo.ribbon_arc(r.ribbon)
+		w(&b, "\n{\"id\":")
+		w_str(&b, r.id)
+		w(&b, ",\"name\":")
+		w_str(&b, r.name)
+		fmt.sbprintf(&b, ",\"length\":%.6f,\"points\":[", arc[len(arc) - 1])
+		for cs, j in r.ribbon {
+			if j > 0 {
+				w(&b, ",")
+			}
+			w_floats(&b, cs.pos.x, cs.pos.y, cs.pos.z, cs.width)
+		}
+		w(&b, "]}")
+	}
+	w(&b, "],\n\"trees\":[")
+	for t, i in trees {
+		if i > 0 {
+			w(&b, ",")
+		}
+		w(&b, "\n{\"pos\":")
+		w_floats(&b, t.pos.x, t.pos.y, t.pos.z)
+		fmt.sbprintf(&b, ",\"yaw\":%.6f,\"h\":%.6f,\"r\":%.6f,\"trunk\":%.6f,\"shape\":", t.yaw, t.h, t.r, t.trunk)
+		w_str(&b, fmt.tprintf("%v", t.shape))
+		fmt.sbprintf(&b, ",\"canopy\":\"#%02x%02x%02x\"", t.canopy.r, t.canopy.g, t.canopy.b)
+		w(&b, "}")
+	}
+	w(&b, "]}")
+	return strings.to_string(b)
+}
+
 // `--mesh <venue.json> <out.glb>`: the venue's whole road network as one .glb,
 // for a game server. Reads only the file it is given: no install, no config,
 // no maps/. No props; the server reads `road.props` itself.
 mesh_headless :: proc(venue_path, out_path: string) -> (msg: string, ok: bool) {
+	p, load_msg, loaded := venue_load_path(venue_path, context.temp_allocator)
+	if !loaded {
+		return load_msg, false
+	}
 	doc := doc_defaults()
 	defer doc_delete(&doc)
-	if msg, ok = load_road(&doc, venue_path); !ok {
-		return
+	if msg, ok = doc_load_road(&doc, p.road); !ok {
+		return fmt.tprintf("%s: %s", filepath.base(venue_path), msg), false
 	}
+	// Not doc_set_base: its look can come off a local content pack.
+	doc.veg.preset = geo.veg_preset_for_base(p.base)
 	g, gmsg, built := build_geometry(&doc, doc.spline)
 	defer export_geometry_delete(&g)
 	if !built {
 		return gmsg, false
 	}
+	// The export's own scatter: the network's ribbon and ground.
+	trees := geo.veg_generate(g.ribbon, &g.terrain, doc.veg, doc.roughness, context.temp_allocator)
+	routes, failed := mesh_routes(&doc, p.routes)
 	gb := gltf_buffer(&g)
 	// A fixed name, so the bytes depend on the document and not on its path.
-	text := gltf_json(&gb, "venue", nil, doc.look, "", true)
+	text := gltf_json(&gb, "venue", nil, doc.look, "", true, mesh_extras(routes, trees))
 	if werr := os.write_entire_file(out_path, glb_bytes(text, gb.bytes[:])); werr != nil {
 		return fmt.tprintf("could not write %s: %v", out_path, werr), false
 	}
@@ -400,8 +481,13 @@ mesh_headless :: proc(venue_path, out_path: string) -> (msg: string, ok: bool) {
 	for mat in gb.used {
 		append(&counts, fmt.tprintf("%v %d", mat, g.counts[mat]))
 	}
+	skipped := ""
+	if len(failed) > 0 {
+		skipped = fmt.tprintf("; %s did not compile", strings.join(failed, ", ", context.temp_allocator))
+	}
 	return fmt.tprintf(
-		"wrote %d tris to %s (%s)",
-		len(g.order), out_path, strings.join(counts[:], ", ", context.temp_allocator),
+		"wrote %d tris, %d routes, %d trees to %s (%s)%s",
+		len(g.order), len(routes), len(trees), out_path,
+		strings.join(counts[:], ", ", context.temp_allocator), skipped,
 	), true
 }
