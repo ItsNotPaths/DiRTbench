@@ -60,13 +60,17 @@ prop_picked :: proc(ed: ^Editor, role: Prop_Role) -> (ref: Prop_Ref, ok: bool) {
 		return
 	}
 	ref = cat.refs[pick]
-	return ref, prop_role_allowed(cat, ref, role)
+	return ref, prop_role_allowed(ed.doc, ref, role)
 }
 
 // Whether a mesh may be placed in this role. Every mesh can be an ornament;
-// only the ones the venue declares an entity type for can be an object.
-prop_role_allowed :: proc(cat: ^Venue_Art, ref: Prop_Ref, role: Prop_Role) -> bool {
-	return role == .Ornament || prop_has_body(cat, ref)
+// only the ones the venue declares an entity type for can be an object. An
+// arena places only what its catalogue lists.
+prop_role_allowed :: proc(doc: ^Venue_Doc, ref: Prop_Ref, role: Prop_Role) -> bool {
+	if doc.arena.active && !slice.contains(doc.arena.catalogue, ref) {
+		return false
+	}
+	return role == .Ornament || prop_has_body(&doc.venue_art, ref)
 }
 
 // How many placements carry this role. The two sections each report their own.
@@ -137,7 +141,7 @@ draw_prop_role_section :: proc(ed: ^Editor, role: Prop_Role) {
 
 	listed := 0
 	for ref in cat.refs {
-		if prop_role_allowed(cat, ref, role) {
+		if prop_role_allowed(ed.doc, ref, role) {
 			listed += 1
 		}
 	}
@@ -193,7 +197,7 @@ draw_prop_list :: proc(ed: ^Editor, role: Prop_Role) {
 	}
 	shown := 0
 	for ref, i in cat.refs {
-		if !prop_role_allowed(cat, ref, role) {
+		if !prop_role_allowed(ed.doc, ref, role) {
 			continue
 		}
 		if filter != "" &&
@@ -430,7 +434,7 @@ draw_prop_role_switch :: proc(ed: ^Editor, inst: ^Prop_Instance) {
 		if role != .Ornament {
 			ui.im_same_line()
 		}
-		allowed := cat.state != .Ready || prop_role_allowed(cat, inst.ref, role)
+		allowed := cat.state != .Ready || prop_role_allowed(ed.doc, inst.ref, role)
 		ui.igBeginDisabled(!allowed)
 		if ui.igRadioButton_Bool(fmt.ctprint(PROP_ROLE_NAMES[role]), inst.role == role) &&
 		   inst.role != role {

@@ -63,11 +63,11 @@ an_arena_route_without_a_known_mode_is_refused :: proc(t: ^testing.T) {
 // must come through exactly as the file has it.
 @(test)
 the_baseline_keeps_stock_transforms_whole :: proc(t: ^testing.T) {
-	places, _, msg, ok := arena_baseline()
+	base, msg, ok := arena_baseline()
 	testing.expectf(t, ok, "the baseline did not load: %s", msg)
-	testing.expect(t, len(places) > 0, "the baseline is empty")
+	testing.expect(t, len(base.places) > 0, "the baseline is empty")
 	non_uniform := 0
-	for place in places {
+	for place in base.places {
 		lengths: [3]f32
 		for row, i in place.basis {
 			lengths[i] = row[0]*row[0] + row[1]*row[1] + row[2]*row[2]
@@ -77,4 +77,75 @@ the_baseline_keeps_stock_transforms_whole :: proc(t: ^testing.T) {
 		}
 	}
 	testing.expect(t, non_uniform > 0, "no non-uniform stock basis survived the load")
+}
+
+// A removal names a placement by mesh and position, so it finds the same prop
+// again however the list is ordered, and only a delete-only placement can go.
+@(test)
+removals_name_delete_only_placements :: proc(t: ^testing.T) {
+	base, msg, ok := arena_baseline()
+	testing.expectf(t, ok, "the baseline did not load: %s", msg)
+	deletable, static := -1, -1
+	for tier, i in base.tiers {
+		if tier == .Delete_Only && deletable < 0 { deletable = i }
+		if tier == .Static && static < 0 { static = i }
+	}
+	testing.expect(t, deletable >= 0 && static >= 0, "the baseline needs both tiers")
+	as_removed :: proc(place: D3_Place) -> Stage_Prop {
+		return {name = place.ref.name, trees = place.ref.kind == .Trees_Pssg, pos = place.pos}
+	}
+	mask, unmatched := arena_removed_mask(base, {as_removed(base.places[deletable])})
+	testing.expect(t, mask[deletable] && unmatched == 0, "a delete-only placement is removed by its name and position")
+	kept := 0
+	for gone in mask {
+		if gone { kept += 1 }
+	}
+	testing.expect(t, kept == 1, "one removal removes one placement")
+
+	mask, unmatched = arena_removed_mask(base, {as_removed(base.places[static])})
+	testing.expect(t, !mask[static] && unmatched == 1, "a static placement cannot be removed")
+}
+
+// A removed placement takes its collision with it, and nothing else does.
+@(test)
+a_removal_drops_its_collision :: proc(t: ^testing.T) {
+	base, msg, ok := arena_baseline()
+	testing.expectf(t, ok, "the baseline did not load: %s", msg)
+	pick := -1
+	for tier, i in base.tiers {
+		if tier == .Delete_Only && len(base.owned[i]) > 0 { pick = i; break }
+	}
+	testing.expect(t, pick >= 0, "no delete-only placement owns collision")
+	if pick < 0 { return }
+	mask := make([]bool, len(base.places), context.temp_allocator)
+	before := arena_jpk_drop(base, mask)
+	mask[pick] = true
+	after := arena_jpk_drop(base, mask)
+	for run in base.owned[pick] {
+		for i in run[0] ..< run[0] + run[1] {
+			testing.expect(t, after[i], "an owned triangle survived its placement's removal")
+		}
+	}
+	for dropped, i in before {
+		testing.expect(t, after[i] == dropped || !dropped, "a removal restored a dropped triangle")
+	}
+}
+
+// What the window saves is what it reads back: a removal survives a save.
+@(test)
+a_saved_removal_reloads_as_the_same_placement :: proc(t: ^testing.T) {
+	base, msg, ok := arena_baseline()
+	testing.expectf(t, ok, "the baseline did not load: %s", msg)
+	doc: Venue_Doc
+	doc.arena.props = make([]Arena_Prop, len(base.places), context.temp_allocator)
+	want := -1
+	for place, i in base.places {
+		doc.arena.props[i] = {ref = place.ref, pos = place.pos, tier = base.tiers[i]}
+		if base.tiers[i] == .Delete_Only { want = i }
+	}
+	testing.expect(t, want >= 0, "the baseline has no delete-only placement")
+	if want < 0 { return }
+	doc.arena.props[want].removed = true
+	mask, unmatched := arena_removed_mask(base, arena_removed_block(&doc))
+	testing.expect(t, mask[want] && unmatched == 0, "the saved removal did not name its placement")
 }

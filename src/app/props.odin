@@ -384,11 +384,16 @@ prop_instance_xform :: proc(inst: Prop_Instance) -> gfx.Matrix {
 // re-bounded. A rotated prop's box is wider than its model box, which is what
 // picking has to test against.
 prop_world_bounds :: proc(doc: ^Venue_Doc, inst: Prop_Instance) -> (lo, hi: gfx.Vector3, ok: bool) {
-	drawable, have := prop_drawable(doc, inst.ref)
+	return prop_ref_world_bounds(doc, inst.ref, prop_instance_xform(inst))
+}
+
+// The same for any mesh at any matrix: an arena's baseline is placed by a
+// stock 3x3 that a Prop_Instance cannot hold.
+prop_ref_world_bounds :: proc(doc: ^Venue_Doc, ref: Prop_Ref, xform: gfx.Matrix) -> (lo, hi: gfx.Vector3, ok: bool) {
+	drawable, have := prop_drawable(doc, ref)
 	if !have {
 		return
 	}
-	xform := prop_instance_xform(inst)
 	for corner in 0 ..< 8 {
 		local := gfx.Vector3{
 			corner & 1 != 0 ? drawable.hi.x : drawable.lo.x,
@@ -502,10 +507,12 @@ prop_draw_one :: proc(doc: ^Venue_Doc, drawable: Prop_Drawable, xform: gfx.Matri
 // The box round a placed prop, so the selected one is visible against the
 // scenery it is standing in.
 draw_prop_box :: proc(doc: ^Venue_Doc, inst: Prop_Instance, col: gfx.Color) {
-	lo, hi, ok := prop_world_bounds(doc, inst)
-	if !ok {
-		return
+	if lo, hi, ok := prop_world_bounds(doc, inst); ok {
+		draw_world_box(lo, hi, col)
 	}
+}
+
+draw_world_box :: proc(lo, hi: gfx.Vector3, col: gfx.Color) {
 	corner :: proc(lo, hi: gfx.Vector3, i: int) -> gfx.Vector3 {
 		return {i & 1 != 0 ? hi.x : lo.x, i & 2 != 0 ? hi.y : lo.y, i & 4 != 0 ? hi.z : lo.z}
 	}
@@ -548,7 +555,11 @@ prop_ghost_update :: proc(ed: ^Editor, ray: gfx.Ray) {
 		ed.prop_placing = nil
 		return
 	}
-	ed.prop_ghost, ed.prop_ghost_ok = pick_ground(ed, ray)
+	if ed.kind == .Arena {
+		ed.prop_ghost, ed.prop_ghost_ok = arena_pick_ground(ed, ray)
+	} else {
+		ed.prop_ghost, ed.prop_ghost_ok = pick_ground(ed, ray)
+	}
 }
 
 // The prop under the cursor, before it is placed: the real mesh where it would

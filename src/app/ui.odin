@@ -762,6 +762,7 @@ SEL_ROWS := [Sel_Kind]f32{
 	.Floor      = 11,
 	.Floor_Vert = 11,
 	.Prop       = 7,
+	.Baseline   = 4,
 }
 
 // Never more than half the dock: an eight-row point on a short window would
@@ -794,6 +795,8 @@ draw_selection_block :: proc(ed: ^Editor) {
 		draw_floor_selection(ed)
 	case .Prop:
 		draw_prop_selection(ed)
+	case .Baseline:
+		draw_baseline_selection(ed)
 	}
 }
 

@@ -61,6 +61,7 @@ Sel_Kind :: enum {
 	Floor,      // idx indexes geo.Terrain.floors: the whole pad
 	Floor_Vert, // ... and `sub` one corner of its outline
 	Prop,       // idx indexes Venue_Doc.props
+	Baseline,   // idx indexes Venue_Doc.arena.props
 }
 
 Selection :: struct {
@@ -421,15 +422,10 @@ world_per_pixel :: proc(ed: ^Editor, cam3d: gfx.Camera3D) -> f32 {
 // would then refuse every click that tries to select it again. Hence
 // `gizmo_shown`.
 editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3, sel_node: int) -> bool {
-	ui.gizmo_begin_frame()
-	ui.gizmo_set_orthographic(false)
-	ui.gizmo_set_rect(0, 0, f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight()))
-
 	// An unfocused window manipulates nothing and drops any brush it held.
-	if !gfx.WindowFocused(&ed.window) {
+	if !gizmo_frame_begin(ed) {
 		terrain_brush_clear(ed)
 		road_brush_clear(ed)
-		ed.gizmo_active, ed.gizmo_hovered = false, false
 		return false
 	}
 
@@ -452,6 +448,20 @@ editor_gizmos :: proc(ed: ^Editor, cam3d: gfx.Camera3D, node_pos: []gfx.Vector3,
 	return gizmo_used
 }
 
+// Every frame, before any gizmo: ImGuizmo draws into this frame's draw list
+// and crashes without one. False when the window is not focused, which
+// manipulates nothing.
+gizmo_frame_begin :: proc(ed: ^Editor) -> bool {
+	ui.gizmo_begin_frame()
+	ui.gizmo_set_orthographic(false)
+	ui.gizmo_set_rect(0, 0, f32(gfx.GetScreenWidth()), f32(gfx.GetScreenHeight()))
+	if !gfx.WindowFocused(&ed.window) {
+		ed.gizmo_active, ed.gizmo_hovered = false, false
+		return false
+	}
+	return true
+}
+
 // 1 = move, 2 = rotate, Ctrl+S = save.
 editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 	if ui_keys {
@@ -464,7 +474,7 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 		ed.gizmo_mode = .Rotate
 	}
 	ctrl := gfx.IsKeyDown(.LEFT_CONTROL) || gfx.IsKeyDown(.RIGHT_CONTROL)
-	if ctrl && gfx.IsKeyPressed(.S) && len(ed.doc.spline.points) >= 2 {
+	if ctrl && gfx.IsKeyPressed(.S) && (len(ed.doc.spline.points) >= 2 || ed.doc.arena.active) {
 		do_save(ed)
 	}
 	// B is the prop-placing mode. Which prop it places is the Inspector's half of

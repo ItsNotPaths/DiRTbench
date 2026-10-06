@@ -23,17 +23,30 @@ arena_frame :: proc(ed: ^Editor) {
 	editor_hotkeys(ed, ui_keys)
 
 	nav := alt_held()
+	ui.gizmo_enable(!nav)
 	camera_step(ed, ui_mouse, nav)
 	cam3d := to_camera3d(ed.cam)
+	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
+	prop_ghost_update(ed, ray)
 	draw_arena_scene(ed, cam3d)
 
 	ui.imgui_backend_begin()
+	gizmo_used := false
+	if pi := selected_prop(ed); gizmo_frame_begin(ed) {
+		if pi >= 0 {
+			gizmo_used = prop_gizmo(ed, pi, cam3d)
+		}
+		ed.gizmo_active = gizmo_used
+		ed.gizmo_hovered = pi >= 0 && ui.gizmo_is_over()
+	}
 	draw_menubar(ed)
 	draw_arena_inspector(ed)
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
 	}
 	render_imgui(&ed.window)
+
+	arena_input(ed, ray, gizmo_used, nav, ui_mouse, ui_keys)
 
 	gfx.EndWindowFrame(&ed.window)
 	free_all(context.temp_allocator)
@@ -44,9 +57,58 @@ draw_arena_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
-	geo.gpu_mesh_draw(ed.doc.arena_ground.mesh, ed.doc.material, ed.wireframe)
-	draw_arena_props(ed.doc, ed.wireframe)
+	geo.gpu_mesh_draw(ed.doc.arena.mesh, ed.doc.material, ed.wireframe)
+	draw_arena_baseline(ed.doc, ed.wireframe)
+	draw_props(ed.doc, ed.wireframe)
+	if bi := selected_baseline(ed); bi >= 0 {
+		prop := ed.doc.arena.props[bi]
+		if lo, hi, ok := prop_ref_world_bounds(ed.doc, prop.ref, prop.xform); ok {
+			draw_world_box(lo, hi, {255, 140, 70, 255})
+		}
+	}
+	if pi := selected_prop(ed); pi >= 0 {
+		draw_prop_box(ed.doc, ed.doc.props[pi], {255, 140, 70, 255})
+	}
+	draw_prop_ghost(ed)
 	gfx.EndMode3D()
+}
+
+// Twin of editor_input (view.odin): a click picks the nearer of a baseline
+// placement and a placed prop, and Delete takes whichever is selected.
+@(private = "file")
+arena_input :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys: bool) {
+	if prop_place_input(ed, nav, ui_mouse, ui_keys) {
+		return
+	}
+	if gfx.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
+		pi, pd := pick_prop(ed.doc, ray)
+		bi, bd := arena_pick_baseline(ed.doc, ray)
+		switch {
+		case pi >= 0 && (bi < 0 || pd <= bd):
+			ed.sel = {kind = .Prop, idx = pi}
+		case bi >= 0:
+			ed.sel = {kind = .Baseline, idx = bi}
+		case:
+			ed.sel = {}
+		}
+	}
+	if !gfx.IsKeyPressed(.DELETE) || ui_keys {
+		return
+	}
+	if pi := selected_prop(ed); pi >= 0 {
+		prop_remove(ed.doc, pi)
+		ed.sel = {}
+	} else if bi := selected_baseline(ed); bi >= 0 {
+		arena_set_removed(ed, bi, true)
+	}
+}
+
+// The selected baseline placement, or -1.
+selected_baseline :: proc(ed: ^Editor) -> int {
+	if ed.sel.kind == .Baseline && ed.sel.idx >= 0 && ed.sel.idx < len(ed.doc.arena.props) {
+		return ed.sel.idx
+	}
+	return -1
 }
 
 draw_arena_inspector :: proc(ed: ^Editor) {
@@ -70,34 +132,194 @@ draw_arena_inspector :: proc(ed: ^Editor) {
 		ui.im_text_colored(DIM_COL, fmt.ctprint(label))
 	}
 	ui.im_text_colored(DIM_COL, "Add, remove and rename routes in the project manager.")
+
+	draw_prop_selection(ed)
+	draw_baseline_selection(ed)
+	draw_removed_list(ed)
+	draw_props_sections(ed)
+}
+
+// One baseline placement: what it is, and the way out if its tier allows one.
+draw_baseline_selection :: proc(ed: ^Editor) {
+	bi := selected_baseline(ed)
+	if bi < 0 {
+		return
+	}
+	prop := ed.doc.arena.props[bi]
+	ui.igSeparatorText(fmt.ctprintf("Baseline %d of %d", bi, len(ed.doc.arena.props)))
+	ui.im_text(fmt.ctprint(prop.ref.name))
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("%s, stock Battersea", ARENA_TIER_NAMES[prop.tier]))
+	ui.igBeginDisabled(prop.tier != .Delete_Only)
+	if ui.im_button("Remove") {
+		arena_set_removed(ed, bi, true)
+	}
+	ui.igEndDisabled()
+}
+
+// The removed baseline placements, each with the way back.
+@(private = "file")
+draw_removed_list :: proc(ed: ^Editor) {
+	removed := 0
+	for prop in ed.doc.arena.props {
+		if prop.removed { removed += 1 }
+	}
+	if removed == 0 {
+		return
+	}
+	ui.igSeparatorText(fmt.ctprintf("Removed (%d)", removed))
+	for prop, i in ed.doc.arena.props {
+		if !prop.removed {
+			continue
+		}
+		if ui.im_button(fmt.ctprintf("Restore###restore%d", i)) {
+			arena_set_removed(ed, i, false)
+		}
+		ui.im_same_line()
+		ui.im_text(fmt.ctprint(prop.ref.name))
+	}
+}
+
+// Take a baseline placement out, or put it back. Its collision goes with it,
+// so the ground is rebuilt.
+arena_set_removed :: proc(ed: ^Editor, i: int, removed: bool) {
+	prop := &ed.doc.arena.props[i]
+	if prop.tier != .Delete_Only {
+		set_status(&ed.status, fmt.tprintf("%s is %s: it stays", prop.ref.name, ARENA_TIER_NAMES[prop.tier]), false)
+		return
+	}
+	prop.removed = removed
+	ed.sel = {}
+	mark_edited(ed.doc)
+	if msg, ok := arena_ground_rebuild(ed.doc); !ok {
+		set_status(&ed.status, msg, false)
+		return
+	}
+	set_status(&ed.status, fmt.tprintf("%s %s", removed ? "removed" : "restored", prop.ref.name), true)
 }
 
 // --- the ground ----------------------------------------------------------------
 
-// An arena's ground, as the window draws and picks it: the collision the
-// export writes, which is the drawn ground plus the baked walls of every prop
-// the baseline keeps. What the car drives on is what a prop is dropped on.
-Arena_Ground :: struct {
-	tris:  [][3]gfx.Vector3,
-	mesh:  geo.Gpu_Mesh,
-	lo:    gfx.Vector3,
-	hi:    gfx.Vector3,
-	props: []Arena_Prop, // the baseline, drawn from the venue art
+// An arena as the window holds it: the ground the export writes, which is the
+// drawn ground plus the baked walls of every prop still standing, and the
+// baseline placements, each marked removed or not. What the car drives on is
+// what a prop is dropped on.
+Arena_Doc :: struct {
+	active:    bool,
+	stock_jpk: []u8,
+	tris:      [][3]gfx.Vector3,
+	mesh:      geo.Gpu_Mesh,
+	lo:        gfx.Vector3,
+	hi:        gfx.Vector3,
+	props:     []Arena_Prop, // parallel to the baseline's placements
+	catalogue: []Prop_Ref,
 }
 
 Arena_Prop :: struct {
-	ref:   Prop_Ref,
-	xform: gfx.Matrix,
+	ref:     Prop_Ref,
+	xform:   gfx.Matrix,
+	pos:     [3]f32,
+	tier:    Arena_Tier,
+	removed: bool,
 }
 
-arena_ground_free :: proc(g: ^Arena_Ground) {
-	delete(g.tris)
-	for prop in g.props {
+arena_doc_free :: proc(a: ^Arena_Doc) {
+	delete(a.stock_jpk)
+	delete(a.tris)
+	geo.gpu_mesh_unload(&a.mesh)
+	for prop in a.props {
 		delete(prop.ref.name)
 	}
-	delete(g.props)
-	geo.gpu_mesh_unload(&g.mesh)
-	g^ = {}
+	delete(a.props)
+	for ref in a.catalogue {
+		delete(ref.name)
+	}
+	delete(a.catalogue)
+	a^ = {}
+}
+
+// Read the stock collision and the baseline, mark what the venue removed, and
+// build the ground.
+arena_doc_load :: proc(doc: ^Venue_Doc, p: Venue) -> (msg: string, ok: bool) {
+	a := &doc.arena
+	arena_doc_free(a)
+	_, donor, found := venue_source(doc.install, p)
+	if !found {
+		return fmt.tprintf("%s/%s is not in the game", p.base, p.base_route), false
+	}
+	stock, read_err := os.read_entire_file(d3.Stock_Path(donor.dir, "track.jpk"), context.allocator)
+	if read_err != nil {
+		return fmt.tprintf("could not read the stock track.jpk: %v", read_err), false
+	}
+	base, baseline_msg, baseline_ok := arena_baseline()
+	if !baseline_ok {
+		delete(stock)
+		return baseline_msg, false
+	}
+	// An entry that matches nothing is dropped here, so the next save drops it
+	// from the file. The export refuses it until then.
+	mask, _ := arena_removed_mask(base, p.road.removed)
+	a.active, a.stock_jpk = true, stock
+	a.props = make([]Arena_Prop, len(base.places))
+	for place, i in base.places {
+		a.props[i] = {
+			ref     = {kind = place.ref.kind, name = strings.clone(place.ref.name)},
+			xform   = arena_place_xform(place),
+			pos     = place.pos,
+			tier    = base.tiers[i],
+			removed = mask[i],
+		}
+	}
+	a.catalogue = make([]Prop_Ref, len(base.catalogue))
+	for ref, i in base.catalogue {
+		a.catalogue[i] = {kind = ref.kind, name = strings.clone(ref.name)}
+	}
+	return arena_ground_rebuild(doc)
+}
+
+// The ground again, from the stock collision minus what the baseline and the
+// removals drop.
+arena_ground_rebuild :: proc(doc: ^Venue_Doc) -> (msg: string, ok: bool) {
+	a := &doc.arena
+	base, baseline_msg, baseline_ok := arena_baseline()
+	if !baseline_ok {
+		return baseline_msg, false
+	}
+	mask := make([]bool, len(a.props), context.temp_allocator)
+	for prop, i in a.props {
+		mask[i] = prop.removed
+	}
+	tris, tris_msg, tris_ok := d3.Jpk_Triangles(a.stock_jpk, arena_jpk_drop(base, mask), context.temp_allocator)
+	if !tris_ok {
+		return tris_msg, false
+	}
+	delete(a.tris)
+	geo.gpu_mesh_unload(&a.mesh)
+	a.mesh = geo.gpu_mesh_upload(arena_ground_build(a, tris))
+	return fmt.tprintf("%d ground and wall triangles", len(tris)), true
+}
+
+// The removed placements as the venue file names them. Not a transform: only
+// the mesh and the position are read back (arena_removed_mask).
+arena_removed_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> []Stage_Prop {
+	n := 0
+	for prop in doc.arena.props {
+		if prop.removed { n += 1 }
+	}
+	out := make([]Stage_Prop, n, allocator)
+	n = 0
+	for prop in doc.arena.props {
+		if prop.removed {
+			out[n] = {
+				name  = prop.ref.name,
+				trees = prop.ref.kind == .Trees_Pssg,
+				pos   = prop.pos,
+				rot   = {0, 0, 0, 1},
+				scale = 1,
+			}
+			n += 1
+		}
+	}
+	return out
 }
 
 // Ground and walls, one colour each. Not by surface code: Battersea's codes
@@ -116,41 +338,9 @@ arena_ground_colour :: proc(normal: gfx.Vector3, base: [3]f32) -> gfx.Color {
 	return {u8(min(base[0] * light, 255)), u8(min(base[1] * light, 255)), u8(min(base[2] * light, 255)), 255}
 }
 
-// Read the arena's collision off the stock route and upload it.
-arena_ground_load :: proc(doc: ^Venue_Doc, p: Venue) -> (msg: string, ok: bool) {
-	arena_ground_free(&doc.arena_ground)
-	_, donor, found := venue_source(doc.install, p)
-	if !found {
-		return fmt.tprintf("%s/%s is not in the game", p.base, p.base_route), false
-	}
-	stock, read_err := os.read_entire_file(d3.Stock_Path(donor.dir, "track.jpk"), context.temp_allocator)
-	if read_err != nil {
-		return fmt.tprintf("could not read the stock track.jpk: %v", read_err), false
-	}
-	places, drop, baseline_msg, baseline_ok := arena_baseline()
-	if !baseline_ok {
-		return baseline_msg, false
-	}
-	tris, tris_msg, tris_ok := d3.Jpk_Triangles(stock, drop, context.temp_allocator)
-	if !tris_ok {
-		return tris_msg, false
-	}
-
-	mesh := arena_ground_build(&doc.arena_ground, tris)
-	doc.arena_ground.mesh = geo.gpu_mesh_upload(mesh)
-	doc.arena_ground.props = make([]Arena_Prop, len(places))
-	for place, i in places {
-		doc.arena_ground.props[i] = {
-			ref   = {kind = place.ref.kind, name = strings.clone(place.ref.name)},
-			xform = arena_place_xform(place),
-		}
-	}
-	return fmt.tprintf("%d ground and wall triangles", len(tris)), true
-}
-
-// The CPU half of arena_ground_load: positions for picking, and a coloured mesh
-// to upload.
-arena_ground_build :: proc(g: ^Arena_Ground, tris: []d3.Write_Tri) -> (mesh: geo.Tri_Mesh) {
+// The CPU half of arena_ground_rebuild: positions for picking, and a coloured
+// mesh to upload.
+arena_ground_build :: proc(g: ^Arena_Doc, tris: []d3.Write_Tri) -> (mesh: geo.Tri_Mesh) {
 	g.tris = make([][3]gfx.Vector3, len(tris))
 	g.lo, g.hi = max(f32), min(f32)
 	mesh.pos = make([dynamic]gfx.Vector3, 0, len(tris) * 3, context.temp_allocator)
@@ -224,21 +414,46 @@ arena_place_xform :: proc(place: D3_Place) -> (m: gfx.Matrix) {
 
 // Twin of draw_props (props.odin), over the baseline.
 @(private = "file")
-draw_arena_props :: proc(doc: ^Venue_Doc, wireframe: bool) {
-	if len(doc.arena_ground.props) > 0 && doc.venue_art.state == .Unloaded {
+draw_arena_baseline :: proc(doc: ^Venue_Doc, wireframe: bool) {
+	if len(doc.arena.props) > 0 && doc.venue_art.state == .Unloaded {
 		venue_art_load(doc)
 	}
-	for prop in doc.arena_ground.props {
+	for prop in doc.arena.props {
+		if prop.removed {
+			continue
+		}
 		if drawable, have := prop_drawable(doc, prop.ref); have {
 			prop_draw_one(doc, drawable, prop.xform, wireframe)
 		}
 	}
 }
 
+// Twin of pick_prop (props.odin), over the baseline you can remove. The rest
+// is click-through: nothing can be done to it, and the godray cards and
+// shadow meshes have boxes that would swallow every click near them.
+@(private = "file")
+arena_pick_baseline :: proc(doc: ^Venue_Doc, ray: gfx.Ray) -> (idx: int, dist: f32) {
+	idx, dist = -1, max(f32)
+	for prop, i in doc.arena.props {
+		if prop.removed || prop.tier != .Delete_Only {
+			continue
+		}
+		lo, hi, ok := prop_ref_world_bounds(doc, prop.ref, prop.xform)
+		if !ok {
+			continue
+		}
+		hit := gfx.GetRayCollisionBox(ray, lo, hi)
+		if hit.hit && hit.distance < dist {
+			idx, dist = i, hit.distance
+		}
+	}
+	return
+}
+
 // Twin of pick_ground (scene.odin), over the arena's collision.
 arena_pick_ground :: proc(ed: ^Editor, ray: gfx.Ray) -> (at: gfx.Vector3, hit: bool) {
 	best := max(f32)
-	for tri in ed.doc.arena_ground.tris {
+	for tri in ed.doc.arena.tris {
 		c := gfx.GetRayCollisionTriangle(ray, tri[0], tri[1], tri[2])
 		if c.hit && c.distance < best {
 			at, best = c.point, c.distance
@@ -249,7 +464,7 @@ arena_pick_ground :: proc(ed: ^Editor, ray: gfx.Ray) -> (at: gfx.Vector3, hit: b
 
 // Frame the whole ground from above, the first time the window opens.
 arena_camera_frame :: proc(ed: ^Editor) {
-	g := ed.doc.arena_ground
+	g := ed.doc.arena
 	if g.mesh.tris == 0 {
 		return
 	}

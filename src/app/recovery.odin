@@ -157,7 +157,7 @@ recovery_doc_saved :: proc(root: string, doc: ^Venue_Doc) {
 // with nothing outstanding leaves no folder at all.
 recovery_snapshot :: proc(root: string, docs: []^Venue_Doc) {
 	for doc in docs {
-		if !doc_unsaved(doc) || doc.edits == doc.snapshot_edits || len(doc.spline.points) < 2 {
+		if !doc_unsaved(doc) || doc.edits == doc.snapshot_edits || (len(doc.spline.points) < 2 && !doc.arena.active) {
 			continue
 		}
 		if _, ok := recovery_write_doc(root, doc); ok {

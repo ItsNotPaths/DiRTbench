@@ -944,7 +944,8 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 		// and a save.
 		clear(&doc.spline.points)
 		doc.dirty_road, doc.dirty_terrain, doc.veg_dirty, doc.terrain_preview_due = false, false, false, false
-		if ground_msg, ground_ok := arena_ground_load(doc, p^); !ground_ok {
+		doc_load_props(doc, p.road.props)
+		if ground_msg, ground_ok := arena_doc_load(doc, p^); !ground_ok {
 			return fmt.tprintf("ground: %s", ground_msg), false
 		}
 	} else {

@@ -167,6 +167,9 @@ Venue_Road :: struct {
 	terrain: Stage_Terrain,
 	floors:  []Stage_Floor,
 	props:   []Stage_Prop,
+	// An arena's baseline placements taken out, named by mesh and position
+	// (arena_removed_mask). Empty on a stage venue.
+	removed: []Stage_Prop,
 }
 
 // --- conversion -------------------------------------------------------------
@@ -198,7 +201,7 @@ quat_from_array :: proc(a: [4]f32) -> gfx.Quaternion {
 // form: passing the blocks one at a time is how one gets silently dropped, and
 // that has already cost every compiled stage its checkpoints once.
 save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
-	if len(doc.spline.points) < 2 {
+	if len(doc.spline.points) < 2 && !doc.arena.active {
 		return "nothing to save: a stage needs at least 2 points", false
 	}
 	if dir := filepath.dir(path); !os.exists(dir) {
@@ -304,21 +307,49 @@ road_block :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> (roa
 		}
 		road.floors = floors
 	}
-	{
-		props := make([]Stage_Prop, len(doc.props), allocator)
-		for inst, i in doc.props {
-			props[i] = {
-				name    = inst.ref.name,
-				trees   = inst.ref.kind == .Trees_Pssg,
-				scenery = inst.role == .Ornament,
-				pos     = {inst.pos.x, inst.pos.y, inst.pos.z},
-				rot     = quat_to_array(inst.rot),
-				scale   = inst.scale,
-			}
-		}
-		road.props = props
+	road.props = make([]Stage_Prop, len(doc.props), allocator)
+	for inst, i in doc.props {
+		road.props[i] = stage_of_prop(inst)
 	}
+	road.removed = arena_removed_block(doc, allocator)
 	return
+}
+
+// Rebuilt from the file every time, so nothing of the last document's props
+// survives into this one.
+doc_load_props :: proc(doc: ^Venue_Doc, props: []Stage_Prop) {
+	props_free(doc)
+	doc.props = make([dynamic]Prop_Instance)
+	for pr in props {
+		if pr.name == "" {
+			continue
+		}
+		inst := prop_of_stage(pr)
+		inst.ref.name = strings.clone(pr.name)
+		append(&doc.props, inst)
+	}
+}
+
+// A saved prop as a placement. The name is borrowed from `pr`.
+prop_of_stage :: proc(pr: Stage_Prop) -> Prop_Instance {
+	return {
+		ref   = {kind = pr.trees ? .Trees_Pssg : .Objects_Pssg, name = pr.name},
+		role  = pr.scenery ? .Ornament : .Object,
+		pos   = {pr.pos[0], pr.pos[1], pr.pos[2]},
+		rot   = quat_from_array(pr.rot),
+		scale = clamp(pr.scale, PROP_SCALE_MIN, PROP_SCALE_MAX),
+	}
+}
+
+stage_of_prop :: proc(inst: Prop_Instance) -> Stage_Prop {
+	return {
+		name    = inst.ref.name,
+		trees   = inst.ref.kind == .Trees_Pssg,
+		scenery = inst.role == .Ornament,
+		pos     = {inst.pos.x, inst.pos.y, inst.pos.z},
+		rot     = quat_to_array(inst.rot),
+		scale   = inst.scale,
+	}
 }
 
 // The road of the venue file at a path the caller chose. See save_road.
@@ -459,7 +490,7 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 	}
 	{
 		// Rebuilt from the file every time, so nothing of the last document's
-		// pads or props survives into this one.
+		// pads survives into this one.
 		clear(&terrain.floors)
 		clear(&terrain.floor_pts)
 		for f in road.floors {
@@ -474,21 +505,6 @@ doc_load_road :: proc(doc: ^Venue_Doc, road: Venue_Road) -> (msg: string, ok: bo
 			}
 		}
 	}
-	{
-		props_free(doc)
-		doc.props = make([dynamic]Prop_Instance)
-		for pr in road.props {
-			if pr.name == "" {
-				continue
-			}
-			append(&doc.props, Prop_Instance{
-				ref   = {kind = pr.trees ? .Trees_Pssg : .Objects_Pssg, name = strings.clone(pr.name)},
-				role  = pr.scenery ? .Ornament : .Object,
-				pos   = {pr.pos[0], pr.pos[1], pr.pos[2]},
-				rot   = quat_from_array(pr.rot),
-				scale = clamp(pr.scale, PROP_SCALE_MIN, PROP_SCALE_MAX),
-			})
-		}
-	}
+	doc_load_props(doc, road.props)
 	return "", true
 }

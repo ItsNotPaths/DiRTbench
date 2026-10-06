@@ -162,7 +162,7 @@ arena_new_headless :: proc(name: string) -> bool {
 // Teardown viewer. See docs/plan-party-levels.md, "The baseline".
 ARENA_BASELINE_JSON :: #load("../../assets/d3/battersea_baseline.json")
 
-// One row of the baked file. `tier` is read by the editor, not the export.
+// One row of the baked file.
 Arena_Baseline_Row :: struct {
 	mesh:  string,
 	trees: bool,
@@ -170,6 +170,7 @@ Arena_Baseline_Row :: struct {
 	tier:  string,
 	basis: [3][3]f32,
 	pos:   [3]f32,
+	jpk:   [][2]int, // the stock track.jpk triangles this placement owns
 }
 
 // The file's names for the three forms a stock placement takes.
@@ -179,50 +180,152 @@ ARENA_FORM_KEY := [D3_Ens_Form]string {
 	.Dynamic_Entity = "entity",
 }
 
-// The baseline placements, and which triangles of the stock track.jpk belong
-// to placements the baseline left out: those are the walls of props that are
-// no longer there.
-arena_baseline :: proc(
-	allocator := context.temp_allocator,
-) -> (places: []D3_Place, jpk_drop: []bool, msg: string, ok: bool) {
+// What the tier pass lets you do with a baseline placement. The fourth tier,
+// delete-and-place, is not in the baseline at all: its placements are gone
+// from the start, and its meshes are only in the catalogue.
+Arena_Tier :: enum u8 {
+	Static,      // stays, and its mesh is not placeable
+	Place_Only,  // stays, and its mesh is placeable
+	Delete_Only, // removable, and its mesh is not placeable
+}
+
+ARENA_TIER_KEY := [Arena_Tier]string {
+	.Static      = "static",
+	.Place_Only  = "addonly",
+	.Delete_Only = "deletable",
+}
+
+ARENA_TIER_NAMES := [Arena_Tier]string {
+	.Static      = "static",
+	.Place_Only  = "place-only",
+	.Delete_Only = "delete-only",
+}
+
+Arena_Baseline :: struct {
+	places:    []D3_Place,
+	tiers:     []Arena_Tier,
+	owned:     [][][2]int, // per placement: runs of track.jpk triangles, [first, count]
+	jpk_drop:  []bool,     // the triangles of placements the baseline left out
+	catalogue: []Prop_Ref, // the meshes new props may be
+}
+
+// The baked baseline. Parsed per call into `allocator`: it is a constant, and
+// the callers are a window load, a removal and an export, never a frame.
+arena_baseline :: proc(allocator := context.temp_allocator) -> (base: Arena_Baseline, msg: string, ok: bool) {
 	file: struct {
 		source:     string,
-		// Runs of triangle indices: [first, count].
 		jpk_drop:   [][2]int,
+		catalogue:  []struct{mesh: string, trees: bool},
 		placements: []Arena_Baseline_Row,
 	}
 	if err := json.unmarshal(ARENA_BASELINE_JSON, &file, json.DEFAULT_SPECIFICATION, allocator); err != nil {
-		return nil, nil, fmt.tprintf("the baked baseline did not parse: %v", err), false
+		return {}, fmt.tprintf("the baked baseline did not parse: %v", err), false
 	}
-	if n := len(file.jpk_drop); n > 0 {
-		last := file.jpk_drop[n - 1]
-		jpk_drop = make([]bool, last[0] + last[1], allocator)
-		for run in file.jpk_drop {
-			for i in run[0] ..< run[0] + run[1] { jpk_drop[i] = true }
-		}
-	}
-	places = make([]D3_Place, len(file.placements), allocator)
+	base.jpk_drop = arena_runs_mask(nil, file.jpk_drop, allocator)
+	n := len(file.placements)
+	base.places = make([]D3_Place, n, allocator)
+	base.tiers = make([]Arena_Tier, n, allocator)
+	base.owned = make([][][2]int, n, allocator)
 	for row, i in file.placements {
-		form, known := arena_form_of(row.form)
-		if !known {
-			return nil, nil, fmt.tprintf("baseline row %d has form %q", i, row.form), false
+		form, form_ok := arena_key_of(ARENA_FORM_KEY, row.form)
+		tier, tier_ok := arena_key_of(ARENA_TIER_KEY, row.tier)
+		if !form_ok || !tier_ok {
+			return {}, fmt.tprintf("baseline row %d has form %q, tier %q", i, row.form, row.tier), false
 		}
-		places[i] = {
+		base.places[i] = {
 			ref   = {kind = row.trees ? .Trees_Pssg : .Objects_Pssg, name = row.mesh},
 			form  = form,
 			basis = row.basis,
 			pos   = row.pos,
 		}
+		base.tiers[i], base.owned[i] = tier, row.jpk
 	}
-	return places, jpk_drop, "", true
+	base.catalogue = make([]Prop_Ref, len(file.catalogue), allocator)
+	for entry, i in file.catalogue {
+		base.catalogue[i] = {kind = entry.trees ? .Trees_Pssg : .Objects_Pssg, name = entry.mesh}
+	}
+	return base, "", true
+}
+
+// `mask` with every triangle of `runs` set, grown to fit.
+@(private = "file")
+arena_runs_mask :: proc(mask: []bool, runs: [][2]int, allocator := context.temp_allocator) -> []bool {
+	n := len(mask)
+	for run in runs {
+		n = max(n, run[0] + run[1])
+	}
+	out := make([]bool, n, allocator)
+	copy(out, mask)
+	for run in runs {
+		for i in run[0] ..< run[0] + run[1] { out[i] = true }
+	}
+	return out
+}
+
+// Which baseline placements a venue's `removed` list names. An entry names a
+// placement by mesh, library and position, so a re-bake that adds or drops
+// rows cannot move a removal onto another prop. Only delete-only placements
+// can be removed; an entry that matches nothing removable is counted, not used.
+ARENA_MATCH_M :: 0.01
+
+arena_removed_mask :: proc(
+	base: Arena_Baseline, removed: []Stage_Prop, allocator := context.temp_allocator,
+) -> (mask: []bool, unmatched: int) {
+	mask = make([]bool, len(base.places), allocator)
+	outer: for entry in removed {
+		kind: Prop_Lib_Kind = entry.trees ? .Trees_Pssg : .Objects_Pssg
+		for place, i in base.places {
+			if mask[i] || base.tiers[i] != .Delete_Only || place.ref.kind != kind || place.ref.name != entry.name {
+				continue
+			}
+			d := place.pos - entry.pos
+			if d.x * d.x + d.y * d.y + d.z * d.z < ARENA_MATCH_M * ARENA_MATCH_M {
+				mask[i] = true
+				continue outer
+			}
+		}
+		unmatched += 1
+	}
+	return
+}
+
+// The stock track.jpk triangles an arena drops: the baseline's own, plus the
+// ones each removed placement owns.
+arena_jpk_drop :: proc(base: Arena_Baseline, mask: []bool, allocator := context.temp_allocator) -> []bool {
+	drop := base.jpk_drop
+	for gone, i in mask {
+		if gone {
+			drop = arena_runs_mask(drop, base.owned[i], allocator)
+		}
+	}
+	return drop
+}
+
+// The baseline placements an arena keeps.
+arena_kept_places :: proc(base: Arena_Baseline, mask: []bool, allocator := context.temp_allocator) -> []D3_Place {
+	out := make([dynamic]D3_Place, 0, len(base.places), allocator)
+	for place, i in base.places {
+		if !mask[i] {
+			append(&out, place)
+		}
+	}
+	return out[:]
+}
+
+// Whether a new prop may be this mesh.
+arena_catalogued :: proc(base: Arena_Baseline, ref: Prop_Ref) -> bool {
+	for entry in base.catalogue {
+		if entry == ref { return true }
+	}
+	return false
 }
 
 @(private = "file")
-arena_form_of :: proc(key: string) -> (D3_Ens_Form, bool) {
-	for name, form in ARENA_FORM_KEY {
-		if name == key { return form, true }
+arena_key_of :: proc(table: [$E]string, key: string) -> (E, bool) {
+	for name, value in table {
+		if name == key { return value, true }
 	}
-	return .None, false
+	return {}, false
 }
 
 // --- export -------------------------------------------------------------------
@@ -236,9 +339,19 @@ arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 	if !found {
 		return fmt.tprintf("%s/%s is not playable", p.base, p.base_route), false
 	}
-	baseline, jpk_drop, baseline_msg, baseline_ok := arena_baseline()
+	base, baseline_msg, baseline_ok := arena_baseline()
 	if !baseline_ok {
 		return baseline_msg, false
+	}
+	mask, unmatched := arena_removed_mask(base, p.road.removed)
+	if unmatched > 0 {
+		return fmt.tprintf("%d removed props match no removable baseline placement", unmatched), false
+	}
+	baseline := arena_kept_places(base, mask)
+	jpk_drop := arena_jpk_drop(base, mask)
+	placed := make([]Prop_Instance, len(p.road.props), context.temp_allocator)
+	for pr, i in p.road.props {
+		placed[i] = prop_of_stage(pr)
 	}
 	stock_jpk, read_err := os.read_entire_file(d3.Stock_Path(donor.dir, "track.jpk"), context.temp_allocator)
 	if read_err != nil {
@@ -272,7 +385,7 @@ arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 			// Cover and water are the donor's, on the donor's ground.
 			Vis_Stock    = d3.Stock_Path(donor.dir, "track.vis"),
 		}
-		placed_msg, placed_ok := d3_write_placements(&job, donor.dir, nil, nil, nil, baseline)
+		placed_msg, placed_ok := d3_write_placements(&job, donor.dir, nil, placed, nil, baseline)
 		if !placed_ok {
 			return fmt.tprintf("%s: placements: %s", route.id, placed_msg), false
 		}
