@@ -181,6 +181,62 @@ unregister_refuses_a_venue_that_is_not_registered :: proc(t: ^testing.T) {
 	testing.expectf(t, len(msg) > 0, "a refusal must say why")
 }
 
+// The net_race_types of the rows naming `model`.
+@(private = "file")
+net_race_types_of :: proc(db: ^Database, model: i32) -> []i32 {
+	table, _ := database_table(db, "net_race_tracks")
+	out := make([dynamic]i32, context.temp_allocator)
+	for row in table.rows {
+		if row_int(table, row, "track_model_id") == model {
+			append(&out, row_int(table, row, "net_race_type"))
+		}
+	}
+	return out[:]
+}
+
+// An arena route is in its own mode's map list and in no other. Battersea
+// route_0 lists Infection, Transporter and Joyride; a Transporter route that
+// inherited all three would also be offered as an Infection map.
+@(test)
+arena_route_is_listed_under_its_own_mode_only :: proc(t: ^testing.T) {
+	schema, db := seed_database(t)
+	defer schema_delete(schema)
+	defer database_delete(&db)
+	table, _ := database_table(&db, "net_race_tracks")
+	_ = row_set_int(table, table.rows[0], "net_race_type", NET_RACE_OUTBREAK)
+	for type in ([]i32{NET_RACE_TRANSPORTER, 15}) {
+		id := table_next_id(table)
+		row := seed_row(table)
+		_ = row_set_int(table, row, "id", id)
+		_ = row_set_int(table, row, "track_model_id", DONOR_MODEL)
+		_ = row_set_int(table, row, "net_race_type", type)
+	}
+
+	ids, msg, ok := register_location(
+		&db, DONOR_MODEL, "arena", "arena", {"route_0", "route_1"}, {"arena_route_0", "arena_route_1"},
+		{NET_RACE_OUTBREAK, NET_RACE_TRANSPORTER},
+	)
+	defer delete(ids.models)
+	testing.expectf(t, ok, "arena did not register: %s", msg)
+	testing.expect(t, slice.equal(net_race_types_of(&db, ids.models[0]), []i32{NET_RACE_OUTBREAK}))
+	testing.expect(t, slice.equal(net_race_types_of(&db, ids.models[1]), []i32{NET_RACE_TRANSPORTER}))
+}
+
+// A mode the source route was never registered for has no row to copy, and
+// must be refused rather than registered as a map no mode lists.
+@(test)
+arena_route_refuses_a_mode_the_source_lacks :: proc(t: ^testing.T) {
+	schema, db := seed_database(t)
+	defer schema_delete(schema)
+	defer database_delete(&db)
+	ids, msg, ok := register_location(
+		&db, DONOR_MODEL, "arena", "arena", {"route_0"}, {"arena_route_0"}, {NET_RACE_TRANSPORTER},
+	)
+	defer delete(ids.models)
+	testing.expect(t, !ok, "a mode the source lacks must be refused")
+	testing.expectf(t, len(msg) > 0, "a refusal must say why")
+}
+
 // A revert must not take a location another venue is still standing on. Two
 // venues under one location is not what deployment builds, but it is what the
 // orphan check is for, and the check is cheaper than the bug.

@@ -223,14 +223,52 @@ clone_model_row :: proc(
 // the multiplayer stage picker.
 RELATED_TABLES := [?]string{"track_model_conditions", "track_model_surface", "net_race_tracks"}
 
+// The net_race_type of the two party modes an arena route can be.
+NET_RACE_OUTBREAK :: i32(12)
+NET_RACE_TRANSPORTER :: i32(13)
+
+// The source's net_race_tracks row for one mode, cloned onto the target. An
+// arena route is one mode, so the rows for the source's other modes stay
+// behind; Battersea route_0 also carries Infection, Transporter and Joyride.
+@(private = "file")
+clone_net_race_row :: proc(
+	db: ^Database,
+	source_id, target_id, net_race_type: i32,
+	allocator := context.allocator,
+) -> (
+	msg: string,
+	ok: bool,
+) {
+	table, found := database_table(db, "net_race_tracks")
+	if !found {
+		return "database has no net_race_tracks table", false
+	}
+	for row in table.rows {
+		if row_int(table, row, "track_model_id") != source_id ||
+		   row_int(table, row, "net_race_type") != net_race_type {
+			continue
+		}
+		cloned := row_clone(table, row, allocator)
+		_ = row_set_int(table, cloned, "id", table_next_id(table))
+		_ = row_set_int(table, cloned, "track_model_id", target_id)
+		append(&table.rows, cloned)
+		return "", true
+	}
+	return fmt.tprintf("source model %d has no net_race_tracks row of type %d", source_id, net_race_type), false
+}
+
 // Clone a source location/track/model chain, then one model per requested
 // route. The source route's internal AI and spline identifiers are retained:
 // deployment begins with a byte-for-byte hardlinked copy of that route.
+//
+// `net_race_types` is one party mode per route, for an arena. Nil clones every
+// net_race_tracks row of the source, as a stage venue does.
 register_location :: proc(
 	db: ^Database,
 	source_model_id: i32,
 	location, venue: string,
 	routes, stage_keys: []string,
+	net_race_types: []i32 = nil,
 	allocator := context.allocator,
 ) -> (
 	ids: Registration_Ids,
@@ -239,6 +277,9 @@ register_location :: proc(
 ) {
 	if len(routes) == 0 || len(routes) != len(stage_keys) {
 		return ids, "registration needs one localization key per route", false
+	}
+	if net_race_types != nil && len(net_race_types) != len(routes) {
+		return ids, "registration needs one party mode per route", false
 	}
 
 	source, source_msg, source_ok := registration_source(db, source_model_id)
@@ -287,6 +328,14 @@ register_location :: proc(
 		append(&source.models.rows, model)
 
 		for table_name in RELATED_TABLES {
+			if net_race_types != nil && table_name == "net_race_tracks" {
+				if msg, ok = clone_net_race_row(
+					db, source_model_id, model_id, net_race_types[i], allocator,
+				); !ok {
+					return
+				}
+				continue
+			}
 			_, msg, ok = clone_related_rows(
 				db,
 				table_name,
@@ -564,6 +613,7 @@ prepare_registration :: proc(
 	source_model_id: i32,
 	location, venue, location_name, venue_name: string,
 	routes, stage_names: []string,
+	net_race_types: []i32 = nil,
 	allocator := context.allocator,
 ) -> (
 	out: Registration_Output,
@@ -603,6 +653,7 @@ prepare_registration :: proc(
 		venue,
 		routes,
 		stage_keys,
+		net_race_types,
 		context.temp_allocator,
 	)
 	if !registered {
