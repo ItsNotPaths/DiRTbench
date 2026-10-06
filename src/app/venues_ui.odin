@@ -938,8 +938,16 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	// The trees come with the art: the base venue picks the species, not the user.
 	doc_set_base(doc, p.base)
 	set_stage_name(doc, p.name)
-	// A dirty document rebuilds its road, and an arena has none.
-	if !arena {
+	if arena {
+		// doc_new seeds a starter road and marks it dirty. An arena has no
+		// road, and a phantom one would reach the rebuild, the crash snapshot
+		// and a save.
+		clear(&doc.spline.points)
+		doc.dirty_road, doc.dirty_terrain, doc.veg_dirty, doc.terrain_preview_due = false, false, false, false
+		if ground_msg, ground_ok := arena_ground_load(doc, p^); !ground_ok {
+			return fmt.tprintf("ground: %s", ground_msg), false
+		}
+	} else {
 		mark_dirty(doc)
 	}
 	doc_loaded(doc)
@@ -1094,10 +1102,12 @@ open_arena_window :: proc(app: ^App, p: ^Venue) {
 		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
 		return
 	}
-	if editor_open(app, doc, .Arena, fmt.ctprintf("dirtbench — %s", p.name)) == nil {
+	ed := editor_open(app, doc, .Arena, fmt.ctprintf("dirtbench — %s", p.name))
+	if ed == nil {
 		venue_doc_release(app, doc)
 		return
 	}
+	arena_camera_frame(ed)
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.name), true)
 }
 

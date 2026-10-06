@@ -467,6 +467,7 @@ pick_prop :: proc(doc: ^Venue_Doc, ray: gfx.Ray) -> (idx: int, dist: f32) {
 // The library is parsed on the way in when there is anything to draw, so a
 // venue with props opens showing them rather than waiting to be asked. A failed
 // parse stays failed and is not retried every frame.
+// Twin: draw_arena_props (arena_view.odin).
 draw_props :: proc(doc: ^Venue_Doc, wireframe: bool) {
 	if len(doc.props) > 0 && doc.venue_art.state == .Unloaded {
 		venue_art_load(doc)

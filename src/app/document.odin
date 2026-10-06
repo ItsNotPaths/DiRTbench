@@ -112,6 +112,8 @@ Venue_Doc :: struct {
 	// base venue's own libraries, which `venue_art` parses on first ask.
 	props:         [dynamic]Prop_Instance,
 	venue_art:     Venue_Art,
+	// An arena's ground: its collision, drawn and picked. Empty on a stage.
+	arena_ground:  Arena_Ground,
 
 	// ImGui edits this in place, so it is a fixed C string.
 	stage_name:    [64]u8,
