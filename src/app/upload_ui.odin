@@ -180,7 +180,7 @@ draw_upload_thumbnail :: proc(app: ^App, f: ^Upload_Form, p: ^Venue) {
 	case:
 		ui.im_text_colored(
 			DIM_COL,
-			"Thumbnail: no view saved, so the whole road is framed from above.",
+			"Thumbnail: no view saved, so the whole venue is framed from above.",
 		)
 		ui.im_text_colored(DIM_COL, "Open the venue and use Thumbnail > Use this view to choose one.")
 	}
@@ -249,7 +249,7 @@ app_service_upload_request :: proc(app: ^App) {
 		if fitted && p.shot.set {
 			set_status(
 				&app.status,
-				"the saved view has none of the venue in it, so the whole road was framed instead",
+				"the saved view has none of the venue in it, so the whole venue was framed instead",
 				true,
 			)
 		}

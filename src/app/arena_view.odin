@@ -54,6 +54,7 @@ arena_frame :: proc(ed: ^Editor) {
 		draw_arena_route_inspector(ed)
 	} else {
 		draw_arena_inspector(ed)
+		draw_venue_tools(ed)
 	}
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
@@ -75,9 +76,7 @@ draw_arena_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	gfx.ClearBackground({26, 28, 34, 255})
 	gfx.BeginMode3D(cam3d)
 	gfx.DrawGrid(GRID_SLICES, GRID_SPACING)
-	geo.gpu_mesh_draw(ed.doc.arena.mesh, ed.doc.material, ed.wireframe)
-	draw_arena_baseline(ed.doc, ed.wireframe)
-	draw_props(ed.doc, ed.wireframe)
+	draw_arena_world(ed.doc, ed.wireframe)
 	if ed.kind == .Arena_Route {
 		draw_arena_spots(ed)
 	}
@@ -92,6 +91,14 @@ draw_arena_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	}
 	draw_prop_ghost(ed)
 	gfx.EndMode3D()
+}
+
+// The arena itself, with nothing that belongs to editing: what the window and
+// the thumbnail both draw. Twin of draw_world (scene.odin).
+draw_arena_world :: proc(doc: ^Venue_Doc, wireframe: bool) {
+	geo.gpu_mesh_draw(doc.arena.mesh, doc.material, wireframe)
+	draw_arena_baseline(doc, wireframe)
+	draw_props(doc, wireframe)
 }
 
 // Twin of editor_input (view.odin): a click picks the nearer of a baseline

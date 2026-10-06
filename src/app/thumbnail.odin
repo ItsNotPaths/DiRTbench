@@ -114,8 +114,19 @@ thumbnail_framed :: proc(doc: ^Venue_Doc, cam: gfx.Camera3D) -> f32 {
 
 // Up to THUMB_SAMPLES points spread along the road: the ribbon that is drawn,
 // or the control points when no ribbon has been built.
+//
+// An arena has no road: its ground triangles stand in for it.
 @(private = "file")
 road_sample_points :: proc(doc: ^Venue_Doc, allocator := context.temp_allocator) -> []gfx.Vector3 {
+	if doc.arena.active {
+		tris := doc.arena.tris
+		step := max(1, len(tris) / THUMB_SAMPLES)
+		out := make([dynamic]gfx.Vector3, 0, len(tris) / step + 1, allocator)
+		for i := 0; i < len(tris); i += step {
+			append(&out, tris[i][0])
+		}
+		return out[:]
+	}
 	count := len(doc.ribbon) > 0 ? len(doc.ribbon) : len(doc.spline.points)
 	if count == 0 {
 		return nil
@@ -158,6 +169,9 @@ thumbnail_is_blank :: proc(rgb: []u8) -> bool {
 // ribbon yet, which is a venue nobody has built a road in.
 @(private = "file")
 road_bounds :: proc(doc: ^Venue_Doc) -> (centre: gfx.Vector3, radius: f32) {
+	if a := doc.arena; a.active && len(a.tris) > 0 {
+		return (a.lo + a.hi) * 0.5, max(gfx.Vector3Length(a.hi - a.lo) * 0.5, 1)
+	}
 	lo := gfx.Vector3{max(f32), max(f32), max(f32)}
 	hi := gfx.Vector3{min(f32), min(f32), min(f32)}
 	seen := 0
@@ -189,7 +203,11 @@ road_bounds :: proc(doc: ^Venue_Doc) -> (centre: gfx.Vector3, radius: f32) {
 draw_thumbnail_scene :: proc(doc: ^Venue_Doc, cam3d: gfx.Camera3D) {
 	gfx.ClearBackground(THUMB_BG)
 	gfx.BeginMode3D(cam3d)
-	draw_world(doc, false)
+	if doc.arena.active {
+		draw_arena_world(doc, false)
+	} else {
+		draw_world(doc, false)
+	}
 	gfx.EndMode3D()
 }
 

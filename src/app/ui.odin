@@ -153,7 +153,7 @@ draw_menubar :: proc(ed: ^Editor) {
 		if ed.kind == .Venue && ui.igMenuItem_Bool("Road generator", nil, ed.show_gen, true) {
 			ed.show_gen = !ed.show_gen
 		}
-		if ed.kind == .Venue && ui.igMenuItem_Bool("Thumbnail", nil, ed.show_thumb, true) {
+		if (ed.kind == .Venue || ed.kind == .Arena) && ui.igMenuItem_Bool("Thumbnail", nil, ed.show_thumb, true) {
 			ed.show_thumb = !ed.show_thumb
 		}
 		ui.igSeparator()
@@ -1102,6 +1102,11 @@ draw_venue_tools :: proc(ed: ^Editor) {
 // What is saved is where the camera stood and which way it faced. No image,
 // because the picture is rendered from this when the venue is uploaded and can
 // then never be out of date with the road.
+@(private = "file")
+thumb_subject :: proc(doc: ^Venue_Doc) -> string {
+	return doc.arena.active ? "arena" : "road"
+}
+
 draw_thumbnail_panel :: proc(ed: ^Editor) {
 	sidebar_section("Thumbnail", &ed.show_thumb)
 
@@ -1113,7 +1118,7 @@ draw_thumbnail_panel :: proc(ed: ^Editor) {
 			fmt.ctprintf("Saved from %.0f, %.0f, %.0f", shot.pos[0], shot.pos[1], shot.pos[2]),
 		)
 	} else {
-		ui.im_text_colored(DIM_COL, "No view saved. The whole road gets framed from above.")
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("No view saved. The whole %s gets framed from above.", thumb_subject(ed.doc)))
 	}
 	ui.igSpacing()
 
@@ -1124,9 +1129,9 @@ draw_thumbnail_panel :: proc(ed: ^Editor) {
 	cam := to_camera3d(ed.cam)
 	framed := thumbnail_framed(ed.doc, cam)
 	if framed < THUMB_MIN_FRAMED {
-		ui.im_text_colored(WARN_COL, "The road is not in this view.")
+		ui.im_text_colored(WARN_COL, fmt.ctprintf("The %s is not in this view.", thumb_subject(ed.doc)))
 	} else {
-		ui.im_text_colored(DIM_COL, fmt.ctprintf("%.0f%% of the road is in frame.", framed * 100))
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%.0f%% of the %s is in frame.", framed * 100, thumb_subject(ed.doc)))
 	}
 
 	ui.igBeginDisabled(framed < THUMB_MIN_FRAMED)
