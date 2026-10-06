@@ -63,8 +63,8 @@ CXX_RUNTIME="$(c++ -print-file-name=libstdc++.a)"
 GCC_RUNTIME="$(cc -print-libgcc-file-name)"
 GCC_EH_RUNTIME="$(cc -print-file-name=libgcc_eh.a)"
 odin build src/app -o:speed -out:build/dirtbench \
-    -define:DIRTBENCH_VERSION="$DIRTBENCH_VERSION" \
-    -define:DIRTBENCH_COMMIT="$DIRTBENCH_COMMIT" \
+    -define:DIRTBENCH_VERSION="_$DIRTBENCH_VERSION" \
+    -define:DIRTBENCH_COMMIT="_$DIRTBENCH_COMMIT" \
     -extra-linker-flags:"-L/src/vendor/sdl3 $CXX_RUNTIME $GCC_RUNTIME $GCC_EH_RUNTIME"
 strip --strip-all build/dirtbench
 '

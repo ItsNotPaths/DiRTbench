@@ -12,9 +12,10 @@ import "core:fmt"
 // the remote drift apart, and the commit is the only thing that says exactly
 // what a binary is. release.sh and the release workflow pass both in.
 //
-// An unstamped build says so rather than claiming a release it is not.
-VERSION :: #config(DIRTBENCH_VERSION, "dev")
-COMMIT :: #config(DIRTBENCH_COMMIT, "unknown")
+// An unstamped build says so rather than claiming a release it is not. Each value
+// comes in behind a "_", or Odin reads an all-digit commit as an integer.
+VERSION :: #config(DIRTBENCH_VERSION, "_dev")[1:]
+COMMIT :: #config(DIRTBENCH_COMMIT, "_unknown")[1:]
 
 LICENSE_TEXT :: #load("../../LICENSE", string)
 CREDITS_TEXT :: #load("../../credits.txt", string)

@@ -79,8 +79,8 @@ jobs:
       - name: Build
         run: |
           odin build src/app -o:speed -out:build/dirtbench.exe \
-            -define:DIRTBENCH_VERSION="${{ inputs.version || 'dev' }}" \
-            -define:DIRTBENCH_COMMIT="${GITHUB_SHA::7}" \
+            -define:DIRTBENCH_VERSION="_${{ inputs.version || 'dev' }}" \
+            -define:DIRTBENCH_COMMIT="_${GITHUB_SHA::7}" \
             -extra-linker-flags:"/LIBPATH:$(cygpath -w "$PWD/vendor/sdl3") /LIBPATH:$(cygpath -w "$PWD/vendor/imgui") /LIBPATH:$(cygpath -w "$PWD/vendor/delaunay") kernel32.lib user32.lib gdi32.lib winmm.lib imm32.lib ole32.lib oleaut32.lib version.lib uuid.lib advapi32.lib setupapi.lib shell32.lib"
           # Odin's -out: does not put the binary where it is asked to on this
           # platform. Settle it on one name rather than teaching three later
