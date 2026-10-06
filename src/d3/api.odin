@@ -99,6 +99,11 @@ Export_Job :: struct {
 	// still carries the donor's hardlinked copy would otherwise put the base
 	// venue's grass, on the base venue's ground, into ours.
 	Ground_Cover: bool,
+	// A stock track.vis whose ground-cover and water boxes this route repeats
+	// box for box, in place of reading `grass.grs`. An arena's cover and water
+	// are the donor's, unchanged, and Battersea's tag 1 is not its grass.grs:
+	// that file is version 5 and holds 90 cells against 393 boxes.
+	Vis_Stock:    string,
 	// Where the setup screen's service grid stands, from the stage's setup pin.
 	// Unset puts it on the start grid, which is where it always was.
 	Service:      Maybe(Route_Sample),
@@ -156,6 +161,7 @@ Camera_Shot :: D3_Camera_Shot
 Camera_Start_Finish :: d3_camera_start_finish
 Camera_Blocks :: d3_camera_blocks
 Write_Out :: d3_write_out
+Write_Track_Vis :: d3_write_track_vis
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once
 Venue_Profile :: D3_Venue_Profile

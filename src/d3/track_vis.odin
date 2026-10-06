@@ -544,9 +544,13 @@ d3_vis_append_placements :: proc(out: ^[dynamic]D3_Vis_Object, path: string, tag
 // the install — so the two are one list and neither is derived from the other.
 // Off unless this export wrote that file: the donor's hardlinked copy
 // describes the base venue's ground, not ours.
+// The tags `vis_stock` supplies: ground cover and interactive water.
+D3_VIS_STOCK_TAGS :: [2]u32{1, 6}
+
 d3_vis_census_objects :: proc(
 	route_dir, venue_dir: string,
 	ground_cover := false,
+	vis_stock := "",
 	allocator := context.allocator,
 ) -> (
 	objects: []D3_Vis_Object,
@@ -575,7 +579,20 @@ d3_vis_census_objects :: proc(
 	}
 
 	cover := 0
-	if ground_cover {
+	if vis_stock != "" {
+		data, read_err := os.read_entire_file(vis_stock, context.temp_allocator)
+		if read_err != nil { return nil, nil, fmt.tprintf("could not read %s: %v", vis_stock, read_err), false }
+		for tag in D3_VIS_STOCK_TAGS {
+			boxes, boxes_ok := d3_vis_read_tag_boxes(data, tag, context.temp_allocator)
+			if !boxes_ok { return nil, nil, fmt.tprintf("%s: tag %d did not read", vis_stock, tag), false }
+			for id in 0 ..< u32(len(boxes)) {
+				box, found := boxes[id]
+				if !found { return nil, nil, fmt.tprintf("%s: tag %d skips id %d", vis_stock, tag, id), false }
+				append(&out, D3_Vis_Object{tag = tag, index = id, lo = box.lo, hi = box.hi})
+			}
+			if tag == 1 { cover = len(boxes) }
+		}
+	} else if ground_cover {
 		path, _ := filepath.join({venue_dir, "grass.grs"}, context.temp_allocator)
 		data, read_err := os.read_entire_file(path, context.temp_allocator)
 		if read_err != nil { return nil, nil, fmt.tprintf("could not read %s: %v", path, read_err), false }
@@ -611,6 +628,7 @@ d3_vis_census_objects :: proc(
 d3_vis_census_build :: proc(
 	route_dir, venue_dir: string,
 	ground_cover := false,
+	vis_stock := "",
 	allocator := context.allocator,
 ) -> (
 	out: []u8,
@@ -618,7 +636,7 @@ d3_vis_census_build :: proc(
 	ok: bool,
 ) {
 	objects, band, objects_msg, objects_ok := d3_vis_census_objects(
-		route_dir, venue_dir, ground_cover, context.temp_allocator,
+		route_dir, venue_dir, ground_cover, vis_stock, context.temp_allocator,
 	)
 	if !objects_ok { return nil, objects_msg, false }
 
@@ -635,7 +653,7 @@ d3_write_track_vis :: proc(job: ^Export_Job) -> (msg: string, ok: bool) {
 	dir, dir_msg, dir_ok := d3_out_dir(job)
 	if !dir_ok { return dir_msg, false }
 	if job.Venue_Dir == "" { return "track.vis needs the venue directory tracksplit.pssg lives in", false }
-	data, detail, built := d3_vis_census_build(dir, job.Venue_Dir, job.Ground_Cover)
+	data, detail, built := d3_vis_census_build(dir, job.Venue_Dir, job.Ground_Cover, job.Vis_Stock)
 	if !built { return detail, false }
 	defer delete(data)
 	if write_msg, written := d3_write_out(job, "track.vis", data); !written { return write_msg, false }

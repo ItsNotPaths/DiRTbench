@@ -549,7 +549,7 @@ vis_census_repeats_grass_cells_as_its_tag_1_boxes :: proc(t: ^testing.T) {
 	defer os.remove_all(venue_dir)
 
 	// The flag says this export wrote grass.grs, so a missing file is a refusal.
-	_, _, _, missing_ok := d3_vis_census_objects(route_dir, venue_dir, true, context.temp_allocator)
+	_, _, _, missing_ok := d3_vis_census_objects(route_dir, venue_dir, true, allocator = context.temp_allocator)
 	testing.expect(t, !missing_ok, "a census told grass.grs exists must refuse when it does not")
 
 	step: [D3_GRS_TYPES]f32
@@ -562,7 +562,7 @@ vis_census_repeats_grass_cells_as_its_tag_1_boxes :: proc(t: ^testing.T) {
 	grs_path, _ := filepath.join({venue_dir, "grass.grs"}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(grs_path, grs) == nil)
 
-	objects, _, msg, ok := d3_vis_census_objects(route_dir, venue_dir, true, context.temp_allocator)
+	objects, _, msg, ok := d3_vis_census_objects(route_dir, venue_dir, true, allocator = context.temp_allocator)
 	testing.expect(t, ok, msg); if !ok { return }
 	boxes, _, boxes_ok := d3_ground_cover_boxes(grs, context.temp_allocator)
 	testing.expect(t, boxes_ok)
@@ -593,7 +593,7 @@ vis_census_header_counts_match_the_file :: proc(t: ^testing.T) {
 	ens_path, _ := filepath.join({route_dir, "objects.ens"}, context.temp_allocator)
 	testing.expect(t, os.write_entire_file(ens_path, transmute([]u8)ens) == nil)
 
-	objects, _, objects_msg, objects_ok := d3_vis_census_objects(route_dir, venue_dir, false, context.temp_allocator)
+	objects, _, objects_msg, objects_ok := d3_vis_census_objects(route_dir, venue_dir, false, allocator = context.temp_allocator)
 	testing.expect(t, objects_ok, objects_msg); if !objects_ok { return }
 	want: [16]u32
 	for obj in objects { want[obj.tag] += 1 }
