@@ -40,7 +40,9 @@ an_arena_keeps_its_kind_and_route_modes_across_a_write :: proc(t: ^testing.T) {
 
 	types, types_msg, types_ok := arena_net_race_types(back)
 	testing.expectf(t, types_ok, "the modes did not resolve: %s", types_msg)
-	testing.expect(t, slice.equal(types, []i32{d3.NET_RACE_TRANSPORTER, d3.NET_RACE_OUTBREAK}))
+	testing.expect_value(t, len(types), 2)
+	testing.expect(t, slice.equal(types[0], []i32{d3.NET_RACE_TRANSPORTER, d3.NET_RACE_JOYRIDE}))
+	testing.expect(t, slice.equal(types[1], []i32{d3.NET_RACE_OUTBREAK, d3.NET_RACE_JOYRIDE}))
 }
 
 // A route whose mode this build does not know must stop the deploy, not

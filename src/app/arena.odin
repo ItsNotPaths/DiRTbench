@@ -5,6 +5,7 @@ package main
 // docs/plan-party-levels.md.
 
 import "core:fmt"
+import "core:slice"
 import "core:strings"
 import d3 "../d3"
 
@@ -65,21 +66,24 @@ arena_mode_of :: proc(key: string) -> (Arena_Mode, bool) {
 	return .Outbreak, false
 }
 
-// One net_race_type per route, as registration wants them. Nil for a stage
-// venue, which keeps every mode its source route has.
+// The net_race_types each route registers under, as registration wants them.
+// Nil for a stage venue, which keeps every mode its source route has.
+//
+// Every route is also a Joyride map. Joyride loads solo, so a level can be
+// driven without a second player in a lobby.
 arena_net_race_types :: proc(
 	p: Venue, allocator := context.temp_allocator,
-) -> (types: []i32, msg: string, ok: bool) {
+) -> (types: [][]i32, msg: string, ok: bool) {
 	if venue_kind(p) != .Arena {
 		return nil, "", true
 	}
-	types = make([]i32, len(p.routes), allocator)
+	types = make([][]i32, len(p.routes), allocator)
 	for route, i in p.routes {
 		mode, known := arena_mode_of(route.mode)
 		if !known {
 			return nil, fmt.tprintf("%s has no party mode (%q)", route.id, route.mode), false
 		}
-		types[i] = ARENA_MODE_NET_RACE[mode]
+		types[i] = slice.clone([]i32{ARENA_MODE_NET_RACE[mode], d3.NET_RACE_JOYRIDE}, allocator)
 	}
 	return types, "", true
 }

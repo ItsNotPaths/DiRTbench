@@ -226,10 +226,11 @@ RELATED_TABLES := [?]string{"track_model_conditions", "track_model_surface", "ne
 // The net_race_type of the two party modes an arena route can be.
 NET_RACE_OUTBREAK :: i32(12)
 NET_RACE_TRANSPORTER :: i32(13)
+NET_RACE_JOYRIDE :: i32(15)
 
 // The source's net_race_tracks row for one mode, cloned onto the target. An
-// arena route is one mode, so the rows for the source's other modes stay
-// behind; Battersea route_0 also carries Infection, Transporter and Joyride.
+// arena route names its modes, so the rows for the source's other modes stay
+// behind; Battersea route_0 carries Infection, Transporter and Joyride.
 @(private = "file")
 clone_net_race_row :: proc(
 	db: ^Database,
@@ -261,14 +262,14 @@ clone_net_race_row :: proc(
 // route. The source route's internal AI and spline identifiers are retained:
 // deployment begins with a byte-for-byte hardlinked copy of that route.
 //
-// `net_race_types` is one party mode per route, for an arena. Nil clones every
+// `net_race_types` is the modes of each route, for an arena. Nil clones every
 // net_race_tracks row of the source, as a stage venue does.
 register_location :: proc(
 	db: ^Database,
 	source_model_id: i32,
 	location, venue: string,
 	routes, stage_keys: []string,
-	net_race_types: []i32 = nil,
+	net_race_types: [][]i32 = nil,
 	allocator := context.allocator,
 ) -> (
 	ids: Registration_Ids,
@@ -329,10 +330,10 @@ register_location :: proc(
 
 		for table_name in RELATED_TABLES {
 			if net_race_types != nil && table_name == "net_race_tracks" {
-				if msg, ok = clone_net_race_row(
-					db, source_model_id, model_id, net_race_types[i], allocator,
-				); !ok {
-					return
+				for type in net_race_types[i] {
+					if msg, ok = clone_net_race_row(db, source_model_id, model_id, type, allocator); !ok {
+						return
+					}
 				}
 				continue
 			}
@@ -613,7 +614,7 @@ prepare_registration :: proc(
 	source_model_id: i32,
 	location, venue, location_name, venue_name: string,
 	routes, stage_names: []string,
-	net_race_types: []i32 = nil,
+	net_race_types: [][]i32 = nil,
 	allocator := context.allocator,
 ) -> (
 	out: Registration_Output,
