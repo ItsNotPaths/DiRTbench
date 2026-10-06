@@ -57,3 +57,24 @@ an_arena_route_without_a_known_mode_is_refused :: proc(t: ^testing.T) {
 	testing.expect(t, !ok, "an unknown mode must be refused")
 	testing.expectf(t, len(msg) > 0, "a refusal must say why")
 }
+
+// The baseline is stock placements as stock writes them. Some are sheared or
+// scaled per axis, which a rotation and one scale cannot hold, so the basis
+// must come through exactly as the file has it.
+@(test)
+the_baseline_keeps_stock_transforms_whole :: proc(t: ^testing.T) {
+	places, msg, ok := arena_baseline()
+	testing.expectf(t, ok, "the baseline did not load: %s", msg)
+	testing.expect(t, len(places) > 0, "the baseline is empty")
+	non_uniform := 0
+	for place in places {
+		lengths: [3]f32
+		for row, i in place.basis {
+			lengths[i] = row[0]*row[0] + row[1]*row[1] + row[2]*row[2]
+		}
+		if abs(lengths[0] - lengths[1]) > 1e-3 || abs(lengths[0] - lengths[2]) > 1e-3 {
+			non_uniform += 1
+		}
+	}
+	testing.expect(t, non_uniform > 0, "no non-uniform stock basis survived the load")
+}

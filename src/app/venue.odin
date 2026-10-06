@@ -878,12 +878,8 @@ venue_publish :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		return deploy_msg, false
 	}
 	install_scan_rescan(vs)
-	// Nothing of an arena is written yet: its routes are stock route_0 until
-	// the placement export exists (docs/plan-party-levels.md, item 3).
-	if venue_kind(p) == .Arena {
-		return deploy_msg, true
-	}
-	export_msg, exported := venue_export_all(vs, p)
+	export_all := venue_kind(p) == .Arena ? arena_export_all : venue_export_all
+	export_msg, exported := export_all(vs, p)
 	if !exported {
 		return fmt.tprintf("%s; export: %s", deploy_msg, export_msg), false
 	}

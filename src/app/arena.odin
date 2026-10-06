@@ -4,6 +4,7 @@ package main
 // has no road and no terrain, so nothing here compiles a stage. The plan is
 // docs/plan-party-levels.md.
 
+import "core:encoding/json"
 import "core:fmt"
 import "core:slice"
 import "core:strings"
@@ -150,4 +151,112 @@ arena_new_headless :: proc(name: string) -> bool {
 	defer venue_free(p)
 	fmt.printfln("created arena %s (%s) on %s/%s, at %s", p.name, p.id, p.base, p.base_route, venue_file(p))
 	return true
+}
+
+// --- the baseline -------------------------------------------------------------
+
+// The stock placements every arena keeps: Battersea route_0 with the course
+// kit taken out, and with what stock hides in both party modes left out. Baked
+// by tools/battersea_baseline_bake.py from the tiers painted in the Battersea
+// Teardown viewer. See docs/plan-party-levels.md, "The baseline".
+ARENA_BASELINE_JSON :: #load("../../assets/d3/battersea_baseline.json")
+
+// One row of the baked file. `tier` is read by the editor, not the export.
+Arena_Baseline_Row :: struct {
+	mesh:  string,
+	trees: bool,
+	form:  string,
+	tier:  string,
+	basis: [3][3]f32,
+	pos:   [3]f32,
+}
+
+// The file's names for the three forms a stock placement takes.
+ARENA_FORM_KEY := [D3_Ens_Form]string {
+	.None           = "ornament",
+	.Static_Body    = "static_body",
+	.Dynamic_Entity = "entity",
+}
+
+arena_baseline :: proc(allocator := context.temp_allocator) -> (places: []D3_Place, msg: string, ok: bool) {
+	file: struct {
+		source:     string,
+		placements: []Arena_Baseline_Row,
+	}
+	if err := json.unmarshal(ARENA_BASELINE_JSON, &file, json.DEFAULT_SPECIFICATION, allocator); err != nil {
+		return nil, fmt.tprintf("the baked baseline did not parse: %v", err), false
+	}
+	places = make([]D3_Place, len(file.placements), allocator)
+	for row, i in file.placements {
+		form, known := arena_form_of(row.form)
+		if !known {
+			return nil, fmt.tprintf("baseline row %d has form %q", i, row.form), false
+		}
+		places[i] = {
+			ref   = {kind = row.trees ? .Trees_Pssg : .Objects_Pssg, name = row.mesh},
+			form  = form,
+			basis = row.basis,
+			pos   = row.pos,
+		}
+	}
+	return places, "", true
+}
+
+@(private = "file")
+arena_form_of :: proc(key: string) -> (D3_Ens_Form, bool) {
+	for name, form in ARENA_FORM_KEY {
+		if name == key { return form, true }
+	}
+	return .None, false
+}
+
+// --- export -------------------------------------------------------------------
+
+// Every route of a deployed arena: its placement files from the baseline, then
+// `track.vis` over them. Nothing else is written; the ground, the lighting and
+// the game-mode files stay hardlinked to stock route_0.
+arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	_, donor, found := venue_source(vs, p)
+	if !found {
+		return fmt.tprintf("%s/%s is not playable", p.base, p.base_route), false
+	}
+	baseline, baseline_msg, baseline_ok := arena_baseline()
+	if !baseline_ok {
+		return baseline_msg, false
+	}
+	installed, deployed := d3.install_venue(&vs.install, venue_dir(p), venue_dir(p))
+	if !deployed {
+		return fmt.tprintf("%s is not in the game yet", p.name), false
+	}
+	done := make([dynamic]string, context.temp_allocator)
+	for route in p.routes {
+		dest := ""
+		for r in installed.routes {
+			if r.id == route.id && d3.route_playable(r) {
+				dest = r.dir
+			}
+		}
+		if dest == "" {
+			return fmt.tprintf("%s has no deployed directory", route.id), false
+		}
+		job := d3.Export_Job {
+			Name         = route.id,
+			Out          = dest,
+			Backup       = true,
+			Venue_Dir    = installed.dir,
+			Route_Index  = route_number(route.id),
+			// Cover and water are the donor's, on the donor's ground.
+			Vis_Stock    = d3.Stock_Path(donor.dir, "track.vis"),
+		}
+		placed_msg, placed_ok := d3_write_placements(&job, donor.dir, nil, nil, nil, baseline)
+		if !placed_ok {
+			return fmt.tprintf("%s: placements: %s", route.id, placed_msg), false
+		}
+		vis_msg, vis_ok := d3.Write_Track_Vis(&job)
+		if !vis_ok {
+			return fmt.tprintf("%s: track.vis: %s", route.id, vis_msg), false
+		}
+		append(&done, fmt.tprintf("%s (%s; track.vis: %s)", route.id, placed_msg, vis_msg))
+	}
+	return strings.join(done[:], "\n", context.temp_allocator), true
 }
