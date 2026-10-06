@@ -9,15 +9,20 @@ package d3
 import "core:fmt"
 import "core:math"
 import "core:slice"
+import "core:strings"
 
 D3_Write_Tri :: struct {
-	p:   [3][3]f32,
-	mat: string,
+	p:     [3][3]f32,
+	mat:   string,
+	// The top two bits of a stored triangle. Ours are 0; a stock triangle
+	// carried through keeps its own, whatever they mean.
+	sheet: u8,
 }
 
 D3_Packed_Tri :: struct {
-	v:   [3]int,
-	mat: int,
+	v:     [3]int,
+	mat:   int,
+	sheet: u8,
 }
 
 @(private = "file")
@@ -104,7 +109,7 @@ d3_vcqtc_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 		for m, i in mats { if m == source.mat { mi = i; break } }
 		if mi < 0 { mi = len(mats); append(&mats, source.mat) }
 		if len(mats) > 16 { return nil, "a Dirt 3 chunk cannot contain more than 16 materials", false }
-		t := D3_Packed_Tri{mat = mi}
+		t := D3_Packed_Tri{mat = mi, sheet = source.sheet}
 		for p, corner in source.p {
 			vi := -1
 			for v, i in verts { if d3_same_pos(v, p) { vi = i; break } }
@@ -150,7 +155,7 @@ d3_vcqtc_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 	out[nodes_at] = 0x80; out[nodes_at + 1] = 0
 	for t, i in tris {
 		at := tris_at + i * 4; v0 := t.v[0]
-		out[at] = u8(v0 >> 4); out[at + 1] = u8(v0 << 4) | u8(t.mat)
+		out[at] = u8(v0 >> 4) | t.sheet << 6; out[at + 1] = u8(v0 << 4) | u8(t.mat)
 		out[at + 2] = u8(t.v[1] - v0); out[at + 3] = u8(t.v[2] - v0)
 	}
 	out[refs_at] = 0; out[refs_at + 1] = 0
@@ -312,4 +317,45 @@ d3_track_write :: proc(input: []D3_Write_Tri, allocator := context.allocator) ->
 	for axis in 0..<3 { d3_put_f32(info,axis*4,bmin[axis]); d3_put_f32(info,12+axis*4,bmax[axis]) }
 	append(&sources,D3_Jpak_Source{"qt.info",info})
 	return d3_jpak_write(sources[:],allocator),fmt.tprintf("%d triangles partitioned into %d chunks",len(input),len(leaves)),true
+}
+
+// A stock track.jpk with some of its triangles taken out, re-encoded.
+//
+// `drop` names triangles by their index in the order the archive stores them:
+// entry by entry, then triangle by triangle within each chunk. A triangle
+// that crosses a cell edge is stored once per cell and each copy has its own
+// index, so the caller drops every copy. The copies that survive are merged
+// before writing, because the writer stores a triangle in every cell it
+// touches all over again.
+d3_jpk_without :: proc(stock: []u8, drop: []bool, allocator := context.allocator) -> (out: []u8, msg: string, ok: bool) {
+	entries, read := jpak_read(stock, context.temp_allocator)
+	if !read { return nil, "not a JPAK archive", false }
+	Key :: struct { p: [3][3]i32, mat: string, sheet: u8 }
+	seen := make(map[Key]bool, context.temp_allocator)
+	kept := make([dynamic]D3_Write_Tri, context.temp_allocator)
+	index := 0
+	for entry in entries {
+		if !strings.has_suffix(entry.name, ".vcqtc") { continue }
+		chunk, chunk_msg, chunk_ok := qt_read(entry.data, context.temp_allocator)
+		if !chunk_ok { return nil, fmt.tprintf("%s: %s", entry.name, chunk_msg), false }
+		for t in chunk.tris {
+			defer index += 1
+			if index < len(drop) && drop[index] { continue }
+			tri := D3_Write_Tri{mat = chunk.mats[t.mat], sheet = u8(t.sheet)}
+			key := Key{mat = tri.mat, sheet = tri.sheet}
+			for v, corner in t.v {
+				tri.p[corner] = chunk.verts[v]
+				// Centimetres: each copy is quantized against its own chunk's box.
+				for axis in 0 ..< 3 { key.p[corner][axis] = i32(math.round(chunk.verts[v][axis] * 100)) }
+			}
+			slice.sort_by(key.p[:], proc(a, b: [3]i32) -> bool { return a[0] != b[0] ? a[0] < b[0] : a[1] != b[1] ? a[1] < b[1] : a[2] < b[2] })
+			if seen[key] { continue }
+			seen[key] = true
+			append(&kept, tri)
+		}
+	}
+	if index < len(drop) {
+		return nil, fmt.tprintf("the drop list names %d triangles and the archive holds %d", len(drop), index), false
+	}
+	return d3_track_write(kept[:], allocator)
 }

@@ -162,6 +162,7 @@ Camera_Start_Finish :: d3_camera_start_finish
 Camera_Blocks :: d3_camera_blocks
 Write_Out :: d3_write_out
 Write_Track_Vis :: d3_write_track_vis
+Jpk_Without :: d3_jpk_without
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once
 Venue_Profile :: D3_Venue_Profile

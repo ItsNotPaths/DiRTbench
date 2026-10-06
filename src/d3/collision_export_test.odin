@@ -104,3 +104,41 @@ one_material_can_cover_two_surfaces :: proc(t: ^testing.T) {
 	testing.expect_value(t, len(surface_shaders), 1)
 	testing.expect(t, surface_shaders[profile.visual[.Road]])
 }
+
+// An arena keeps a stock track.jpk minus the collision of the props it
+// removed. A dropped triangle must be gone, and every other one must keep its
+// surface code and its sheet bits, which our own collision never sets.
+@(test)
+jpk_without_drops_only_what_it_names :: proc(t:^testing.T) {
+	input:=[]D3_Write_Tri{
+		{p={{0,0,0},{10,0,0},{0,0,10}},mat="MET*",sheet=3},
+		{p={{40,0,0},{50,0,0},{40,5,10}},mat="WDB+",sheet=1},
+		{p={{80,0,0},{90,0,0},{80,0,10}},mat="GLD*",sheet=0},
+	}
+	stock,_,written:=d3_track_write(input,context.temp_allocator)
+	testing.expect(t,written); if !written { return }
+
+	// Index every stored copy, and drop each copy of the wooden one.
+	entries,_:=jpak_read(stock,context.temp_allocator)
+	drop:=make([dynamic]bool,context.temp_allocator)
+	for e in entries {
+		if e.name=="qt.info" { continue }
+		chunk,_,_:=qt_read(e.data,context.temp_allocator)
+		for tri in chunk.tris { append(&drop,chunk.mats[tri.mat]=="WDB+") }
+	}
+
+	out,msg,ok:=d3_jpk_without(stock,drop[:],context.temp_allocator)
+	testing.expect(t,ok,msg); if !ok { return }
+	after,_:=jpak_read(out,context.temp_allocator)
+	found:=make(map[string]u8,context.temp_allocator)
+	for e in after {
+		if e.name=="qt.info" { continue }
+		chunk,_,_:=qt_read(e.data,context.temp_allocator)
+		for tri in chunk.tris { found[chunk.mats[tri.mat]]=u8(tri.sheet) }
+	}
+	testing.expect_value(t,len(found),2)
+	_,wood:=found["WDB+"]
+	testing.expect(t,!wood,"a dropped triangle came back")
+	testing.expect_value(t,found["MET*"],u8(3))
+	testing.expect_value(t,found["GLD*"],u8(0))
+}
