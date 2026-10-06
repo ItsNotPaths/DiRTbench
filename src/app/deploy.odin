@@ -354,11 +354,18 @@ prepare_venue_deployment :: proc(
 	ok: bool,
 ) {
 	// Compiling is what turns two markers into a road, so a venue that cannot
-	// compile is not deployable. Do it before anything is written.
-	if stages, compile_msg, compiled := venue_compile(p, context.temp_allocator); !compiled {
-		return deployment, compile_msg, false
-	} else {
-		venue_compiled_delete(stages, context.temp_allocator)
+	// compile is not deployable. Do it before anything is written. An arena has
+	// no road to compile.
+	if venue_kind(p) == .Stage {
+		if stages, compile_msg, compiled := venue_compile(p, context.temp_allocator); !compiled {
+			return deployment, compile_msg, false
+		} else {
+			venue_compiled_delete(stages, context.temp_allocator)
+		}
+	}
+	net_race_types, modes_msg, modes_ok := arena_net_race_types(p)
+	if !modes_ok {
+		return deployment, modes_msg, false
 	}
 	if !vs.found {
 		return deployment, install_scan_status_text(vs), false
@@ -404,6 +411,7 @@ prepare_venue_deployment :: proc(
 		p.name,
 		ids,
 		names,
+		net_race_types,
 	)
 	if !ok {
 		return

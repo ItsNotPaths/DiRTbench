@@ -77,6 +77,9 @@ run_cli :: proc() -> (handled: bool) {
 	if len(args) >= 1 && args[0] == "--venues" {
 		os.exit(venues_headless() ? 0 : 1)
 	}
+	if len(args) == 2 && args[0] == "--arena-new" {
+		os.exit(arena_new_headless(args[1]) ? 0 : 1)
+	}
 	// `--venue-new <name> --base <venue>`: the New venue button without a
 	// window. Writes nothing into the game.
 	if len(args) >= 1 && args[0] == "--venue-new" {

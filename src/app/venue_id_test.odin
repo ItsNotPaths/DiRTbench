@@ -61,6 +61,7 @@ a_rename_keeps_the_id :: proc(t: ^testing.T) {
 	p := Venue {
 		format  = VENUE_FORMAT,
 		version = VENUE_VERSION,
+		kind    = VENUE_KIND_KEY[.Stage],
 		id      = id,
 		name    = "alpha",
 		source  = {site = "dirtbench.paths.place", slug = "alpha-ab12cd"},
@@ -114,7 +115,7 @@ a_venue_without_an_id_is_refused :: proc(t: ^testing.T) {
 	defer delete(path)
 	defer os.remove(path)
 
-	msg, ok := venue_write(Venue{format = VENUE_FORMAT, version = VENUE_VERSION, name = "alpha"}, path)
+	msg, ok := venue_write(Venue{format = VENUE_FORMAT, version = VENUE_VERSION, kind = VENUE_KIND_KEY[.Stage], name = "alpha"}, path)
 	testing.expectf(t, ok, "could not write the venue: %s", msg)
 
 	_, _, loaded := venue_load_path(path, context.allocator)

@@ -213,6 +213,7 @@ save_road :: proc(doc: ^Venue_Doc, path: string) -> (msg: string, ok: bool) {
 		p = Venue {
 			format  = VENUE_FORMAT,
 			version = VENUE_VERSION,
+			kind    = VENUE_KIND_KEY[.Stage],
 			id      = venue_uuid(context.temp_allocator),
 			name    = sanitise_venue_name(
 				strings.trim_suffix(filepath.base(path), STAGE_EXT),

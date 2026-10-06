@@ -116,6 +116,7 @@ venue_json_round_trips_every_stage_marker :: proc(t: ^testing.T) {
 	p := Venue{
 		format  = VENUE_FORMAT,
 		version = VENUE_VERSION,
+		kind    = VENUE_KIND_KEY[.Stage],
 		id      = "moose_loop",
 		routes  = doc.routes[:],
 	}

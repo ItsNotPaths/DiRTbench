@@ -41,6 +41,9 @@ import d3 "../d3"
 import "../geo"
 
 VENUE_FORMAT :: "dirtbench.venue"
+// v13 adds `kind`, "stage" or "arena", and a party `mode` on each arena route.
+// An older build would open an arena as a stage venue with no road, and save it
+// back out as one.
 // v12 adds road detachment: `detach_min_m` and `detach_max_m` under `terrain`.
 // Both zero is a road joined to its ground, so a v11 venue would have read
 // correctly without the bump. It is here anyway, so an older build refuses a
@@ -61,7 +64,7 @@ VENUE_FORMAT :: "dirtbench.venue"
 // v7 was the whole venue in one file, under maps/<id>.json. Nothing reads a v7
 // or older venue: the tool was not released, and the venues that existed were
 // converted by hand.
-VENUE_VERSION :: 12
+VENUE_VERSION :: 13
 
 // Where the venue's thumbnail is taken from: the viewport camera at the moment
 // "Use this view" was pressed. Position and angle and nothing else — the lens
@@ -105,6 +108,8 @@ Venue_Route :: struct {
 	// show and the tuning menu over it. Optional — unplaced, the export leaves
 	// it on the start grid.
 	setup:  geo.Road_Marker,
+	// An arena route's party mode, an ARENA_MODE_KEY. Empty on a stage.
+	mode:   string,
 }
 
 // The route ids and menu names, in order, as the registration and the staging
@@ -138,6 +143,7 @@ Venue :: struct {
 	format:     string,
 	version:    int,
 	id:         string, // 16 lowercase hex digits, minted once, never changed
+	kind:       string, // a VENUE_KIND_KEY
 	// The soft name: file name in maps/, both game directories, and the menu
 	// text. `venue_dir` is the form all three directory uses take.
 	name:       string,
@@ -462,6 +468,11 @@ venue_parse :: proc(
 		venue_free(p, allocator)
 		return Venue{}, fmt.tprintf("venue name %q is not a usable name", bad), false
 	}
+	if _, known := venue_kind_of(p.kind); !known {
+		bad := strings.clone(p.kind, context.temp_allocator)
+		venue_free(p, allocator)
+		return Venue{}, fmt.tprintf("venue kind %q is not one this build knows", bad), false
+	}
 	venue_route_counter_floor(&p)
 	return p, "", true
 }
@@ -485,6 +496,7 @@ venues_free :: proc(list: []Venue, allocator := context.allocator) {
 venue_free :: proc(p: Venue, allocator := context.allocator) {
 	delete(p.format, allocator)
 	delete(p.id, allocator)
+	delete(p.kind, allocator)
 	delete(p.name, allocator)
 	delete(p.base, allocator)
 	delete(p.base_route, allocator)
@@ -493,6 +505,7 @@ venue_free :: proc(p: Venue, allocator := context.allocator) {
 	for route in p.routes {
 		delete(route.id, allocator)
 		delete(route.name, allocator)
+		delete(route.mode, allocator)
 		delete(route.pins)
 	}
 	delete(p.routes, allocator)
@@ -569,6 +582,7 @@ venue_create :: proc(
 		id         = venue_uuid(allocator),
 		format     = strings.clone(VENUE_FORMAT, allocator),
 		version    = VENUE_VERSION,
+		kind       = strings.clone(VENUE_KIND_KEY[.Stage], allocator),
 		name       = strings.clone(shown, allocator),
 		base       = strings.clone(base, allocator),
 		base_route = strings.clone(base_route, allocator),
@@ -718,6 +732,7 @@ routes_remove :: proc(routes: ^[dynamic]Venue_Route, i: int, allocator := contex
 	}
 	delete(routes[i].id, allocator)
 	delete(routes[i].name, allocator)
+	delete(routes[i].mode, allocator)
 	delete(routes[i].pins)
 	ordered_remove(routes, i)
 }
@@ -778,6 +793,7 @@ venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue
 		append(&out, Venue_Route{
 			id     = strings.clone(r.id, allocator),
 			name   = strings.clone(r.name, allocator),
+			mode   = strings.clone(r.mode, allocator),
 			start  = r.start,
 			finish = r.finish,
 			pins   = pins,
@@ -791,6 +807,7 @@ routes_free :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocato
 	for r in routes {
 		delete(r.id, allocator)
 		delete(r.name, allocator)
+		delete(r.mode, allocator)
 		delete(r.pins)
 	}
 	delete(routes^)
@@ -861,6 +878,11 @@ venue_publish :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
 		return deploy_msg, false
 	}
 	install_scan_rescan(vs)
+	// Nothing of an arena is written yet: its routes are stock route_0 until
+	// the placement export exists (docs/plan-party-levels.md, item 3).
+	if venue_kind(p) == .Arena {
+		return deploy_msg, true
+	}
 	export_msg, exported := venue_export_all(vs, p)
 	if !exported {
 		return fmt.tprintf("%s; export: %s", deploy_msg, export_msg), false
@@ -1013,6 +1035,12 @@ venues_headless :: proc() -> bool {
 	defer install_scan_delete(&vs)
 	for p in list {
 		fmt.printfln("%s  (%s, %s)", p.name, p.id, pack_text(p.base, p.base_route))
+		if venue_kind(p) == .Arena {
+			for route in p.routes {
+				fmt.printfln("    %-10s %-20s%s", route.id, route.name, route.mode)
+			}
+			continue
+		}
 		// Resolving the profile rebuilds a missing `base/`, so this also
 		// repairs a venue made before the pack existed.
 		if profile, profile_msg, profile_ok := export_profile(&vs, p, context.temp_allocator);
