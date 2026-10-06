@@ -158,3 +158,17 @@ a_route_without_a_start_cannot_export :: proc(t: ^testing.T) {
 	route.party_start = {pos = {1, 2, 3}, placed = true}
 	testing.expectf(t, len(arena_route_problems(route)) == 0, "a placed start still has problems: %v", arena_route_problems(route))
 }
+
+// Transporter needs its flags and drop zones; Infection must have none.
+@(test)
+each_mode_checks_its_own_goals :: proc(t: ^testing.T) {
+	goals := make([dynamic]Arena_Goal, context.temp_allocator)
+	route := Venue_Route{id = "route_1", mode = ARENA_MODE_KEY[.Transporter], party_start = {placed = true}, goals = goals}
+	testing.expect(t, len(arena_route_problems(route)) > 0, "a Transporter route with no goals was ready")
+	for _ in 0 ..< ARENA_MIN_FLAGS { append(&route.goals, Arena_Goal{post = ARENA_FLAG_POST}) }
+	for _ in 0 ..< ARENA_MIN_DROP_ZONES { append(&route.goals, Arena_Goal{drop_zone = true, post = ARENA_DROP_ZONE_POST}) }
+	testing.expectf(t, len(arena_route_problems(route)) == 0, "a full Transporter route still has problems: %v", arena_route_problems(route))
+
+	route.mode = ARENA_MODE_KEY[.Outbreak]
+	testing.expect(t, len(arena_route_problems(route)) > 0, "an Infection route with flags was ready")
+}

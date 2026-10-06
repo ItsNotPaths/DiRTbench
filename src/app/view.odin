@@ -63,6 +63,7 @@ Sel_Kind :: enum {
 	Prop,       // idx indexes Venue_Doc.props
 	Baseline,   // idx indexes Venue_Doc.arena.props
 	Start,      // idx indexes Venue_Doc.routes: that arena route's start ring
+	Goal,       // idx a route as for Start, `sub` one of its goals
 }
 
 Selection :: struct {
@@ -77,7 +78,8 @@ Selection :: struct {
 View_Kind :: enum {
 	Venue, // the road graph: insert, branch, weld, sculpt
 	Stage, // two markers on that road, and the road it cuts out
-	Arena, // Battersea's ground and its party-mode routes; no road at all
+	Arena,       // an arena's layout: the baseline it keeps and the props it adds
+	Arena_Route, // one arena route's start and goals, over a layout it does not edit
 }
 
 // What the compiled stage is keyed on. Every spline edit ticks `gen`, and the
@@ -179,10 +181,10 @@ Editor :: struct {
 	prop_last:     Prop_Role,
 	prop_ghost:    gfx.Vector3,
 	prop_ghost_ok: bool,
-	// An arena route whose start the next ground click places; its ghost is
-	// the ring where it would land.
-	start_placing: bool,
-	start_ghost:   Maybe(Arena_Spot),
+	// What the next ground click places on the selected arena route, and
+	// where it would land (arena_spots.odin).
+	spot_placing:  Maybe(Arena_Spot_Kind),
+	spot_ghost:    Maybe(Arena_Spot),
 	wireframe:     bool,
 	quit:          bool,
 
@@ -485,7 +487,7 @@ editor_hotkeys :: proc(ed: ^Editor, ui_keys: bool) {
 	// B is the prop-placing mode. Which prop it places is the Inspector's half of
 	// it, and is already picked by the time this is any use. Two browsers now, so
 	// B toggles whichever was last used.
-	if ed.kind == .Venue && gfx.IsKeyPressed(.B) {
+	if (ed.kind == .Venue || ed.kind == .Arena) && gfx.IsKeyPressed(.B) {
 		_, placing := ed.prop_placing.?
 		prop_set_placing(ed, ed.prop_last, !placing)
 	}
@@ -674,7 +676,7 @@ editor_frame :: proc(ed: ^Editor) {
 		venue_frame(ed)
 	case .Stage:
 		stage_frame(ed)
-	case .Arena:
+	case .Arena, .Arena_Route:
 		arena_frame(ed)
 	}
 }

@@ -15,9 +15,11 @@ import "../geo"
 import "../gfx"
 import "../ui"
 
-// Twin of stage_frame and venue_frame (view.odin): the same frame order, minus
-// everything that reads the road.
+// Twin of venue_frame and stage_frame (view.odin), for both arena windows: the
+// layout one edits props, and a route one edits that route's spots, as a
+// venue window edits the road and a stage window its own lines.
 arena_frame :: proc(ed: ^Editor) {
+	route_window := ed.kind == .Arena_Route
 	gfx.BeginWindowFrame(&ed.window)
 	ui_mouse := ui.imgui_want_capture_mouse()
 	ui_keys := ui.imgui_want_capture_keyboard()
@@ -28,32 +30,41 @@ arena_frame :: proc(ed: ^Editor) {
 	camera_step(ed, ui_mouse, nav)
 	cam3d := to_camera3d(ed.cam)
 	ray := gfx.GetScreenToWorldRay(gfx.GetMousePosition(), cam3d)
-	prop_ghost_update(ed, ray)
-	start_ghost_update(ed, ray)
+	if route_window {
+		arena_spot_ghost_update(ed, ray)
+	} else {
+		prop_ghost_update(ed, ray)
+	}
 	draw_arena_scene(ed, cam3d)
 
 	ui.imgui_backend_begin()
 	gizmo_used := false
 	if gizmo_frame_begin(ed) {
-		shown := true
-		if pi := selected_prop(ed); pi >= 0 {
-			gizmo_used = prop_gizmo(ed, pi, cam3d)
-		} else if ri := selected_start(ed); ri >= 0 {
-			gizmo_used = start_gizmo(ed, ri, cam3d)
-		} else {
-			shown = false
+		shown := false
+		if route_window {
+			shown, gizmo_used = arena_spot_gizmo(ed, cam3d)
+		} else if pi := selected_prop(ed); pi >= 0 {
+			shown, gizmo_used = true, prop_gizmo(ed, pi, cam3d)
 		}
 		ed.gizmo_active = gizmo_used
 		ed.gizmo_hovered = shown && ui.gizmo_is_over()
 	}
 	draw_menubar(ed)
-	draw_arena_inspector(ed)
+	if route_window {
+		draw_arena_route_inspector(ed)
+	} else {
+		draw_arena_inspector(ed)
+	}
 	if ed.show_demo {
 		ui.igShowDemoWindow(&ed.show_demo)
 	}
 	render_imgui(&ed.window)
 
-	arena_input(ed, ray, gizmo_used, nav, ui_mouse, ui_keys)
+	if route_window {
+		arena_route_input(ed, ray, gizmo_used, nav, ui_mouse, ui_keys)
+	} else {
+		arena_input(ed, ray, gizmo_used, nav, ui_mouse, ui_keys)
+	}
 
 	gfx.EndWindowFrame(&ed.window)
 	free_all(context.temp_allocator)
@@ -67,13 +78,8 @@ draw_arena_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 	geo.gpu_mesh_draw(ed.doc.arena.mesh, ed.doc.material, ed.wireframe)
 	draw_arena_baseline(ed.doc, ed.wireframe)
 	draw_props(ed.doc, ed.wireframe)
-	for route, i in ed.doc.routes {
-		draw_start_ring(route.party_start, route.mode, i == selected_start(ed))
-	}
-	if ghost, ok := ed.start_ghost.?; ok {
-		if ri := selected_start(ed); ri >= 0 {
-			draw_start_ring(ghost, ed.doc.routes[ri].mode, true)
-		}
+	if ed.kind == .Arena_Route {
+		draw_arena_spots(ed)
 	}
 	if bi := selected_baseline(ed); bi >= 0 {
 		prop := ed.doc.arena.props[bi]
@@ -92,16 +98,13 @@ draw_arena_scene :: proc(ed: ^Editor, cam3d: gfx.Camera3D) {
 // placement and a placed prop, and Delete takes whichever is selected.
 @(private = "file")
 arena_input :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys: bool) {
-	if prop_place_input(ed, nav, ui_mouse, ui_keys) || start_place_input(ed, nav, ui_mouse, ui_keys) {
+	if prop_place_input(ed, nav, ui_mouse, ui_keys) {
 		return
 	}
 	if gfx.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
 		pi, pd := pick_prop(ed.doc, ray)
 		bi, bd := arena_pick_baseline(ed.doc, ray)
-		si, sd := pick_start(ed.doc, ray)
 		switch {
-		case si >= 0 && (pi < 0 || sd <= pd) && (bi < 0 || sd <= bd):
-			ed.sel = {kind = .Start, idx = si}
 		case pi >= 0 && (bi < 0 || pd <= bd):
 			ed.sel = {kind = .Prop, idx = pi}
 		case bi >= 0:
@@ -119,6 +122,42 @@ arena_input :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_key
 	} else if bi := selected_baseline(ed); bi >= 0 {
 		arena_set_removed(ed, bi, true)
 	}
+}
+
+// Twin of arena_input for a route window: a click picks this route's spots,
+// and Delete takes a selected goal. The layout is not touched here.
+@(private = "file")
+arena_route_input :: proc(ed: ^Editor, ray: gfx.Ray, gizmo_used, nav, ui_mouse, ui_keys: bool) {
+	if arena_spot_place_input(ed, nav, ui_mouse, ui_keys) {
+		return
+	}
+	if gfx.IsMouseButtonPressed(.LEFT) && !gizmo_used && !ed.gizmo_hovered && !nav && !ui_mouse {
+		spot, _ := pick_arena_spot(ed, ray)
+		ed.sel = spot.kind != .None ? spot : {kind = .Start, idx = arena_window_route(ed)}
+	}
+	if gfx.IsKeyPressed(.DELETE) && !ui_keys {
+		arena_spot_delete(ed)
+	}
+}
+
+@(private = "file")
+draw_arena_route_inspector :: proc(ed: ^Editor) {
+	open := sidebar_begin("Route", .Left)
+	defer sidebar_end(open)
+	if !open {
+		return
+	}
+	ui.igSeparatorText(fmt.ctprintf("%s / %s", ed.doc.venue_name, ed.stage_id))
+	draw_status_text(&ed.status)
+	ri := arena_window_route(ed)
+	if ri < 0 {
+		ui.im_text_colored(WARN_COL, "this route is no longer in the arena")
+		return
+	}
+	for problem in arena_route_problems(ed.doc.routes[ri]) {
+		ui.im_text_colored(WARN_COL, fmt.ctprint(problem))
+	}
+	draw_route_spots(ed)
 }
 
 // The selected baseline placement, or -1.
@@ -140,24 +179,18 @@ draw_arena_inspector :: proc(ed: ^Editor) {
 	draw_status_text(&ed.status)
 
 	ui.igSeparatorText("Routes")
-	for route, i in ed.doc.routes {
+	for route in ed.doc.routes {
 		label := route.mode
 		if mode, known := arena_mode_of(route.mode); known {
 			label = ARENA_MODE_LABEL[mode]
 		}
-		if ui.igSelectable_Bool(
-			fmt.ctprintf("%s  %s  (%s)###route%d", route.id, route.name, label, i),
-			selected_start(ed) == i, ui.IM_SELECTABLE_NONE, {0, 0},
-		) {
-			ed.sel = {kind = .Start, idx = i}
-		}
+		ui.im_text(fmt.ctprintf("%s  %s  (%s)", route.id, route.name, label))
 		for problem in arena_route_problems(route) {
 			ui.im_text_colored(WARN_COL, fmt.ctprintf("  %s", problem))
 		}
 	}
-	ui.im_text_colored(DIM_COL, "Add, remove and rename routes in the project manager.")
+	ui.im_text_colored(DIM_COL, "Each route's start and goals open from its Edit button in the project manager.")
 
-	draw_start_selection(ed)
 	draw_prop_selection(ed)
 	draw_baseline_selection(ed)
 	draw_removed_list(ed)
@@ -499,192 +532,4 @@ arena_camera_frame :: proc(ed: ^Editor) {
 	ed.cam.target = (g.lo + g.hi) / 2
 	ed.cam.distance = linalg.length(g.hi - g.lo) * 0.6
 	ed.cam.pitch = 0.9
-}
-
-// --- route starts ---------------------------------------------------------------
-
-ARENA_START_COL := [Arena_Mode]gfx.Color {
-	.Outbreak    = {120, 220, 90, 255},
-	.Transporter = {90, 170, 255, 255},
-}
-
-// The selected route's start, or -1. Selects the route even when its start
-// is not placed yet, so the inspector can offer to place it.
-selected_start :: proc(ed: ^Editor) -> int {
-	if ed.sel.kind == .Start && ed.sel.idx >= 0 && ed.sel.idx < len(ed.doc.routes) {
-		return ed.sel.idx
-	}
-	return -1
-}
-
-// One slot's centre in world space.
-@(private = "file")
-start_slot :: proc(start: Arena_Spot, slot: [2]f32) -> gfx.Vector3 {
-	s, c := math.sin(start.yaw), math.cos(start.yaw)
-	return start.pos + slot.x * gfx.Vector3{c, 0, -s} + slot.y * gfx.Vector3{s, 0, c}
-}
-
-// The ring of 8 cars, and an arrow along its heading.
-@(private = "file")
-draw_start_ring :: proc(start: Arena_Spot, mode_key: string, selected: bool) {
-	mode, known := arena_mode_of(mode_key)
-	if !known || !start.placed {
-		return
-	}
-	col := selected ? gfx.Color{255, 140, 70, 255} : ARENA_START_COL[mode]
-	for slot in ARENA_START_RING {
-		at := start_slot(start, slot)
-		draw_world_box(at - {1, 0.75, 1}, at + {1, 0.75, 1}, col)
-	}
-	tip := start_slot(start, {0, 8})
-	gfx.DrawLine3D(start.pos, tip, col)
-	gfx.DrawSphere(tip, 0.6, col)
-	gfx.DrawSphere(start.pos, 1, col)
-}
-
-// A start is picked by its centre or any of its slots.
-@(private = "file")
-pick_start :: proc(doc: ^Venue_Doc, ray: gfx.Ray) -> (idx: int, dist: f32) {
-	idx, dist = -1, max(f32)
-	for route, i in doc.routes {
-		start := route.party_start
-		if !start.placed {
-			continue
-		}
-		hit := gfx.GetRayCollisionSphere(ray, start.pos, 3)
-		for slot in ARENA_START_RING {
-			at := start_slot(start, slot)
-			if h := gfx.GetRayCollisionBox(ray, at - {1, 0.75, 1}, at + {1, 0.75, 1}); h.hit && (!hit.hit || h.distance < hit.distance) {
-				hit = h
-			}
-		}
-		if hit.hit && hit.distance < dist {
-			idx, dist = i, hit.distance
-		}
-	}
-	return
-}
-
-// Move and turn a start. Yaw only: the turn is read back off the heading, and
-// the ring drops onto the ground under its slots.
-@(private = "file")
-start_gizmo :: proc(ed: ^Editor, ri: int, cam: gfx.Camera3D) -> bool {
-	start := &ed.doc.routes[ri].party_start
-	if !start.placed {
-		return false
-	}
-	op, space := gizmo_op_space(ed.gizmo_mode)
-	rot := gfx.QuaternionFromAxisAngle({0, 1, 0}, start.yaw)
-	pos, turned, used := ui.gizmo_manipulate_xform(start.pos, rot, cam, op, space)
-	if used {
-		forward := gfx.Vector3RotateByQuaternion({0, 0, 1}, turned)
-		start.pos, start.yaw = pos, math.atan2(forward.x, forward.z)
-		start_drop(ed, start)
-		mark_edited(ed.doc)
-	}
-	return used
-}
-
-// Where the selected route's start would land under the cursor, while placing.
-@(private = "file")
-start_ghost_update :: proc(ed: ^Editor, ray: gfx.Ray) {
-	ed.start_ghost = nil
-	ri := selected_start(ed)
-	if ri < 0 {
-		ed.start_placing = false
-	}
-	if !ed.start_placing {
-		return
-	}
-	at, hit := arena_pick_ground(ed, ray)
-	if !hit {
-		return
-	}
-	ghost := Arena_Spot{pos = at, yaw = ed.doc.routes[ri].party_start.yaw, placed = true}
-	start_drop(ed, &ghost)
-	ed.start_ghost = ghost
-}
-
-// Twin of prop_place_input (props.odin): the click that drops the start, and
-// the keys that end the mode.
-@(private = "file")
-start_place_input :: proc(ed: ^Editor, nav, ui_mouse, ui_keys: bool) -> bool {
-	if !ed.start_placing {
-		return false
-	}
-	if (!ui_keys && gfx.IsKeyPressed(.ESCAPE)) || (!nav && !ui_mouse && gfx.IsMouseButtonPressed(.RIGHT)) {
-		ed.start_placing = false
-		return true
-	}
-	if nav || ui_mouse || !gfx.IsMouseButtonPressed(.LEFT) {
-		return true
-	}
-	ghost, ok := ed.start_ghost.?
-	if !ok {
-		set_status(&ed.status, "point at the ground to put the start there", false)
-		return true
-	}
-	ed.doc.routes[ed.sel.idx].party_start = ghost
-	ed.start_placing = false
-	mark_edited(ed.doc)
-	set_status(&ed.status, "start placed", true)
-	return true
-}
-
-// Stand the ring over the highest ground under any of its slots, at the stock
-// lift. Left where it is when no slot is over ground.
-@(private = "file")
-start_drop :: proc(ed: ^Editor, start: ^Arena_Spot) {
-	top, found := min(f32), false
-	for slot in ARENA_START_RING {
-		at := start_slot(start^, slot)
-		if hit, ok := arena_pick_ground(ed, {position = at + {0, 200, 0}, direction = {0, -1, 0}}); ok {
-			top, found = max(top, hit.y), true
-		}
-	}
-	if found {
-		start.pos.y = top + ARENA_START_LIFT
-	}
-}
-
-// The selected route's start: where it is, and the ways to set it.
-draw_start_selection :: proc(ed: ^Editor) {
-	ri := selected_start(ed)
-	if ri < 0 {
-		return
-	}
-	route := &ed.doc.routes[ri]
-	mode, known := arena_mode_of(route.mode)
-	if !known {
-		return
-	}
-	start := &route.party_start
-	ui.igSeparatorText(fmt.ctprintf("%s start", ARENA_MODE_LABEL[mode]))
-	if start.placed {
-		ui.im_text(fmt.ctprintf("(%.1f, %.1f, %.1f)", start.pos.x, start.pos.y, start.pos.z))
-		deg := math.to_degrees(start.yaw)
-		if ui.igSliderFloat("heading", &deg, -180, 180, "%.0f deg", ui.IM_SLIDER_NONE) {
-			start.yaw = math.to_radians(deg)
-			mark_edited(ed.doc)
-		}
-		ui.im_text_colored(DIM_COL, "drag the gizmo to move it; it drops onto the ground")
-	} else {
-		ui.im_text_colored(WARN_COL, "no start placed")
-	}
-	if ui.im_button(ed.start_placing ? "Stop placing" : "Place start") {
-		ed.start_placing = !ed.start_placing
-		ed.prop_placing = nil
-	}
-	ui.im_same_line()
-	if ui.im_button("Use stock start") {
-		stock, msg, ok := arena_stock_start(ed.doc.arena.donor_dir, mode)
-		if ok {
-			start^ = stock
-			mark_edited(ed.doc)
-		}
-		set_status(&ed.status, ok ? "start set to stock route_0's" : msg, ok)
-	}
-	if ed.start_placing {
-		ui.im_text_colored(MINE_COL, "click the ground; Esc or right-click stops")
-	}
 }

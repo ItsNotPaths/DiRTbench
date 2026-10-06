@@ -87,6 +87,33 @@ Arena_Spot :: struct {
 	placed: bool,
 }
 
+// A Transporter flag or drop zone.
+Arena_Goal :: d3.Transporter_Goal
+
+// The most capture_the_flag_settings2 asks for, at 8 players. The real
+// minimum is not known.
+ARENA_MIN_FLAGS :: 2
+ARENA_MIN_DROP_ZONES :: 2
+
+ARENA_TRANSPORTER_TRIGGERS :: "game_modes/transporter/triggers_transporter.xml"
+
+arena_goal_counts :: proc(route: Venue_Route) -> (flags, drop_zones: int) {
+	for goal in route.goals {
+		if goal.drop_zone { drop_zones += 1 } else { flags += 1 }
+	}
+	return
+}
+
+// Stock route_0's flags and drop zones.
+arena_stock_goals :: proc(route_dir: string, allocator := context.temp_allocator) -> (goals: []Arena_Goal, msg: string, ok: bool) {
+	path := d3.Stock_Path(route_dir, ARENA_TRANSPORTER_TRIGGERS)
+	data, err := os.read_entire_file(path, context.temp_allocator)
+	if path == "" || err != nil {
+		return nil, fmt.tprintf("no stock %s", ARENA_TRANSPORTER_TRIGGERS), false
+	}
+	return d3.Transporter_Goals(data, allocator)
+}
+
 arena_grid_path :: proc(mode: Arena_Mode) -> string {
 	return fmt.tprintf("game_modes/%s/grids.pssg", ARENA_MODE_KEY[mode])
 }
@@ -113,6 +140,17 @@ arena_route_problems :: proc(route: Venue_Route, allocator := context.temp_alloc
 	}
 	if !route.party_start.placed {
 		append(&out, "no start")
+	}
+	flags, drop_zones := arena_goal_counts(route)
+	if route.mode == ARENA_MODE_KEY[.Transporter] {
+		if flags < ARENA_MIN_FLAGS {
+			append(&out, fmt.tprintf("%d flags, needs %d", flags, ARENA_MIN_FLAGS))
+		}
+		if drop_zones < ARENA_MIN_DROP_ZONES {
+			append(&out, fmt.tprintf("%d drop zones, needs %d", drop_zones, ARENA_MIN_DROP_ZONES))
+		}
+	} else if len(route.goals) > 0 {
+		append(&out, fmt.tprintf("%d flags and drop zones, which only Transporter has", len(route.goals)))
 	}
 	return out[:]
 }
@@ -476,6 +514,15 @@ arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 		}
 		if grid_msg, wrote := arena_write_start(&job, donor.dir, route); !wrote {
 			return fmt.tprintf("%s: %s", route.id, grid_msg), false
+		}
+		if route.mode == ARENA_MODE_KEY[.Transporter] {
+			triggers, built := d3.Transporter_Triggers(route.goals[:], context.temp_allocator)
+			if !built {
+				return fmt.tprintf("%s: the triggers did not encode", route.id), false
+			}
+			if write_msg, wrote := d3.Write_Out(&job, ARENA_TRANSPORTER_TRIGGERS, triggers); !wrote {
+				return fmt.tprintf("%s: %s", route.id, write_msg), false
+			}
 		}
 		append(&done, fmt.tprintf("%s (%s; track.vis: %s)", route.id, placed_msg, vis_msg))
 	}

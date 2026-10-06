@@ -747,14 +747,11 @@ draw_venue_stages :: proc(app: ^App, p: ^Venue) {
 draw_stage_row :: proc(app: ^App, p: ^Venue, route: Venue_Route) {
 	ps := &app.screen
 	arena := venue_kind(p^) == .Arena
-	open := venue_window(app, p.id, .Stage, route.id) != nil
-	// An arena's routes are edited in its one arena window.
-	if !arena {
-		if ui.im_button(fmt.ctprintf("%s###open_stage_%s_%s", open ? "Show" : "Edit", p.id, route.id)) {
-			open_window_request(app, p.id, route.id)
-		}
-		ui.im_same_line()
+	open := venue_window(app, p.id, arena ? .Arena_Route : .Stage, route.id) != nil
+	if ui.im_button(fmt.ctprintf("%s###open_stage_%s_%s", open ? "Show" : "Edit", p.id, route.id)) {
+		open_window_request(app, p.id, route.id)
 	}
+	ui.im_same_line()
 
 	row := name_row(ps, p.id, route.id, route.name)
 	ui.igSetNextItemWidth(170)
@@ -975,7 +972,7 @@ venue_window :: proc(app: ^App, venue_id: string, kind: View_Kind, stage_id := "
 		if ed.doc.open_venue != venue_id || ed.kind != kind {
 			continue
 		}
-		if kind == .Stage && ed.stage_id != stage_id {
+		if (kind == .Stage || kind == .Arena_Route) && ed.stage_id != stage_id {
 			continue
 		}
 		return ed
@@ -1044,6 +1041,8 @@ app_service_open_request :: proc(app: ^App) {
 		return
 	}
 	switch {
+	case venue_kind(p^) == .Arena && stage_id != "":
+		open_arena_route_window(app, p, stage_id)
 	case venue_kind(p^) == .Arena:
 		open_arena_window(app, p)
 	case stage_id != "":
@@ -1110,6 +1109,33 @@ open_arena_window :: proc(app: ^App, p: ^Venue) {
 	}
 	arena_camera_frame(ed)
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.name), true)
+}
+
+// One arena route, in a window of its own. Twin of open_stage_window.
+open_arena_route_window :: proc(app: ^App, p: ^Venue, route_id: string) {
+	if existing := venue_window(app, p.id, .Arena_Route, route_id); existing != nil {
+		gfx.RaiseWindow(&existing.window)
+		return
+	}
+	doc, doc_msg, doc_ok := venue_doc_open(app, p)
+	if !doc_ok {
+		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
+		return
+	}
+	if route_index(doc.routes[:], route_id) < 0 {
+		set_status(&app.status, fmt.tprintf("%s has no route %s", p.name, route_id), false)
+		venue_doc_release(app, doc)
+		return
+	}
+	ed := editor_open(app, doc, .Arena_Route, fmt.ctprintf("dirtbench — %s / %s", p.name, route_id))
+	if ed == nil {
+		venue_doc_release(app, doc)
+		return
+	}
+	ed.stage_id = strings.clone(route_id)
+	arena_camera_frame(ed)
+	arena_focus_route(ed)
+	set_status(&app.status, fmt.tprintf("opened %s / %s", p.name, route_id), true)
 }
 
 // One stage of a venue, in a window of its own: the same document, and a view

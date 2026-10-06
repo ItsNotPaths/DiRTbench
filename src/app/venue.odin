@@ -112,6 +112,8 @@ Venue_Route :: struct {
 	mode:   string,
 	// Where an arena route's mode starts. Unplaced on a stage.
 	party_start: Arena_Spot,
+	// A Transporter route's flags and drop zones. Empty otherwise.
+	goals:       [dynamic]Arena_Goal,
 }
 
 // The route ids and menu names, in order, as the registration and the staging
@@ -792,6 +794,8 @@ venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue
 	for r in p.routes {
 		pins := make([dynamic]geo.Road_Marker, 0, len(r.pins), allocator)
 		append(&pins, ..r.pins[:])
+		goals := make([dynamic]Arena_Goal, 0, len(r.goals), allocator)
+		append(&goals, ..r.goals[:])
 		append(&out, Venue_Route{
 			id     = strings.clone(r.id, allocator),
 			name   = strings.clone(r.name, allocator),
@@ -801,6 +805,7 @@ venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue
 			pins   = pins,
 			setup  = r.setup,
 			party_start = r.party_start,
+			goals       = goals,
 		})
 	}
 	return out
@@ -812,6 +817,7 @@ routes_free :: proc(routes: ^[dynamic]Venue_Route, allocator := context.allocato
 		delete(r.name, allocator)
 		delete(r.mode, allocator)
 		delete(r.pins)
+		delete(r.goals)
 	}
 	delete(routes^)
 	routes^ = nil

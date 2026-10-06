@@ -133,7 +133,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			ed.quit = true
 		}
 		ui.igSeparator()
-		if ed.kind != .Arena && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.kind != .Arena && ed.kind != .Arena_Route && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()
@@ -764,6 +764,7 @@ SEL_ROWS := [Sel_Kind]f32{
 	.Prop       = 7,
 	.Baseline   = 4,
 	.Start      = 6,
+	.Goal       = 8,
 }
 
 // Never more than half the dock: an eight-row point on a short window would
@@ -798,8 +799,8 @@ draw_selection_block :: proc(ed: ^Editor) {
 		draw_prop_selection(ed)
 	case .Baseline:
 		draw_baseline_selection(ed)
-	case .Start:
-		draw_start_selection(ed)
+	case .Start, .Goal:
+		draw_route_spots(ed)
 	}
 }
 

@@ -539,7 +539,7 @@ prop_placing_role :: proc(ed: ^Editor) -> Maybe(Prop_Role) {
 prop_set_placing :: proc(ed: ^Editor, role: Prop_Role, on: bool) {
 	ed.prop_placing = on ? role : nil
 	ed.prop_last = role
-	ed.start_placing = false
+	ed.spot_placing = nil
 }
 
 // Where the prop being placed would land, refreshed once a frame while the mode
@@ -556,7 +556,7 @@ prop_ghost_update :: proc(ed: ^Editor, ray: gfx.Ray) {
 		ed.prop_placing = nil
 		return
 	}
-	if ed.kind == .Arena {
+	if ed.kind == .Arena || ed.kind == .Arena_Route {
 		ed.prop_ghost, ed.prop_ghost_ok = arena_pick_ground(ed, ray)
 	} else {
 		ed.prop_ghost, ed.prop_ghost_ok = pick_ground(ed, ray)
