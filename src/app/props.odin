@@ -539,6 +539,7 @@ prop_placing_role :: proc(ed: ^Editor) -> Maybe(Prop_Role) {
 prop_set_placing :: proc(ed: ^Editor, role: Prop_Role, on: bool) {
 	ed.prop_placing = on ? role : nil
 	ed.prop_last = role
+	ed.start_placing = false
 }
 
 // Where the prop being placed would land, refreshed once a frame while the mode

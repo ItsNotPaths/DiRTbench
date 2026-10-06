@@ -110,6 +110,8 @@ Venue_Route :: struct {
 	setup:  geo.Road_Marker,
 	// An arena route's party mode, an ARENA_MODE_KEY. Empty on a stage.
 	mode:   string,
+	// Where an arena route's mode starts. Unplaced on a stage.
+	party_start: Arena_Spot,
 }
 
 // The route ids and menu names, in order, as the registration and the staging
@@ -798,6 +800,7 @@ venue_routes :: proc(p: Venue, allocator := context.allocator) -> [dynamic]Venue
 			finish = r.finish,
 			pins   = pins,
 			setup  = r.setup,
+			party_start = r.party_start,
 		})
 	}
 	return out

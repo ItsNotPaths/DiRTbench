@@ -149,3 +149,12 @@ a_saved_removal_reloads_as_the_same_placement :: proc(t: ^testing.T) {
 	mask, unmatched := arena_removed_mask(base, arena_removed_block(&doc))
 	testing.expect(t, mask[want] && unmatched == 0, "the saved removal did not name its placement")
 }
+
+// A route exports only with its start placed.
+@(test)
+a_route_without_a_start_cannot_export :: proc(t: ^testing.T) {
+	route := Venue_Route{id = "route_0", mode = ARENA_MODE_KEY[.Outbreak]}
+	testing.expect(t, len(arena_route_problems(route)) > 0, "a route with no start was ready")
+	route.party_start = {pos = {1, 2, 3}, placed = true}
+	testing.expectf(t, len(arena_route_problems(route)) == 0, "a placed start still has problems: %v", arena_route_problems(route))
+}

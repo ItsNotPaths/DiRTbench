@@ -62,6 +62,7 @@ Sel_Kind :: enum {
 	Floor_Vert, // ... and `sub` one corner of its outline
 	Prop,       // idx indexes Venue_Doc.props
 	Baseline,   // idx indexes Venue_Doc.arena.props
+	Start,      // idx indexes Venue_Doc.routes: that arena route's start ring
 }
 
 Selection :: struct {
@@ -178,6 +179,10 @@ Editor :: struct {
 	prop_last:     Prop_Role,
 	prop_ghost:    gfx.Vector3,
 	prop_ghost_ok: bool,
+	// An arena route whose start the next ground click places; its ghost is
+	// the ring where it would land.
+	start_placing: bool,
+	start_ghost:   Maybe(Arena_Spot),
 	wireframe:     bool,
 	quit:          bool,
 

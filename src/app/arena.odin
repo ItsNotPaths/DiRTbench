@@ -61,6 +61,62 @@ ARENA_MODE_NET_RACE := [Arena_Mode]i32 {
 	.Transporter = d3.NET_RACE_TRANSPORTER,
 }
 
+// The start parent of each mode's stock grids.pssg on route_0.
+ARENA_START_PARENT := [Arena_Mode]string {
+	.Outbreak    = "grid_start_outbreak_0",
+	.Transporter = "grid_start_standing_0",
+}
+
+// How high a start's ring hangs over the ground it is dropped on: stock drops
+// the cars in, 6.4 m up in Infection and 5.4 m in Transporter on route_0.
+ARENA_START_LIFT :: f32(5.4)
+
+// The 8 start slots around the ring centre, in the start's own frame (+Z is
+// its heading). The same in both modes on route_0; drawn, never written, since
+// the export moves the stock ring rather than rebuilding it.
+ARENA_START_RING := [8][2]f32 {
+	{3.04, -14.47}, {-8.08, -12.38}, {-14.47, -3.04}, {-12.38, 8.08},
+	{-3.04, 14.47}, {8.08, 12.38}, {14.47, 3.04}, {12.38, -8.08},
+}
+
+// A point a party mode reads: where it stands and which way it faces, in
+// radians from +Z toward +X. Zero is unplaced.
+Arena_Spot :: struct {
+	pos:    [3]f32,
+	yaw:    f32,
+	placed: bool,
+}
+
+arena_grid_path :: proc(mode: Arena_Mode) -> string {
+	return fmt.tprintf("game_modes/%s/grids.pssg", ARENA_MODE_KEY[mode])
+}
+
+// Where stock route_0 starts this mode.
+arena_stock_start :: proc(route_dir: string, mode: Arena_Mode) -> (spot: Arena_Spot, msg: string, ok: bool) {
+	path := d3.Stock_Path(route_dir, arena_grid_path(mode))
+	data, err := os.read_entire_file(path, context.temp_allocator)
+	if path == "" || err != nil {
+		return {}, fmt.tprintf("no stock %s", arena_grid_path(mode)), false
+	}
+	pos, yaw, start_msg, start_ok := d3.Party_Start(data, ARENA_START_PARENT[mode])
+	if !start_ok {
+		return {}, start_msg, false
+	}
+	return {pos = pos, yaw = yaw, placed = true}, "", true
+}
+
+// What stops a route from exporting, one line each. Empty when it is ready.
+arena_route_problems :: proc(route: Venue_Route, allocator := context.temp_allocator) -> []string {
+	out := make([dynamic]string, allocator)
+	if _, known := arena_mode_of(route.mode); !known {
+		append(&out, fmt.tprintf("unknown mode %q", route.mode))
+	}
+	if !route.party_start.placed {
+		append(&out, "no start")
+	}
+	return out[:]
+}
+
 arena_mode_of :: proc(key: string) -> (Arena_Mode, bool) {
 	for name, mode in ARENA_MODE_KEY {
 		if name == key { return mode, true }
@@ -330,11 +386,33 @@ arena_key_of :: proc(table: [$E]string, key: string) -> (E, bool) {
 
 // --- export -------------------------------------------------------------------
 
+// The route's mode grid: stock, with the start ring moved to the route's start.
+@(private = "file")
+arena_write_start :: proc(job: ^d3.Export_Job, donor_dir: string, route: Venue_Route) -> (msg: string, ok: bool) {
+	mode, _ := arena_mode_of(route.mode)
+	path := arena_grid_path(mode)
+	stock, err := os.read_entire_file(d3.Stock_Path(donor_dir, path), context.temp_allocator)
+	if err != nil {
+		return fmt.tprintf("could not read the stock %s: %v", path, err), false
+	}
+	start := route.party_start
+	data, set_msg, set_ok := d3.Party_Start_Set(stock, ARENA_START_PARENT[mode], start.pos, start.yaw, context.temp_allocator)
+	if !set_ok {
+		return fmt.tprintf("%s: %s", path, set_msg), false
+	}
+	return d3.Write_Out(job, path, data)
+}
+
 // Every route of a deployed arena: its placement files from the baseline,
 // `track.vis` over them, and the stock `track.jpk` without the collision of
 // the props the baseline left out. Nothing else is written; the ground, the
 // lighting and the game-mode files stay hardlinked to stock route_0.
 arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool) {
+	for route in p.routes {
+		if problems := arena_route_problems(route); len(problems) > 0 {
+			return fmt.tprintf("%s: %s", route.id, strings.join(problems, ", ", context.temp_allocator)), false
+		}
+	}
 	_, donor, found := venue_source(vs, p)
 	if !found {
 		return fmt.tprintf("%s/%s is not playable", p.base, p.base_route), false
@@ -395,6 +473,9 @@ arena_export_all :: proc(vs: ^Install_Scan, p: Venue) -> (msg: string, ok: bool)
 		}
 		if write_msg, wrote := d3.Write_Out(&job, "track.jpk", collision); !wrote {
 			return fmt.tprintf("%s: track.jpk: %s", route.id, write_msg), false
+		}
+		if grid_msg, wrote := arena_write_start(&job, donor.dir, route); !wrote {
+			return fmt.tprintf("%s: %s", route.id, grid_msg), false
 		}
 		append(&done, fmt.tprintf("%s (%s; track.vis: %s)", route.id, placed_msg, vis_msg))
 	}
