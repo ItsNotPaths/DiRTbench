@@ -166,6 +166,9 @@ Jpk_Without :: d3_jpk_without
 Jpk_Triangles :: d3_jpk_triangles
 Party_Start :: d3_party_start
 Party_Start_Set :: d3_party_start_set
+Transporter_Goal :: D3_Transporter_Goal
+Transporter_Goals :: d3_transporter_goals
+Transporter_Triggers :: d3_transporter_triggers
 Write_Tri :: D3_Write_Tri
 Stock_Path :: d3_stock_path
 Backup_Once :: d3_backup_once
