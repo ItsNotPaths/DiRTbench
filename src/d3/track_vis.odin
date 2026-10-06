@@ -7,6 +7,7 @@ package d3
 // the file culls by box and not yet by cell.
 
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:path/filepath"
 
@@ -146,6 +147,13 @@ d3_vis_write_cells :: proc(w: ^Binary_Writer, cells: []D3_Vis_Cell, section_2: i
 // ground is what an all-visible mask does, and the two then fight.
 D3_VIS_REACH :: f32(400)
 
+// How far a big object stays drawn past D3_VIS_REACH: this many times its own
+// box diagonal. A tree model, under 27 m, keeps the flat reach measured above;
+// Battersea's 100 m cranes and chimneys hold to 1.5 km instead of popping in
+// at 400 m. A group's box holds its whole subtree, so the gate stays
+// conservative.
+D3_VIS_SIZE_REACH :: f32(15)
+
 @(private = "file")
 d3_vis_in_reach :: proc(cell_lo, cell_hi, lo, hi: [3]f32) -> bool {
 	gap := f32(0)
@@ -153,7 +161,9 @@ d3_vis_in_reach :: proc(cell_lo, cell_hi, lo, hi: [3]f32) -> bool {
 		side := max(lo[k]-cell_hi[k], cell_lo[k]-hi[k], 0)
 		gap += side*side
 	}
-	return gap <= D3_VIS_REACH*D3_VIS_REACH
+	size := hi - lo
+	reach := max(D3_VIS_REACH, D3_VIS_SIZE_REACH*math.sqrt(size.x*size.x + size.y*size.y + size.z*size.z))
+	return gap <= reach*reach
 }
 
 // Terrain is never cut. There are only tens of surface tiles, so culling them
