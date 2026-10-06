@@ -133,7 +133,7 @@ draw_menubar :: proc(ed: ^Editor) {
 			ed.quit = true
 		}
 		ui.igSeparator()
-		if ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
+		if ed.kind != .Arena && ui.igMenuItem_Bool("Export targets...", nil, ed.show_targets, true) {
 			ed.show_targets = !ed.show_targets
 		}
 		ui.igSeparator()

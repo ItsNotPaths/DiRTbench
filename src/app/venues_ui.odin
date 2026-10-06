@@ -363,16 +363,7 @@ draw_venue_deployment :: proc(app: ^App, p: ^Venue, deployed: bool) {
 	// that succeeds there is nothing to deploy, so the failure is reported here
 	// rather than half way through writing into the game.
 	if ui.im_button(fmt.ctprintf("Preflight deploy###deploy_%s", p.id)) {
-		stages, compile_msg, compiled := venue_compile(p^, context.temp_allocator)
-		if !compiled {
-			set_status(&app.status, compile_msg, false)
-			delete(ps.deploy_ready)
-			ps.deploy_ready = ""
-			return
-		}
-		venue_compiled_delete(stages, context.temp_allocator)
 		msg, ok := venue_deploy_preflight(&app.install, p^)
-		msg = fmt.tprintf("%s; %s", compile_msg, msg)
 		set_status(&app.status, msg, ok)
 		delete(ps.deploy_ready)
 		ps.deploy_ready = ok ? strings.clone(p.id) : ""
@@ -410,8 +401,10 @@ draw_venue_row :: proc(app: ^App, p: ^Venue) {
 		deployed ? "deployed" : "not deployed",
 	)
 
-	open := venue_window(app, p.id, .Venue) != nil
-	if ui.im_button(fmt.ctprintf("%s###open_%s", open ? "Show road network" : "Edit road network", p.id)) {
+	arena := venue_kind(p^) == .Arena
+	open := venue_window(app, p.id, arena ? .Arena : .Venue) != nil
+	edit := arena ? (open ? "Show arena" : "Edit arena") : (open ? "Show road network" : "Edit road network")
+	if ui.im_button(fmt.ctprintf("%s###open_%s", edit, p.id)) {
 		open_window_request(app, p.id, "")
 	}
 	ui.im_same_line()
@@ -668,16 +661,25 @@ stage_list_write :: proc(app: ^App, venue_id: string, routes: []Venue_Route, nex
 	app.screen.reload_pending = ok
 }
 
+// A stage, or an arena route of one mode. The mode is fixed here: a route that
+// changed mode would leave its deployed registration and its markers behind.
 @(private = "file")
-stage_add :: proc(app: ^App, p: ^Venue) {
+stage_add :: proc(app: ^App, p: ^Venue, mode: Maybe(Arena_Mode) = nil) {
+	add :: proc(routes: ^[dynamic]Venue_Route, next: ^int, mode: Maybe(Arena_Mode), allocator := context.allocator) {
+		if m, arena := mode.?; arena {
+			arena_routes_add(routes, next, m, allocator)
+		} else {
+			routes_add(routes, next, allocator)
+		}
+	}
 	if doc := venue_doc_for(app, p.id); doc != nil {
-		routes_add(&doc.routes, &doc.next_route)
+		add(&doc.routes, &doc.next_route, mode)
 		set_status(&app.status, fmt.tprintf("added a stage to %s, not saved yet", p.id), true)
 		return
 	}
 	routes := stage_list_copy(p)
 	next := p.next_route
-	routes_add(&routes, &next, context.temp_allocator)
+	add(&routes, &next, mode, context.temp_allocator)
 	stage_list_write(app, p.id, routes[:], next)
 }
 
@@ -722,8 +724,19 @@ draw_venue_stages :: proc(app: ^App, p: ^Venue) {
 	for route in venue_stages(app, p.id) {
 		draw_stage_row(app, p, route)
 	}
-	if ui.im_button(fmt.ctprintf("Add stage###add_stage_%s", p.id)) {
-		stage_add(app, p)
+	if venue_kind(p^) == .Stage {
+		if ui.im_button(fmt.ctprintf("Add stage###add_stage_%s", p.id)) {
+			stage_add(app, p)
+		}
+		return
+	}
+	for mode in Arena_Mode {
+		if mode != min(Arena_Mode) {
+			ui.im_same_line()
+		}
+		if ui.im_button(fmt.ctprintf("Add %s route###add_%v_%s", ARENA_MODE_LABEL[mode], mode, p.id)) {
+			stage_add(app, p, mode)
+		}
 	}
 }
 
@@ -733,11 +746,15 @@ draw_venue_stages :: proc(app: ^App, p: ^Venue) {
 @(private = "file")
 draw_stage_row :: proc(app: ^App, p: ^Venue, route: Venue_Route) {
 	ps := &app.screen
+	arena := venue_kind(p^) == .Arena
 	open := venue_window(app, p.id, .Stage, route.id) != nil
-	if ui.im_button(fmt.ctprintf("%s###open_stage_%s_%s", open ? "Show" : "Edit", p.id, route.id)) {
-		open_window_request(app, p.id, route.id)
+	// An arena's routes are edited in its one arena window.
+	if !arena {
+		if ui.im_button(fmt.ctprintf("%s###open_stage_%s_%s", open ? "Show" : "Edit", p.id, route.id)) {
+			open_window_request(app, p.id, route.id)
+		}
+		ui.im_same_line()
 	}
-	ui.im_same_line()
 
 	row := name_row(ps, p.id, route.id, route.name)
 	ui.igSetNextItemWidth(170)
@@ -749,10 +766,18 @@ draw_stage_row :: proc(app: ^App, p: ^Venue, route: Venue_Route) {
 		stage_rename(app, p, route.id, buf_text(row.name[:]))
 	}
 	ui.im_same_line()
-	ui.im_text_colored(
-		route_has_markers(route) ? (open ? MINE_COL : DIM_COL) : WARN_COL,
-		route_has_markers(route) ? fmt.ctprint(route.id) : fmt.ctprintf("%s, no lines", route.id),
-	)
+	if arena {
+		label := route.mode
+		if mode, known := arena_mode_of(route.mode); known {
+			label = ARENA_MODE_LABEL[mode]
+		}
+		ui.im_text_colored(DIM_COL, fmt.ctprintf("%s, %s", route.id, label))
+	} else {
+		ui.im_text_colored(
+			route_has_markers(route) ? (open ? MINE_COL : DIM_COL) : WARN_COL,
+			route_has_markers(route) ? fmt.ctprint(route.id) : fmt.ctprintf("%s, no lines", route.id),
+		)
+	}
 
 	ui.im_same_line()
 	key := fmt.tprintf("%s/%s", p.id, route.id)
@@ -851,6 +876,22 @@ draw_new_venue :: proc(app: ^App) {
 		}
 	}
 	ui.igEndDisabled()
+
+	ui.im_text_colored(DIM_COL, fmt.ctprintf("or an arena on %s, one party mode per route:", ARENA_BASE))
+	if ui.im_button("Create arena") {
+		p, msg, ok := venue_create_arena(vs, name)
+		delete(ps.error)
+		ps.error = ""
+		if !ok {
+			ps.error = strings.clone(msg)
+		} else {
+			ps.adding = false
+			ps.name_buf = {}
+			ps.reload_pending = true
+			set_status(&app.status, fmt.tprintf("created arena %s", p.name), true)
+			venue_free(p)
+		}
+	}
 	ui.igSpacing()
 }
 
@@ -882,8 +923,11 @@ install_venue_by_id :: proc(vs: ^Install_Scan, id: string) -> (venue: d3.Venue, 
 // --- opening -----------------------------------------------------------------
 
 venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
-	if load_msg, loaded := doc_load_road(doc, p.road); !loaded {
-		return load_msg, false
+	arena := venue_kind(p^) == .Arena
+	if !arena {
+		if load_msg, loaded := doc_load_road(doc, p.road); !loaded {
+			return load_msg, false
+		}
 	}
 	doc_take_routes(doc, p^)
 	doc.shot = p.shot
@@ -894,7 +938,10 @@ venue_doc_load :: proc(doc: ^Venue_Doc, p: ^Venue) -> (msg: string, ok: bool) {
 	// The trees come with the art: the base venue picks the species, not the user.
 	doc_set_base(doc, p.base)
 	set_stage_name(doc, p.name)
-	mark_dirty(doc)
+	// A dirty document rebuilds its road, and an arena has none.
+	if !arena {
+		mark_dirty(doc)
+	}
 	doc_loaded(doc)
 	return "", true
 }
@@ -987,9 +1034,12 @@ app_service_open_request :: proc(app: ^App) {
 		set_status(&app.status, fmt.tprintf("%s is no longer there", id), false)
 		return
 	}
-	if stage_id != "" {
+	switch {
+	case venue_kind(p^) == .Arena:
+		open_arena_window(app, p)
+	case stage_id != "":
 		open_stage_window(app, p, stage_id)
-	} else {
+	case:
 		open_venue_window(app, p)
 	}
 }
@@ -1031,6 +1081,24 @@ open_venue_window :: proc(app: ^App, p: ^Venue) {
 		return
 	}
 	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.id), true)
+}
+
+// An arena, in a window beside the project manager. Twin of open_venue_window.
+open_arena_window :: proc(app: ^App, p: ^Venue) {
+	if existing := venue_window(app, p.id, .Arena); existing != nil {
+		gfx.RaiseWindow(&existing.window)
+		return
+	}
+	doc, doc_msg, doc_ok := venue_doc_open(app, p)
+	if !doc_ok {
+		set_status(&app.status, fmt.tprintf("could not open %s: %s", p.id, doc_msg), false)
+		return
+	}
+	if editor_open(app, doc, .Arena, fmt.ctprintf("dirtbench — %s", p.name)) == nil {
+		venue_doc_release(app, doc)
+		return
+	}
+	set_status(&app.status, fmt.tprintf("opened %s in a new window", p.name), true)
 }
 
 // One stage of a venue, in a window of its own: the same document, and a view

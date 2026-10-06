@@ -75,6 +75,7 @@ Selection :: struct {
 View_Kind :: enum {
 	Venue, // the road graph: insert, branch, weld, sculpt
 	Stage, // two markers on that road, and the road it cuts out
+	Arena, // Battersea's ground and its party-mode routes; no road at all
 }
 
 // What the compiled stage is keyed on. Every spline edit ticks `gen`, and the
@@ -658,6 +659,8 @@ editor_frame :: proc(ed: ^Editor) {
 		venue_frame(ed)
 	case .Stage:
 		stage_frame(ed)
+	case .Arena:
+		arena_frame(ed)
 	}
 }
 
