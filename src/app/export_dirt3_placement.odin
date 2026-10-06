@@ -303,6 +303,7 @@ d3_write_placements :: proc(
 	props: []geo.Veg_Instance,
 	placed: []Prop_Instance,
 	billboards: []d3.Billboard_Cloud = nil,
+	baseline: []D3_Place = nil,
 ) -> (msg: string, ok: bool) {
 	tree_refs, ornament_refs, bodies, art_msg, art_ok := d3_donor_art(route_dir)
 	if !art_ok {
@@ -318,15 +319,16 @@ d3_write_placements :: proc(
 	}
 	species := len(scatter) > 0 ? len(tree_rows) : 0
 
-	// One list from here down. The scatter goes first, so its instance ids are
-	// the low ones and a hand-placed tree numbers on from the last of them. The
+	// One list from here down. An arena's baseline goes first and the scatter
+	// next, so a hand-placed tree numbers on from the last of them. The
 	// card clouds come last, and bring their own reference rows: the mesh was
 	// written into `trees.pssg` a moment ago (export_dirt3_billboards.odin), so
 	// it is in no library the row resolver could look it up in, and the bounds
 	// are the ones the graft measured.
-	all := make([dynamic]Prop_Instance, 0, len(scatter)+len(placed)+len(billboards), context.temp_allocator)
-	append(&all, ..scatter)
-	append(&all, ..placed)
+	all := make([dynamic]D3_Place, 0, len(baseline)+len(scatter)+len(placed)+len(billboards), context.temp_allocator)
+	append(&all, ..baseline)
+	append(&all, ..d3_places(scatter, bodies, scatter = true))
+	append(&all, ..d3_places(placed, bodies))
 	if len(billboards) > 0 {
 		rows := make([dynamic]d3.D3_Placement_Reference, 0, len(tree_rows)+len(billboards), context.temp_allocator)
 		append(&rows, ..tree_rows)
@@ -337,12 +339,11 @@ d3_write_placements :: proc(
 				bounds_min   = cloud.lo,
 				bounds_max   = cloud.hi,
 			})
-			append(&all, Prop_Instance {
+			append(&all, D3_Place {
 				ref   = {kind = .Trees_Pssg, name = cloud.name},
-				role  = .Ornament, // drawn and never collided, like every stock cloud
-				pos   = {cloud.centre[0], cloud.centre[1], cloud.centre[2]},
-				rot   = gfx.Quaternion(1),
-				scale = 1,
+				form  = .None, // drawn and never collided, like every stock cloud
+				basis = d3.D3_BASIS_IDENTITY,
+				pos   = cloud.centre,
 			})
 		}
 		tree_rows = rows[:]
@@ -350,7 +351,7 @@ d3_write_placements :: proc(
 	donor_rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference
 	donor_rows[.Trees_Pssg], donor_rows[.Objects_Pssg] = tree_rows, ornament_refs
 	rows, placements, forms, place_msg, placed_ok := d3_place_resolve(
-		all[:], donor_rows, base_dir, len(scatter), bodies,
+		all[:], donor_rows, base_dir,
 	)
 	if !placed_ok {
 		return place_msg, false
@@ -415,7 +416,7 @@ d3_write_placements :: proc(
 		}
 	}
 	return fmt.tprintf(
-		"%d species, %d scattered trees; %d placed props; objects.ens: %d records, %d of %d scattered trees given a static body, %d objects given a dynamic entity from id %d, %d drawn only (%d of them objects this venue has no rigid body for; %d entity types off the venue)",
+		"%d species, %d scattered trees; %d placed props; objects.ens: %d records, %d of %d static bodies written, %d objects given a dynamic entity from id %d, %d drawn only (%d of them objects this venue has no rigid body for; %d entity types off the venue)",
 		species, len(scatter), len(placed), len(nodes),
 		bodied[.Static_Body], asked[.Static_Body],
 		bodied[.Dynamic_Entity], len(file_insts[.Objects_Pssg]),

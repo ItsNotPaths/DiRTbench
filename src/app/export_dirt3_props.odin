@@ -47,8 +47,21 @@ D3_Ens_Form :: enum u8 {
 	Dynamic_Entity, // a placed object: the venue's own entity, damage and all
 }
 
-// Which form one placement takes. `scatter_count` is how many of `placed` came
-// off the vegetation pass, which leads the list.
+// One placement on its way into the placement files, whatever made it: the
+// scatter, a prop placed by hand, a card cloud, or an arena's baseline. Each
+// source decides the form once, when it converts; nothing downstream infers
+// it from where the placement sits in the list.
+//
+// The basis is the file's own 3x3 rather than a rotation and a scale: 15 of
+// the stock placements an arena keeps are non-uniform or sheared.
+D3_Place :: struct {
+	ref:   Prop_Ref,
+	form:  D3_Ens_Form,
+	basis: [3][3]f32,
+	pos:   [3]f32,
+}
+
+// Which form a prop placed by hand takes.
 //
 // An object needs an entity to instantiate, so one whose mesh the venue gives
 // no rigid body falls back to being drawn. Dropping it to `.Dynamic_Entity`
@@ -56,25 +69,38 @@ D3_Ens_Form :: enum u8 {
 // that never gets written, and the prop would vanish from the stage. The
 // browser already keeps those meshes out of the Objects list; this is what
 // catches a road.json saved before it did.
-d3_ens_form :: proc(inst: Prop_Instance, index, scatter_count: int, has_body: bool) -> D3_Ens_Form {
-	if index < scatter_count {
-		return .Static_Body
-	}
+d3_ens_form :: proc(inst: Prop_Instance, has_body: bool) -> D3_Ens_Form {
 	if inst.role == .Ornament || !has_body {
 		return .None
 	}
 	return .Dynamic_Entity
 }
 
+// Props as placements. The scatter is bulk scenery that happens to stop the
+// car, so it is a static body whatever role its instances carry.
+d3_places :: proc(
+	insts: []Prop_Instance, bodies: map[string]string, scatter := false, allocator := context.temp_allocator,
+) -> []D3_Place {
+	out := make([]D3_Place, len(insts), allocator)
+	for inst, i in insts {
+		_, has_body := bodies[inst.ref.name]
+		out[i] = {
+			ref   = inst.ref,
+			form  = scatter ? .Static_Body : d3_ens_form(inst, has_body),
+			basis = d3_prop_basis(inst.rot, inst.scale),
+			pos   = {inst.pos.x, inst.pos.y, inst.pos.z},
+		}
+	}
+	return out
+}
+
 // The reference rows and instances of both placement files, hand-placed props
 // only. The libraries open only for a mesh no donor row covers, and close
 // before this returns — nothing returned borrows their memory.
 d3_place_resolve :: proc(
-	placed: []Prop_Instance,
+	placed: []D3_Place,
 	donor_rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference,
 	base_dir: string,
-	scatter_count: int,
-	bodies: map[string]string,
 ) -> (
 	rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference,
 	placements: [Prop_Lib_Kind][]d3.D3_Placement_Instance,
@@ -98,7 +124,7 @@ d3_place_resolve :: proc(
 			return rows, placements, forms, place_msg, false
 		}
 		rows[kind] = kind_rows
-		placements[kind], forms[kind] = d3_place_instances(placed, kind, row_of, scatter_count, bodies)
+		placements[kind], forms[kind] = d3_place_instances(placed, kind, row_of)
 	}
 	return rows, placements, forms, "", true
 }
@@ -110,7 +136,7 @@ d3_place_resolve :: proc(
 // row per mesh neither of those covers. Ids stay dense and ascending, which
 // the writer validates.
 d3_place_references :: proc(
-	placed: []Prop_Instance,
+	placed: []D3_Place,
 	kind: Prop_Lib_Kind,
 	rows: []d3.D3_Placement_Reference,
 	lib: ^d3.Prop_Library,
@@ -159,30 +185,23 @@ d3_place_references :: proc(
 // is a Dirt 3 file struct and has no room for a word of ours. The two are built
 // in one pass, so a body cannot end up attached to the wrong drawable.
 d3_place_instances :: proc(
-	placed: []Prop_Instance,
+	placed: []D3_Place,
 	kind: Prop_Lib_Kind,
 	row_of: map[string]int,
-	scatter_count := 0,
-	bodies: map[string]string = nil,
 	allocator := context.temp_allocator,
 ) -> (instances: []d3.D3_Placement_Instance, forms: []D3_Ens_Form) {
 	out := make([dynamic]d3.D3_Placement_Instance, 0, len(placed), allocator)
 	kept := make([dynamic]D3_Ens_Form, 0, len(placed), allocator)
-	for inst, index in placed {
-		if inst.ref.kind != kind {
+	for place in placed {
+		if place.ref.kind != kind {
 			continue
 		}
-		row, found := row_of[inst.ref.name]
+		row, found := row_of[place.ref.name]
 		if !found {
 			continue
 		}
-		append(&out, d3_placement_instance(
-			row, len(out),
-			d3_prop_basis(inst.rot, inst.scale),
-			{inst.pos.x, inst.pos.y, inst.pos.z},
-		))
-		_, has_body := bodies[inst.ref.name]
-		append(&kept, d3_ens_form(inst, index, scatter_count, has_body))
+		append(&out, d3_placement_instance(row, len(out), place.basis, place.pos))
+		append(&kept, place.form)
 	}
 	return out[:], kept[:]
 }
@@ -315,7 +334,7 @@ D3_Place_Library :: struct {
 // donor table has. Two files of up to 30 MB, so an export that places nothing
 // new never touches them.
 d3_place_libraries :: proc(
-	placed: []Prop_Instance, rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference, base_dir: string,
+	placed: []D3_Place, rows: [Prop_Lib_Kind][]d3.D3_Placement_Reference, base_dir: string,
 ) -> (libs: [Prop_Lib_Kind]D3_Place_Library, msg: string, ok: bool) {
 	for inst in placed {
 		if libs[inst.ref.kind].open {
