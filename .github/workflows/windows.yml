@@ -51,7 +51,7 @@ jobs:
       - name: Odin
         run: |
           curl -fsSL -o odin.zip \
-            "https://github.com/odin-lang/Odin/releases/download/dev-2026-08/odin-windows-amd64-dev-2026-08.zip"
+            "https://github.com/odin-lang/Odin/releases/download/dev-2026-10/odin-windows-amd64-dev-2026-10.zip"
           7z x odin.zip -oodin-dist > /dev/null
           # The zip's top-level directory name is not stable across releases.
           root=$(find odin-dist -maxdepth 2 -name odin.exe -printf '%h\n' | head -1)

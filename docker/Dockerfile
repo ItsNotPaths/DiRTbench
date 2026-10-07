@@ -24,7 +24,7 @@ RUN dnf install -y --enablerepo=powertools \
 
 # The compiler ships statically linked, so it runs on this glibc untouched.
 # Pinned: a release must be reproducible, and Odin is a nightly.
-ARG ODIN_VERSION=dev-2026-08
+ARG ODIN_VERSION=dev-2026-10
 RUN mkdir -p /opt/odin \
     && curl -fsSL "https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/odin-linux-amd64-${ODIN_VERSION}.tar.gz" \
        | tar xz --strip-components=1 -C /opt/odin \
