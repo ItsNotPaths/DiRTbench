@@ -34,6 +34,10 @@ venue_kind_of :: proc(key: string) -> (Venue_Kind, bool) {
 	return .Stage, false
 }
 
+venue_is_arena_base :: proc(venue: d3.Venue) -> bool {
+	return fmt.tprintf("%s/%s", venue.location, venue.id) == ARENA_BASE
+}
+
 venue_kind :: proc(p: Venue) -> Venue_Kind {
 	kind, _ := venue_kind_of(p.kind)
 	return kind

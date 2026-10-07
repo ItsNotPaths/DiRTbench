@@ -835,17 +835,19 @@ draw_new_venue :: proc(app: ^App) {
 
 	ui.im_text("Art comes from:")
 	for venue in vs.install.venues {
-		if !venue_is_base(venue) {
+		arena := venue_is_arena_base(venue)
+		if !arena && !venue_is_base(venue) {
 			continue
 		}
 		if _, ours := venue_for(ps, venue.id); ours {
 			continue
 		}
-		if ui.igRadioButton_Bool(fmt.ctprint(venue.id), ps.base_venue == venue.id) {
+		label := arena ? fmt.ctprintf("%s (arena, one party mode per route)", venue.id) : fmt.ctprint(venue.id)
+		if ui.igRadioButton_Bool(label, ps.base_venue == venue.id) {
 			delete(ps.base_venue)
 			delete(ps.base_route)
 			ps.base_venue = strings.clone(venue.id)
-			ps.base_route = strings.clone(first_playable_route(venue))
+			ps.base_route = strings.clone(arena ? ARENA_BASE_ROUTE : first_playable_route(venue))
 		}
 	}
 
@@ -859,7 +861,14 @@ draw_new_venue :: proc(app: ^App) {
 	ui.igBeginDisabled(!have_base || ps.base_route == "")
 	if ui.im_button("Create") {
 		spec := fmt.tprintf("%s/%s", base.location, base.id)
-		p, msg, ok := venue_create(vs, name, spec, ps.base_route)
+		p: Venue
+		msg: string
+		ok: bool
+		if venue_is_arena_base(base) {
+			p, msg, ok = venue_create_arena(vs, name)
+		} else {
+			p, msg, ok = venue_create(vs, name, spec, ps.base_route)
+		}
 		delete(ps.error)
 		ps.error = ""
 		if !ok {
@@ -873,22 +882,6 @@ draw_new_venue :: proc(app: ^App) {
 		}
 	}
 	ui.igEndDisabled()
-
-	ui.im_text_colored(DIM_COL, fmt.ctprintf("or an arena on %s, one party mode per route:", ARENA_BASE))
-	if ui.im_button("Create arena") {
-		p, msg, ok := venue_create_arena(vs, name)
-		delete(ps.error)
-		ps.error = ""
-		if !ok {
-			ps.error = strings.clone(msg)
-		} else {
-			ps.adding = false
-			ps.name_buf = {}
-			ps.reload_pending = true
-			set_status(&app.status, fmt.tprintf("created arena %s", p.name), true)
-			venue_free(p)
-		}
-	}
 	ui.igSpacing()
 }
 
