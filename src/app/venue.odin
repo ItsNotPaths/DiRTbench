@@ -275,6 +275,11 @@ venue_name_free :: proc(
 	return "", true
 }
 
+// "location/id": what tells two stock venues of the same id apart.
+venue_spec :: proc(venue: d3.Venue, allocator := context.temp_allocator) -> string {
+	return fmt.aprintf("%s/%s", venue.location, venue.id, allocator = allocator)
+}
+
 // A base has to be a venue whose art suits a rally road, and one the game can
 // actually load. Arena and gymkhana venues are not offered, and neither is
 // anything half-installed: deriving from an orphan would produce a venue that
@@ -993,7 +998,7 @@ pack_headless :: proc(only: string) -> bool {
 			continue
 		}
 		seen += 1
-		base := fmt.tprintf("%s/%s", venue.location, venue.id)
+		base := venue_spec(venue)
 		art := palette_art(palette_for(base, base, context.temp_allocator))
 		profile, msg, ok := d3.Pack_Profile(venue.dir, venue.id, art, context.temp_allocator)
 		if ok {
@@ -1162,7 +1167,7 @@ venue_new_headless :: proc(name, base_id: string) -> bool {
 		return false
 	}
 
-	spec := fmt.tprintf("%s/%s", base.location, base.id)
+	spec := venue_spec(base)
 	p, msg, ok := venue_create(&vs, name, spec, base_route)
 	if !ok {
 		fmt.println(msg)

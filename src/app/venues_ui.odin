@@ -843,10 +843,11 @@ draw_new_venue :: proc(app: ^App) {
 			continue
 		}
 		label := arena ? fmt.ctprintf("%s (arena, one party mode per route)", venue.id) : fmt.ctprint(venue.id)
-		if ui.igRadioButton_Bool(label, ps.base_venue == venue.id) {
+		spec := venue_spec(venue)
+		if ui.igRadioButton_Bool(label, ps.base_venue == spec) {
 			delete(ps.base_venue)
 			delete(ps.base_route)
-			ps.base_venue = strings.clone(venue.id)
+			ps.base_venue = strings.clone(spec)
 			ps.base_route = strings.clone(arena ? ARENA_BASE_ROUTE : first_playable_route(venue))
 		}
 	}
@@ -857,10 +858,10 @@ draw_new_venue :: proc(app: ^App) {
 
 	// Looked up every frame rather than held: a rescan between the pick and the
 	// click can take the base away, and then there is nothing to clone.
-	base, have_base := install_venue_by_id(vs, ps.base_venue)
+	base, have_base := install_venue_by_spec(vs, ps.base_venue)
 	ui.igBeginDisabled(!have_base || ps.base_route == "")
 	if ui.im_button("Create") {
-		spec := fmt.tprintf("%s/%s", base.location, base.id)
+		spec := ps.base_venue
 		p: Venue
 		msg: string
 		ok: bool
@@ -895,15 +896,15 @@ first_playable_route :: proc(venue: d3.Venue) -> string {
 	return ""
 }
 
-// A vanilla venue by id. Ids are unique across an install, so the location is
-// not part of the lookup.
+// A vanilla venue by "location/id". Ids are not unique: battersea is in both
+// uk/ and tutorials/.
 @(private = "file")
-install_venue_by_id :: proc(vs: ^Install_Scan, id: string) -> (venue: d3.Venue, found: bool) {
-	if !vs.found || id == "" {
+install_venue_by_spec :: proc(vs: ^Install_Scan, spec: string) -> (venue: d3.Venue, found: bool) {
+	if !vs.found || spec == "" {
 		return
 	}
 	for v in vs.install.venues {
-		if v.id == id {
+		if venue_spec(v) == spec {
 			return v, true
 		}
 	}
